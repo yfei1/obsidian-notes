@@ -1,0 +1,261 @@
+# Distributed Checkpointing in Data Pipelines
+
+#distributed-systems #data-engineering #interview-prep
+
+## TL;DR — What to Remember
+
+Three fundamentally different strategies, each for a different pipeline shape:
+
+| Strategy | How It Works | Best For |
+|---|---|---|
+| **Recompute** (Spark) | Store DAG recipe, redo lost partitions | Short batch jobs |
+| **Barrier snapshot** (Flink) | Inject markers, snapshot operator state | Infinite streams |
+| **Materialize intermediates** (Bilibili) | Write each stage's output to storage | Long-running ETL with shuffles |
+| **Morsel-lease** (proposed for Daft) | Workers lease input chunks, output existence = checkpoint | Map-only pipelines |
+
+**The hard problem is always shuffle**, not map. Maps are stateless — you can always redo them. Shuffle requires cross-worker coordination.
+
+---
+
+## 1. Spark: Lineage Recompute
+
+### How it works, step by step
+
+```
+1. User writes: rdd3 = rdd1.map(f).join(rdd2.filter(g))
+2. Spark records the DAG (lineage), does NOT execute yet (lazy)
+3. On action (e.g., .collect()), Spark plans stages:
+   Stage 1: read rdd1, apply map(f)
+   Stage 2: read rdd2, apply filter(g)
+   Stage 3: shuffle + join
+4. Spark splits each stage into tasks (one per data partition)
+5. Tasks run on executors
+```
+
+**When an executor dies:**
+```
+Stage 1, Partition 3 was on dead executor
+  → Spark re-reads source partition 3 from HDFS
+  → Re-runs map(f) on partition 3
+  → Only that partition is recomputed
+```
+
+**When the driver dies:**
+```
+Driver held the entire DAG + task assignments in memory
+  → Everything is lost
+  → Job restarts from line 1 of your code
+  → ALL intermediate shuffle files (on executor local disks) are gone
+```
+
+### The `checkpoint()` escape hatch
+```python
+rdd_expensive = source.map(gpu_inference)  # takes 2 hours
+rdd_expensive.checkpoint()                  # force-writes ENTIRE RDD to HDFS
+rdd_final = rdd_expensive.map(cheap_fn)     # if this crashes, reads from checkpoint
+```
+- Opt-in, not automatic
+- Writes entire RDD (not incremental)
+- Still loses progress on driver crash unless you manually code resume logic
+
+### Why Spark chose this
+Jobs are assumed to be minutes-to-hours. At that scale, recompute is cheaper than maintaining checkpoint infrastructure. The industry workaround for long jobs: partition work by date, use Airflow for retry at the partition level.
+
+---
+
+## 2. Flink: Chandy-Lamport Barriers
+
+See [[distributed-systems/chandy-lamport]] for the underlying algorithm.
+
+### How it works, step by step
+
+```
+1. Checkpoint coordinator injects a BARRIER into the source stream:
+
+   [r1] [r2] [r3] [BARRIER-1] [r4] [r5] [BARRIER-2] [r6] ...
+
+2. Each operator, when it receives the barrier:
+   a. Pauses processing
+   b. Snapshots its in-memory state to the state backend (RocksDB/S3)
+   c. Forwards the barrier downstream
+   d. Resumes processing
+
+3. When the BARRIER reaches the Sink:
+   → All operators have snapshotted
+   → Checkpoint is "complete"
+   → Sink commits output (e.g., Kafka offset, file close)
+
+4. On crash recovery:
+   → Restore each operator's state from last successful checkpoint
+   → Tell source to replay from last committed offset
+   → Records flow through again, hitting restored operator state
+```
+
+### The shuffle problem with barriers
+
+```
+Source → Map → Shuffle (repartition by key) → Reduce → Sink
+
+Map has 3 partitions. Reduce has 2 partitions.
+After shuffle, data from all 3 map partitions is mixed into 2 reduce partitions.
+
+Aligned checkpoint:
+  Reduce-0 receives BARRIER from Map-0 first.
+  But Map-1 and Map-2 haven't sent their barriers yet.
+  Reduce-0 must BLOCK Map-0's channel and wait.
+  → back-pressure propagates upstream → pipeline stalls
+
+Unaligned checkpoint (Flink 1.11+):
+  Reduce-0 receives BARRIER from Map-0 first.
+  Instead of blocking, it snapshots the in-flight records
+  from Map-1 and Map-2 that arrived before their barriers.
+  → no stalling, but snapshot is larger (includes in-flight data)
+```
+
+### Key constraint
+Flink requires a **replayable source** (Kafka, Kinesis). If your source is "files on S3," you'd need to shove them through Kafka first — which is why Flink is a poor fit for batch file processing.
+
+---
+
+## 3. Bilibili's Ray Data Extension
+
+Source: [B站下一代多模态数据工程架构](https://mp.weixin.qq.com/s/A34mQDtx6yqMzqKf4-ChCQ)
+
+Their use case: video → frames → OCR → embeddings → aggregate per-video → training dataset. Runs for **weeks**. Cluster crash is guaranteed.
+
+### Mode 1: Barrier (map-only, same as Flink)
+- Barriers flow through stateless map operators
+- 2PC happens **at the sink only** via Lance + Iceberg
+- Maps don't write anything — they're pure functions
+
+### Mode 2: Identifier ACK (pipelines with shuffle)
+
+Step by step:
+```
+1. Record "video_42" enters the pipeline
+   → Coordinator registers: { video_42: IN_FLIGHT }
+   → Stored in Redis WAL
+
+2. Record passes through Map → Shuffle → Map
+   Shuffle reorders, repartitions — doesn't matter.
+   We're tracking the RECORD, not its position.
+
+3. Record reaches Sink, output written
+   → Sink sends ACK(video_42) to coordinator
+   → Redis: { video_42: COMMITTED }
+
+4. Crash happens. On recovery:
+   → Read Redis: which video_ids are COMMITTED vs IN_FLIGHT?
+   → Replay only IN_FLIGHT records from source
+```
+
+At-Least-Once semantics — a record might be processed twice, so sinks must be idempotent.
+
+### Mode 3: Column Link (replace shuffle with storage join)
+
+This is the clever one. Walk through a concrete example:
+
+**Goal**: compute per-video quality score that requires a global average.
+
+```
+Traditional shuffle approach:
+  Step 1: Map → extract brightness per video: {video_1: 0.7, video_2: 0.3, ...}
+  Step 2: SHUFFLE all data to one node → compute global_avg = 0.6
+  Step 3: Map → score = brightness / global_avg
+
+  Problem: if crash during Step 2, partial data scattered across workers. No clean snapshot.
+```
+
+```
+Column Link approach:
+  Step 1: Each worker writes its brightness values as a NEW COLUMN in Lance:
+          Lance table gets: | video_id | brightness |
+          Each worker writes its own fragment file — no contention.
+
+  Step 2: Compute global stat by READING the Lance column:
+          SELECT AVG(brightness) FROM table → 0.6
+          This is a read, not a shuffle.
+
+  Step 3: Each worker independently computes score = brightness / 0.6,
+          writes a NEW COLUMN via Column Link:
+          Lance table becomes: | video_id | brightness | quality_score |
+          Column Link = write new fragment + update manifest (metadata-only)
+
+  On crash: Lance table is durable. Just re-read and resume.
+```
+
+**Why Lance, not Parquet?** Lance stores columns as separate fragment files. Adding a column = write new fragment + update manifest. Parquet requires rewriting the entire file. See [[data-processing/lance-vs-parquet]] for details.
+
+### Limitations of Column Link
+- ✅ Works for GroupBy/aggregate (replace with storage read)
+- ❌ Does NOT work for global sort (ordering requires seeing all data)
+- ❌ Does NOT work for repartition (data movement, not aggregation)
+- ⚠️ At extreme scale: manifest updates serialize, S3 prefix throttling (~5500 PUT/s)
+
+---
+
+## 4. Morsel-Lease Model (map-only, zero I/O overhead)
+
+A design for morsel-driven engines (Daft) where map pipelines dominate. See [[data-processing/morsel-driven-parallelism]] for the underlying execution model.
+
+### How it works, step by step
+
+```
+1. Coordinator splits source into morsels (batches of rows):
+   morsel_0, morsel_1, morsel_2, ... morsel_99
+
+2. Worker requests work:
+   → Coordinator: "Here's morsel_7, you have 5 min lease"
+   → Worker runs ENTIRE pipeline: Map A → Map B → Map C → write output
+   → Worker: "morsel_7 done, output at s3://out/morsel_7.parquet"
+   → Coordinator marks morsel_7 as COMMITTED
+
+3. Worker dies mid-processing:
+   → Heartbeat stops → coordinator reclaims morsel after lease expires
+   → Another worker picks it up, reruns from source
+   → No intermediate state to recover — just redo that morsel
+
+4. Full job restart:
+   → Scan output directory: which morsel files exist?
+   → Those are COMMITTED. Everything else is PENDING.
+   → Resume processing only PENDING morsels.
+```
+
+### Why this is optimal for map-only
+- **Zero extra I/O** — only the final output (which you'd write anyway)
+- **No coordinator persistence** — derive state from output file existence
+- **Morsel-level granularity** — crash wastes at most one morsel's compute
+
+### When it breaks
+- **Expensive maps**: crash at Map C → must redo Map A (e.g., 2hr GPU inference)
+  - Fix: materialize after the expensive map only (hybrid approach)
+- **Different resources per stage**: Map(CPU) → Map(GPU) can't run on one worker
+  - Fix: materialize at the resource boundary
+- **Shuffle**: single morsel can't independently complete a GroupBy
+  - Fix: use Column Link or Identifier ACK for these stages
+
+---
+
+## Decision Matrix
+
+| Pipeline Shape | Best Approach | Why |
+|---|---|---|
+| `Map → Map → Sink` (cheap maps) | **Morsel-lease** | Zero overhead, morsel-level retry |
+| `Map → Map → Sink` (expensive maps) | Hybrid lease + materialize | Avoid recomputing expensive stage |
+| `Map → Shuffle(GroupBy) → Map` | Column Link / Identifier ACK | Only approaches that handle shuffle |
+| `Map(CPU) → Map(GPU)` | Materialize at handoff | Different resources need data handoff |
+| Global Sort | ❌ Avoid | No good answer in any framework |
+
+---
+
+## Interview Talking Points
+
+1. **"Why not Spark checkpointing?"** — `checkpoint()` is opt-in, writes entire RDD, doesn't survive driver crashes. Industry uses application-level partitioning + Airflow.
+
+2. **"How checkpoint across shuffle?"** — Two approaches: (a) Flink aligned/unaligned barriers (complex, needs Kafka), (b) Identifier ACK + Column Link (simpler for batch, replaces shuffle with storage join).
+
+3. **"What's Column Link's tradeoff?"** — Extra storage I/O on happy path, but crash recovery is near-instant. Acceptable at PB scale when intermediates (features) are small relative to source (raw video).
+
+4. **"Where does morsel-lease fit?"** — Strictly better for map-only: zero I/O, morsel-level retry. But can't handle shuffle at all.
+
+5. **"Ray Data / Daft — streaming or batch?"** — Neither. Streaming-style execution (bounded memory) on finite data. Fell between Spark's "recompute" and Flink's "checkpoint" paradigms.
