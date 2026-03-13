@@ -292,6 +292,23 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 
 ---
 
+## PyTorch Inference Optimizations
+
+When building a high-performance LLM engine in Python, several PyTorch-specific tricks are required to maximize performance and guarantee VRAM safety.
+
+### 1. `@torch.inference_mode()` vs `no_grad()`
+During training, PyTorch builds a massive, hidden Computation Graph in the background to calculate gradients, which consumes enormous amounts of VRAM and CPU cycles. For pure inference engines, this must be completely disabled.
+
+While older codebases use `with torch.no_grad():`, modern inference engines use the `@torch.inference_mode()` decorator. 
+- `no_grad()`: Stops tracking gradients, but leaves autograd infrastructure largely intact.
+- `inference_mode()`: A more extreme version introduced in PyTorch 1.9. It entirely rips out the Autograd tracking engine for that block, allowing the C++ backend to bypass thousands of slow safety checks and view tracking operations. It is strictly faster and uses significantly less memory for pure C++/CUDA inference loops.
+
+### 2. Global Device Allocation
+If developers forget to explicitly add `.cuda()` or `device="cuda"` to a tensor creation call (like `torch.zeros()`), PyTorch defaults to allocating memory on the CPU. During runtime, this triggers an invisible, synchronous CPU-to-GPU memory copy over the PCIe bus whenever that tensor is used in GPU math, destroying throughput.
+To prevent this, engines like nano-vLLM run `torch.set_default_device("cuda")` during the boot sequence. This globally forces all subsequent tensor factory functions to allocate natively in VRAM, guaranteeing no arrays secretly reside on the slow CPU.
+
+---
+
 ## CPU Overhead & CUDA Graphs
 
 During Decode, making a single Forward pass across 32 transformer layers requires Python to dispatch ~100+ separate kernel launch instructions to the GPU.
@@ -305,6 +322,21 @@ A CUDA Graph allows PyTorch to record a sequence of GPU instructions once, compi
 1. **Phase 1: Pre-allocation (Static Memory):** Because graph memory shapes can never change once recorded, you must pre-allocate entirely static input/output tensors (e.g. `block_tables = torch.zeros(max_batch_size, max_model_len/block_size)`). It uses `max_model_len` to guarantee the tensor is wide enough to hold the absolute worst-case sequence length.
 2. **Phase 2: Capture:** Run exactly one forward pass using the static memory. PyTorch records the execution sequence.
 3. **Phase 3: Usage (Replay):** Every inference step, simply copy the dynamic list of block tables/inputs directly into the static "Inbox" tensor, and call `graph.replay()`. CPU overhead drops from 1.5ms to 0.005ms.
+
+### The In-Place Memory Copy Trick (Feeding the Graph)
+Once a CUDA graph is recorded, the GPU hardcodes the absolute physical memory addresses of the static tensors (`input_ids`, `block_tables`, `outputs`). The graph is physically locked; it cannot be told to read from a new dynamic tensor.
+
+To feed new data into the graph during continuous batching, the engine performs an **in-place memory copy** into the locked memory address:
+```python
+# graph_vars["input_ids"] is the permanently locked static address
+# input_ids is the tiny new tensor for the current step
+graph_vars["input_ids"][:bs] = input_ids 
+```
+Using the `[:bs] =` syntax physically copies the new integers directly into the pre-existing silicon memory slots that the blind CUDA graph is hardwired to read from. 
+
+### Preventing Garbage Collection (`self.graph_vars`)
+Engines intentionally store these static INBOX/OUTBOX tensors in a class attribute (e.g., `self.graph_vars = dict(...)`). This is purely to defeat Python's Garbage Collector. 
+If the tensors were local variables, Python would delete them from VRAM when the `capture_cudagraph()` function finished. When `graph.replay()` is subsequently called, the GPU would attempt to read from freed or overwritten memory, causing a Segmentation Fault. Storing them in `self.graph_vars` guarantees the locked memory addresses survive permanently.
 
 ### Why are CUDA Graphs Decode-Only?
 
