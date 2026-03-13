@@ -154,9 +154,15 @@ self.block_manager.may_append(seq)   # Decode: if block 87 is full, assign block
 self.block_manager.deallocate(seq)   # SeqA finished: blocks [42, 87] → free list
 ```
 
-The GPU never manages memory. The CPU tells it exactly where to read/write via:
-- **`block_tables`**: "SeqA's KV cache lives in physical blocks [42, 87, 103]"
-- **`slot_mapping`**: "Write the new KV vectors into these exact physical token row positions"
+### The 5 Core Tensors of a GPU Forward Pass
+
+The GPU is essentially a blind, hyper-optimized calculator. It does not manage memory or track sequences. For every single forward pass (step), the CPU scheduler must pre-calculate and send exactly what data to crunch, where to read history from, and where to write the new results to.
+
+1. **`input_ids` (The Data)**: The actual integer tokens to be processed in this step. In the Prefill phase, this contains the entire prompt. In the Decode phase, it contains exactly 1 token per sequence.
+2. **`positions` (The Positional Math)**: The absolute sequence index of each token. This is fundamentally required to calculate Rotary Positional Embeddings (RoPE) so the Attention mechanism understands the physical distance between words.
+3. **`block_tables` (The Read Map)**: A 2D array telling FlashAttention which physical blocks contain the past KV cache for a given sequence (e.g., `[42, 87, 103]`). It uses `-1` padding to align ragged arrays into the rectangular grid required by the GPU.
+4. **`context_lens` (The Read Limit)**: A 1D array telling FlashAttention exactly how many historical tokens to evaluate. While the `block_table` points to the physical chunks, the final block is almost always partially empty. `context_lens` acts as an absolute integer boundary to prevent the GPU from reading leftover garbage memory past the true length of the sequence.
+5. **`slot_mapping` (The Write Pointer)**: A 1D array of exact physical memory addresses. After the newly generated token computes its K and V vectors, it must save them. Instead of forcing the GPU to do slow integer modulo math inside the hot loop to find the address, the CPU pre-calculates the exact absolute 1D pointer (e.g., `54910`). The GPU blindly dumps the K/V vectors into this slot.
 
 ### `prepare_block_tables`: The Bridge to the GPU
 
