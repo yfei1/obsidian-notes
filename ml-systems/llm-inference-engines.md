@@ -189,7 +189,9 @@ Because every sequence generates exactly 1 token, the arrays are highly uniform:
 #### During Prefill (`prepare_prefill`)
 Because sequences are wildly different lengths (e.g., A=10 tokens, B=500 tokens), it is impossible to process them as a rectangular batch.
 - `input_ids` and `positions` are squashed into a giant 1D flat array: `[A1, A2... A10, B1, B2... B500]`.
-- **`context_lens` and `block_table` are discarded!** Since there is no history to look up (all K/V vectors are being generated right now), the block tables are fundamentally useless. 
+- **`context_lens` and `block_table` are discarded!** 
+  - Why? Because in a "Normal" Prefill, $Q$ length equals $K$ length. Every single token required to compute the Attention Matrix is currently inside the engine being calculated right now. The GPU performs the $Q \times K$ math entirely **in-place** inside its ultra-fast SRAM (the microscopic memory directly attached to the Tensor Cores). 
+  - Because it never reaches out into the slow HBM pool (VRAM) to read past history, giving it a map to historical blocks (`block_tables`) would be pointless.
 - Instead, the scheduler passes a new array: `cu_seqlens` (Cumulative Sequence Lengths). It looks like `[0, 10, 510]`. The `flash_attn_varlen_func` (Var-Len Flash Attention kernel) uses these integer boundaries to know where Sequence A ends and Sequence B begins inside the giant 1D flattened input array.
 
 ### Advanced Prefill: Prefix Caching
