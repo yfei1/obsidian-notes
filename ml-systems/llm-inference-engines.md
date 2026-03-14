@@ -111,21 +111,34 @@ if scheduled_seqs:           # If ANY prefill was scheduled...
     return scheduled_seqs, True  # ...return immediately, skip decode!
 ```
 
-If requests arrive faster than the engine can prefill them, the decode path is **never reached**. Running sequences sit idle forever.
+If requests arrive faster than the engine can prefill them, the decode path is **never reached**. Running sequences sit idle forever, waiting for the massive compute-bound prefill phase to clear out. This causes intense latency spikes and horrific Time Per Output Token (TPOT) metrics.
 
 ### Solution: Chunked Prefill (vLLM/SGLang)
 
-Instead of "prefill OR decode," each step gets a fixed **token budget** mixing both:
+Instead of the strict "Prefill OR Decode" binary, modern engines assign a fixed **token budget** per step (e.g., 2048 tokens). They mix both phases into a single GPU heartbeat:
 
 ```
 Budget: 2048 tokens per step
-  - 64 running sequences × 1 decode token = 64 tokens
-  - New prompt chunk: 1984 tokens of prefill
-  - Total: 2048 tokens in one forward pass
-
-Uses the varlen Flash Attention kernel for everything — each sequence
-declares its own query length via cu_seqlens_q.
+  - 64 currently running sequences × 1 decode token = 64 tokens allocated
+  - New prompt chunk: 1984 tokens of prefill allocated
+  - Total: 2048 tokens processed in one forward pass
 ```
+
+By "chunking" a giant 8,000-token input prompt into four pieces (1984 tokens each), the engine ensures that the 64 running decode sequences get their 1 token processed *equitably* alongside the massive prefill. 
+- **The Catch:** You can no longer use the standard PagedAttention (Decode) kernel. The engine must use the Var-Len Flash Attention kernel (`flash_attn_varlen_func`) for *everything*. Each decode sequence declares its own `cu_seqlens_q` difference of exactly 1. 
+
+---
+
+## Continuous Batching vs Static Batching
+
+Before 2023, standard text generation engines used **Static Batching**.
+- **The flaw:** If you batch 4 sequences together, Sequence A might finish in 20 tokens, but Sequence B takes 1000 tokens. Sequences C and D arrive in the queue but must wait **outside the GPU** for Sequence B to finish the entire 1000-token generated block before a new static batch can be formed.
+
+**Continuous Batching** (pioneered by Orca) breaks this paradigm. Sequences are completely independent and fluidly enter and exit the batch on a *per-step* basis:
+1. Step 18: Sequence A hits an EOS (End Of String) token and finishes.
+2. Step 19: The CPU Scheduler immediately ejects A, reclaims its KV blocks, grabs Sequence C from the queue, and inserts C directly into the running batch alongside B.
+
+**Why this works:** The GPU doesn't know what a "sequence" is. It only processes an array of 64 tokens. By continuously hot-swapping the contents of the batch millisecond-by-millisecond without padding, GPU utilization jumps from ~30% to nearly 100%.
 
 ---
 
@@ -178,7 +191,17 @@ Because sequences are wildly different lengths (e.g., A=10 tokens, B=500 tokens)
 - `input_ids` and `positions` are squashed into a giant 1D flat array: `[A1, A2... A10, B1, B2... B500]`.
 - **`context_lens` and `block_table` are discarded!** Since there is no history to look up (all K/V vectors are being generated right now), the block tables are fundamentally useless. 
 - Instead, the scheduler passes a new array: `cu_seqlens` (Cumulative Sequence Lengths). It looks like `[0, 10, 510]`. The `flash_attn_varlen_func` (Var-Len Flash Attention kernel) uses these integer boundaries to know where Sequence A ends and Sequence B begins inside the giant 1D flattened input array.
-- *Exception:* If **Prefix Caching** is enabled, a prompt might match a historical KV cache stored previously. In this edge case, `prepare_prefill` will dynamically reconstruct a `block_table` for the prefill to fetch the cached history.
+
+### Advanced Prefill: Prefix Caching
+What if 1,000 users ask different questions about the exact same 10,000-word PDF? 
+Historically, the engine would re-compute the Key and Value matrices for those 10,000 words 1,000 separate times, devastating TTFT (Time To First Token).
+
+**Prefix Caching** keeps the computed KV vectors for the PDF alive in the GPU memory pool across different requests. When a new user hits the engine:
+1. The engine checks the hash of the prompt and detects a 10,000-word cache hit.
+2. **The Query Length Shrinks:** The CPU only sends the 20-word unique question to the GPU to be computed as Queries (`cu_seqlens_q` jumps by 20).
+3. **The Key Length Stays Massive:** Those 20 Queries must still perform Attention Lookbacks against the entire 10,020-word history. (`cu_seqlens_k` jumps by 10,020).
+4. **The Exception to the Prefill Rule:** Normally Prefill ignores `block_table`. But because of the cache hit, the CPU dynamically reconstructs a `block_table` containing the physical block IDs of the cached PDF and passes it to the GPU during the Prefill phase so the newly minted Queries can find their historical Keys.
+This is exactly why `cu_seqlens_q` and `cu_seqlens_k` are split into two separate arrays in modern var-len attention APIs.
 
 ### `prepare_block_tables`: The Bridge to the GPU
 
