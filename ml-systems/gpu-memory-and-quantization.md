@@ -12,6 +12,25 @@ Modern AI GPUs are heavily **Memory Bandwidth Bound** during text generation (au
 
 For a 7B parameter fp16 model, generating 1 token requires loading 14 GB of weight data from the slow HBM into the fast SM registers. The SM ends up spending 95% of its time idling, waiting for the memory to arrive, and only 5% of its time crunching the numbers.
 
+### VRAM (The Warehouse) vs SRAM (The Workbench)
+
+To master LLM inference optimization, it is crucial to understand the physical distance between these two memory types during the Attention calculation.
+
+1. **VRAM (Global Memory/HBM)**: 
+   - **What it is:** The massive, gigabyte-scale memory chips soldered around the edges of the GPU board (e.g., 80 GB on an H100).
+   - **What it holds:** The massive 30GB Model Weights matrix, and the entire 30GB KV Cache pool.
+2. **SRAM (Shared Local Memory/Registers)**:
+   - **What it is:** Microscopic, hyper-fast memory cells etched directly into the silicon of the GPU's actual brain (the Streaming Multiprocessors).
+   - **What it holds:** Tiny "tiles" of active data (e.g., just a few rows of the $Q$ and $K$ matrices at a time). It can only hold a few hundred kilobytes (KB) per SM.
+   - **The Engine Magic:** When you write a highly optimized custom CUDA kernel like FlashAttention, you are painstakingly writing C++ instructions that say: *"Fetch a tiny 128x128 tile of Keys from the slow VRAM $\rightarrow$ Store it temporarily in my microscopic SRAM $\rightarrow$ Fire the Tensor Cores to multiply that SRAM data instantly $\rightarrow$ Delete the data from SRAM $\rightarrow$ Fetch the next tile."*
+
+### Why FlashAttention Requires `max_seqlen`
+During the Prefill phase, the Var-Len FlashAttention kernel computes everything "in-place" without writing intermediate results to the slow VRAM. To optimize the size of these tiles and know exactly how much of that precious SRAM to dynamically allocate for the kernel launch, the GPU driver needs to know the **worst-case scenario** inside the batch:
+- "What is the longest Query sequence I will have to process?" (`max_seqlen_q`)
+- "What is the longest Key history I will have to look back at?" (`max_seqlen_k`)
+
+If the CPU did not pre-calculate and pass these two integers into the API (`set_context(..., max_seqlen_q, max_seqlen_k)`), the GPU would be forced to launch a slow "pre-kernel" just to iterate through the VRAM `cu_seqlens` boundaries, find the maximum length, configure its SRAM, and then finally launch the real FlashAttention kernel. By calculating this on the CPU beforehand, the C++ backend can instantly configure the SRAM, pick the fastest compiled Triton kernel variant, and launch it immediately.
+
 ---
 
 ## Sub-Byte Quantization vs 32-bit Hardware
