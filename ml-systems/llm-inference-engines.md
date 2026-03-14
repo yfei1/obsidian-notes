@@ -159,10 +159,26 @@ self.block_manager.deallocate(seq)   # SeqA finished: blocks [42, 87] → free l
 The GPU is essentially a blind, hyper-optimized calculator. It does not manage memory or track sequences. For every single forward pass (step), the CPU scheduler must pre-calculate and send exactly what data to crunch, where to read history from, and where to write the new results to.
 
 1. **`input_ids` (The Data)**: The actual integer tokens to be processed in this step. In the Prefill phase, this contains the entire prompt. In the Decode phase, it contains exactly 1 token per sequence.
-2. **`positions` (The Positional Math)**: The absolute sequence index of each token. This is fundamentally required to calculate Rotary Positional Embeddings (RoPE) so the Attention mechanism understands the physical distance between words.
+2. **`positions` (The Positional Math)**: The absolute sequence index of each token. This is fundamentally required to calculate **Rotary Positional Embeddings (RoPE)**. Modern LLMs do not use absolute positional embeddings added at the first layer. Instead, RoPE mathematically rotates the Q and K vectors inside the Attention layers based on their distance. The GPU kernel needs this `positions` array to know exactly how many "degrees" to rotate each specific token in the dynamic batch.
 3. **`block_tables` (The Read Map)**: A 2D array telling FlashAttention which physical blocks contain the past KV cache for a given sequence (e.g., `[42, 87, 103]`). It uses `-1` padding to align ragged arrays into the rectangular grid required by the GPU.
 4. **`context_lens` (The Read Limit)**: A 1D array telling FlashAttention exactly how many historical tokens to evaluate. While the `block_table` points to the physical chunks, the final block is almost always partially empty. `context_lens` acts as an absolute integer boundary to prevent the GPU from reading leftover garbage memory past the true length of the sequence.
 5. **`slot_mapping` (The Write Pointer)**: A 1D array of exact physical memory addresses. After the newly generated token computes its K and V vectors, it must save them. Instead of forcing the GPU to do slow integer modulo math inside the hot loop to find the address, the CPU pre-calculates the exact absolute 1D pointer (e.g., `54910`). The GPU blindly dumps the K/V vectors into this slot.
+
+### Structural Differences: Prefill vs Decode Tensors
+
+While the concepts remain the same, the actual arrays passed to the GPU change shape drastically depending on the phase.
+
+#### During Decode (`prepare_decode`)
+Because every sequence generates exactly 1 token, the arrays are highly uniform:
+- `input_ids`, `positions`, `context_lens`, and `slot_mapping` are all exactly 1-Dimensional arrays of length `batch_size`.
+- The `block_table` is heavily relied upon to fetch historical memory.
+
+#### During Prefill (`prepare_prefill`)
+Because sequences are wildly different lengths (e.g., A=10 tokens, B=500 tokens), it is impossible to process them as a rectangular batch.
+- `input_ids` and `positions` are squashed into a giant 1D flat array: `[A1, A2... A10, B1, B2... B500]`.
+- **`context_lens` and `block_table` are discarded!** Since there is no history to look up (all K/V vectors are being generated right now), the block tables are fundamentally useless. 
+- Instead, the scheduler passes a new array: `cu_seqlens` (Cumulative Sequence Lengths). It looks like `[0, 10, 510]`. The `flash_attn_varlen_func` (Var-Len Flash Attention kernel) uses these integer boundaries to know where Sequence A ends and Sequence B begins inside the giant 1D flattened input array.
+- *Exception:* If **Prefix Caching** is enabled, a prompt might match a historical KV cache stored previously. In this edge case, `prepare_prefill` will dynamically reconstruct a `block_table` for the prefill to fetch the cached history.
 
 ### `prepare_block_tables`: The Bridge to the GPU
 
