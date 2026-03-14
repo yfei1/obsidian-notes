@@ -4,17 +4,21 @@
     "type": "split",
     "children": [
       {
-        "id": "a60fe7cd9f8f0864",
+        "id": "43a5d22c4452c6a7",
         "type": "tabs",
         "children": [
           {
-            "id": "13b4db652a1286f4",
+            "id": "7d3831259f47353b",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
+              "type": "markdown",
+              "state": {
+                "file": "data-processing/lance-vs-parquet.md",
+                "mode": "source",
+                "source": false
+              },
               "icon": "lucide-file",
-              "title": "New tab"
+              "title": "lance-vs-parquet"
             }
           }
         ]
@@ -108,6 +112,7 @@
         "state": {
           "type": "backlink",
           "state": {
+            "file": "data-processing/checkpointing.md",
             "collapseAll": false,
             "extraContext": false,
             "sortOrder": "alphabetical",
@@ -161,6 +166,12 @@
       "bases:Create new base": false
     }
   },
-  "active": "13b4db652a1286f4",
-  "lastOpenFiles": []
+  "active": "7d3831259f47353b",
+  "lastOpenFiles": [
+    "data-processing/checkpointing.md",
+    "data-processing/morsel-driven-parallelism.md",
+    "data-processing/lance-vs-parquet.md",
+    "distributed-systems/chandy-lamport.md",
+    "CLAUDE.md"
+  ]
 }
