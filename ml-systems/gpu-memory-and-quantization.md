@@ -31,6 +31,25 @@ During the Prefill phase, the Var-Len FlashAttention kernel computes everything 
 
 If the CPU did not pre-calculate and pass these two integers into the API (`set_context(..., max_seqlen_q, max_seqlen_k)`), the GPU would be forced to launch a slow "pre-kernel" just to iterate through the VRAM `cu_seqlens` boundaries, find the maximum length, configure its SRAM, and then finally launch the real FlashAttention kernel. By calculating this on the CPU beforehand, the C++ backend can instantly configure the SRAM, pick the fastest compiled Triton kernel variant, and launch it immediately.
 
+### Hardcore Microarchitecture: Tiling vs Split-K
+*(See [[ml-systems/llm-inference-engines#Decode starvation problem]] for how this impacts scheduling).*
+
+To understand *why* the metrics and bottlenecks of an inference engine are so different between Prefill and Decode phases, we must look at how the C++ CUDA Kernels configure the GPU's SRAM.
+
+#### 1. Prefill: The Math-Bound Tiling War (FlashAttention-2)
+Prefill processes the entire prompt (e.g., $Q = 8000 \times 128$).
+The SRAM allocation strategy is to **hoard Query tiles**:
+- The kernel cuts a $128 \times 128$ block of $Q$ and locks it in the fastest SRAM.
+- It then opens a loop, continuously hauling $64 \times 128$ blocks of $K$ and $V$ from the slow HBM (VRAM) into the remaining SRAM space.
+- The Tensor Cores execute massive matrix multiplications ($Q_{block} \times K_{block}^T$) instantly.
+- **The Bottleneck:** The sheer volume of mathematics. The kernel optimizes for Tensor Core utilization, ensuring $Q$ stays in SRAM as long as possible while $K$ and $V$ stream past. The C++ compiler requires `max_seqlen` inputs to perfectly size these dynamic tiles against the strict 164 KB physical limit.
+
+#### 2. Decode: The Memory-Bound Split-K Vacuum (Flash-Decoding)
+Decode processes exactly 1 token (e.g., $Q = 1 \times 128$).
+The SRAM allocation strategy completely flips: $Q$ is so tiny it barely takes up space. The math is instantaneous. The bottleneck is the excruciating wait for the outer HBM chips to deliver the massive KV Cache history.
+- The kernel configures the SRAM as a giant intake buffer for $K$ and $V$ blocks, discarding the massive grid-matrix optimizations used in Prefill.
+- **The Split-K Solution:** If the Batch Size is low (e.g., 4 users), the GPU's 108 SMs will sit mostly idle because there are only 4 $Q$ vectors to process! **Flash-Decoding** solves this by slicing the *history pipeline*. If User A has 10,000 historical tokens, the kernel duplicates the 1 $Q$ vector across 100 different SMs, and commands each SM to compute local attention against a 100-token slice of the history entirely in parallel. They compute Partial Sums, and a secondary reduction kernel instantly adds them together.
+
 ---
 
 ## Sub-Byte Quantization vs 32-bit Hardware

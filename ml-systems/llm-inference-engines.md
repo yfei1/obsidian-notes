@@ -103,23 +103,12 @@ The reason **Prefill** only happens once is because of the **KV Cache**. We do n
     -   It inserts that single new K and V vector into the next available slot in the cache block.
     -   **Metric**: Time Per Output Token (TPOT) measures how fast the GPU can repeatedly run this memory-bandwidth-bound single-insert loop.
 
-### Hardcore Microarchitecture: Tiling vs Split-K
+### Hardware-Aware Execution (Why C++ Kernels Separate Them)
+*(For a hardcore deep dive into how SRAM is configured differently for these two phases, see [[ml-systems/gpu-memory-and-quantization#Hardcore Microarchitecture Tiling vs Split-K]])*
 
-To understand *why* the metrics and bottlenecks are so different, we must look at how the C++ CUDA Kernels configure the GPU's **SRAM (Shared Local Memory)**. An NVIDIA A100 SM (Streaming Multiprocessor) only has ~164 KB of SRAM. A full sequence cannot fit inside; the matrices must be chopped into microscopic "tiles".
-
-#### 1. Prefill: The Math-Bound Tiling War (FlashAttention-2)
-Prefill processes the entire prompt (e.g., $Q = 8000 \times 128$).
-The SRAM allocation strategy is to **hoard Query tiles**:
-- The kernel cuts a $128 \times 128$ block of $Q$ and locks it in the fastest SRAM.
-- It then opens a loop, continuously hauling $64 \times 128$ blocks of $K$ and $V$ from the slow HBM (VRAM) into the remaining SRAM space.
-- The Tensor Cores execute massive matrix multiplications ($Q_{block} \times K_{block}^T$) instantly.
-- **The Bottleneck:** The sheer volume of mathematics. The kernel optimizes for Tensor Core utilization, ensuring $Q$ stays in SRAM as long as possible while $K$ and $V$ stream past. The C++ compiler requires `max_seqlen` inputs to perfectly size these dynamic tiles against the strict 164 KB physical limit.
-
-#### 2. Decode: The Memory-Bound Split-K Vacuum (Flash-Decoding)
-Decode processes exactly 1 token (e.g., $Q = 1 \times 128$).
-The SRAM allocation strategy completely flips: $Q$ is so tiny it barely takes up space. The math is instantaneous. The bottleneck is the excruciating wait for the outer HBM chips to deliver the massive KV Cache history.
-- The kernel configures the SRAM as a giant intake buffer for $K$ and $V$ blocks, discarding the massive grid-matrix optimizations used in Prefill.
-- **The Split-K Solution:** If the Batch Size is low (e.g., 4 users), the GPU's 108 SMs will sit mostly idle because there are only 4 $Q$ vectors to process! **Flash-Decoding** solves this by slicing the *history pipeline*. If User A has 10,000 historical tokens, the kernel duplicates the 1 $Q$ vector across 100 different SMs, and commands each SM to compute local attention against a 100-token slice of the history entirely in parallel. They compute Partial Sums, and a secondary reduction kernel instantly adds them together.
+The Python engine explicitly separates these phases because the underling C++ CUDA kernels must configure the GPU's microscopic memory (SRAM) entirely differently:
+1. **Prefill (FlashAttention-2):** A math-bound "tiling" operation. The kernel locks large grid chunks of $Q$ in SRAM and streams $K/V$ past them to maximize Tensor Core utilization.
+2. **Decode (Flash-Decoding):** A memory-bound "vacuum" operation. Because $Q$ is just 1 token, the kernel abandons matrix grid optimizations and configures SRAM purely to suck in the massive historical KV Cache from VRAM as fast as possible. To prevent idle GPU cores during low batch sizes, it uses **Split-K**, splitting the history sequence across 100+ SMs to compute attention in parallel.
 
 ### Decode starvation problem
 
