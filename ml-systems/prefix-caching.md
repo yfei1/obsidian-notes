@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-Prefix caching lets the engine skip recomputing KV cache for token blocks it has already seen. nano-vLLM uses **content-based hash chaining** — each block of tokens gets an xxhash that includes the previous block's hash, forming a chain. On allocation, the `BlockManager` looks up the hash; on a hit it reuses the existing KV cache block (zero GPU work for those tokens). A subtle consequence: `hash_to_block_id` never shrinks and accumulates stale entries as blocks get recycled with different content.
+Prefix caching lets the engine skip recomputing KV cache for token blocks it has already seen. A KV cache block is a fixed-size chunk of pre-allocated GPU memory that stores Key and Value vectors for a group of tokens (see [[ml-systems/gpu-memory-hierarchy]]). nano-vLLM uses **content-based hash chaining** — each block of tokens gets an xxhash that includes the previous block's hash, forming a chain. On allocation, the `BlockManager` looks up the hash; on a hit it reuses the existing KV cache block (zero GPU work for those tokens). A subtle consequence: `hash_to_block_id` never shrinks and accumulates stale entries as blocks get recycled with different content.
 
 ---
 
@@ -111,7 +111,7 @@ for i in range(seq.num_cached_blocks, seq.num_blocks):     # skip cached blocks
     # only compute slot_mapping for non-cached blocks
 ```
 
-The attention layer detects prefix caching because `cu_seqlens_k > cu_seqlens_q` (full context > query length):
+The attention layer detects prefix caching because `cu_seqlens_k > cu_seqlens_q` — the cached K/V spans more tokens than the new Q being computed, since the prefix was already processed and its KV lives in the cached blocks:
 
 ```python
 if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache detected
@@ -252,7 +252,7 @@ Neither approach cleans up entries whose hashes are never queried again. In prac
 
 1. **"How does prefix caching work?"** — Content-based hash chaining. Each KV cache block gets an xxhash of its tokens chained with the previous block's hash. On allocation, the BlockManager looks up the hash; hits reuse the existing block and skip those tokens during prefill. The attention kernel receives `block_tables` during prefill so it can read cached KV while only computing the uncached suffix.
 
-2. **"How does the engine detect a prefix cache hit at the GPU level?"** — `cu_seqlens_k > cu_seqlens_q`. Normally prefill has Q length == K length (everything computed in-place). With a cache hit, Q is only the uncached suffix but K spans the full context. This triggers passing `block_tables` to the varlen attention kernel so it can read historical KV from the cached blocks.
+2. **"How does the engine detect a prefix cache hit at the GPU level?"** — `cu_seqlens_k > cu_seqlens_q`. Normally prefill has Q length == K length (everything computed in-place). With a cache hit, Q is only the uncached suffix but K spans the full context — the cached K/V already covers the prefix tokens. This triggers passing `block_tables` to the varlen attention kernel so it can read historical KV from the cached blocks.
 
 3. **"What's the hash chain for?"** — Prevents false matches. Block i's hash encodes blocks 0 through i. Two sequences only share a cache hit if their *entire prefix* is identical up to that point. A block-local hash could match coincidentally even if earlier blocks diverged.
 

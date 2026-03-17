@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-Seven parallelism dimensions exist for distributing LLM workloads across GPUs: Data Parallelism (DP), ZeRO/FSDP, Tensor Parallelism (TP), Sequence Parallelism (SP), Pipeline Parallelism (PP), Expert Parallelism (EP), and Context Parallelism (CP). They operate on **orthogonal axes** and can be composed. ZeRO and FSDP are the only mutually exclusive pair (competing implementations of the same idea). ZeRO/FSDP are training-only; the rest apply to both training and inference. "Model Parallelism" is not a separate strategy — it's an umbrella term for TP + PP + EP.
+Seven orthogonal parallelism strategies exist for distributing LLM workloads across GPUs. Most compose freely; ZeRO/FSDP are mutually exclusive (competing implementations of the same idea) and training-only — the rest apply to both training and inference. "Model Parallelism" is not a separate strategy; it's an umbrella term for TP + PP + EP.
 
 ---
 
@@ -143,6 +143,16 @@ MLP uses column-parallel on the first linear, row-parallel on the second:
 ### Column vs Row Naming Convention
 
 **"Column" and "Row" refer to the mathematical weight matrix A `[in, out]`** (Megatron convention), which is the **transpose** of PyTorch's W `[out, in]`:
+
+```
+Side-by-side — same physical weight, two naming conventions:
+
+  Megatron math:   A  [in_features, out_features]  →  "columns" = out_features axis
+  PyTorch code:    W  [out_features, in_features]   →  W = A.T
+
+  ColumnParallel splits A's columns (out dim) = splits W along dim 0 (rows in code)
+  RowParallel    splits A's rows   (in dim)  = splits W along dim 1 (cols in code)
+```
 
 | Megatron name | Splits math A along | Splits PyTorch W along | tp_dim | After matmul |
 |---|---|---|---|---|
@@ -599,3 +609,4 @@ PT-MoE is a case of **co-designing the model architecture with the hardware para
 - [[ml-systems/gpu-memory-hierarchy]]
 - [[distributed-systems/chandy-lamport]]
 - [[ml-systems/llm-inference-engines]]
+- [[ml-systems/rotary-position-embedding]] — RoPE applied inside the QKV pipeline that tensor parallelism splits

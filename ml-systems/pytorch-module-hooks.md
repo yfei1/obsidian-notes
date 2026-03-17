@@ -4,11 +4,13 @@
 
 ## TL;DR
 
-When you call `model(x)`, Python calls `model.__call__(x)`, which is aliased to `_wrapped_call_impl`. This runs **pre-hooks → forward() → post-hooks**. Hooks are empty `OrderedDict`s by default — you register your own via `register_forward_pre_hook()` and `register_forward_hook()`. Calling `model.forward(x)` directly **skips all hooks**. There are two distinct `torch.compile` paths: `@torch.compile` on a method (compiles only that method, hooks run as normal Python) vs `module.compile()` (compiles the entire `_call_impl` including hook logic, causing graph breaks for non-traceable hooks). nano-vllm uses the former; CUDA graphs are a completely separate mechanism using `torch.cuda.CUDAGraph` capture/replay.
+Calling `model(x)` fires hooks before and after `forward()`. Calling `model.forward(x)` directly **skips all hooks** — a common gotcha that causes silent bugs. The two `torch.compile` modes interact differently with hooks: `@torch.compile` on a method keeps hooks outside the compiled region (safe), while `module.compile()` traces through hook logic and causes graph breaks for non-traceable Python. Under the hood, `model(x)` invokes `model.__call__(x)`, which is aliased to `_wrapped_call_impl` and runs **pre-hooks → forward() → post-hooks**. Hooks are empty `OrderedDict`s by default — you register your own via `register_forward_pre_hook()` and `register_forward_hook()`. nano-vllm uses `@torch.compile` on methods; CUDA graphs are a completely separate mechanism using `torch.cuda.CUDAGraph` capture/replay.
 
 ---
 
 ## The Call Chain: What `model(x)` Actually Does
+
+Why does this matter? Hooks are used for feature extraction (grabbing intermediate activations), debugging (printing shapes mid-forward), and gradient manipulation (clipping or zeroing gradients per-layer). Understanding when hooks fire — and when they **don't** — prevents subtle bugs in inference engines and training loops.
 
 Source: `torch/nn/modules/module.py` (PyTorch 2.8.0)
 
@@ -200,6 +202,8 @@ torch.compile logging confirms the break:
 Graph break in user code at <stdin>:39
 Graph Break Reason: Unsupported Tensor.item() with capture_scalar_outputs=False
 ```
+
+`.item()` forces a synchronous CPU-GPU transfer to extract a scalar value, which cannot be captured in a static computation graph.
 
 ### Summary table
 

@@ -28,7 +28,7 @@ $$\|x\|_p = \left(\sum_i |x_i|^p\right)^{1/p}$$
 
 Mean absolute value avoids zero-cancellation (`[3,-3,3,-3]` → mean=0 but mean_abs=3) but has two problems vs `sqrt(mean(x²))`:
 
-1. **Not differentiable at 0**: `d/dx |x| = sign(x)`, undefined at x=0 → gradient discontinuity → NaN risk in backprop.
+1. **Not differentiable at 0**: `d/dx |x| = sign(x)`, undefined at x=0 → gradient discontinuity → NaN risk in backprop. If a weight has value exactly 0 (common after aggressive L1 regularization), the gradient of `|x|` is undefined there — the optimizer hits a discontinuity.
 2. **Hardware**: `x²` maps to multiply-accumulate (FMA), which GPU Tensor Cores are built for. `|x|` requires a conditional branch or mask.
 
 `x²` is smooth, FMA-friendly, and connects to Euclidean geometry. L1/L2 difference is therefore not just a norm preference — it determines differentiability.
@@ -78,6 +78,8 @@ L2 constraint (circle)         L1 constraint (diamond)
       └───┘                         ╲  ╱
                                      ╲╱  ← tangent at corner → w=0
 ```
+
+The diamond's corners force the loss contour to touch at axis intersections, where one weight is exactly zero.
 
 Gradient perspective:
 - L2 gradient → `2w` → shrinks as w→0, never reaches 0
@@ -130,3 +132,4 @@ The optimizer plays whack-a-mole: suppress the current maximum, a new one emerge
 ## See Also
 
 - [[ml-systems/transformer-model-internals]] — RMSNorm uses L2 norm for hidden state normalization; see why sqrt(mean(x²)) beats mean(|x|)
+- [[ml-systems/attention-mechanics]] — per-head RMSNorm on Q/K before RoPE rotation

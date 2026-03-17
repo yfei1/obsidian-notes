@@ -161,7 +161,7 @@ Split + reshape:
   v = qkv[:, 1536:2048]  → reshape →  [5,  8, 64]     ← 8 KV heads
 ```
 
-Q is 2× the size of K or V because GQA uses 16 Q heads but only 8 KV heads.
+Q is 2× the size of K or V because GQA (Grouped-Query Attention; explained in detail below) uses 16 Q heads but only 8 KV heads.
 
 ### ② Per-Head RMSNorm + RoPE
 
@@ -312,7 +312,7 @@ Over 28 layers and 4096 tokens: MHA ≈ 900MB, GQA ≈ 450MB. GQA is the sweet s
 ```python
 # attention.py:64-70
 if context.is_prefill:
-    store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
+    store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)  # slot_mapping = pre-computed write addresses for new KV pairs
     o = flash_attn_varlen_func(
         q, k, v,
         cu_seqlens_q=context.cu_seqlens_q,   # [0, 5] = "tokens 0-4 are one seq"
@@ -321,18 +321,18 @@ if context.is_prefill:
         softmax_scale=1/sqrt(64), causal=True)
 ```
 
-All N tokens' Q, K, V are available (just computed). Computation = O(N² × d_k). GPU SMs are busy with matmuls — **compute is the bottleneck**, not memory bandwidth. `varlen` supports variable-length sequences packed into one flat batch (continuous batching).
+All N tokens' Q, K, V are available (just computed). Computation scales as O(N² × d_k), so GPU SMs are busy with matmuls — **compute is the bottleneck**, not memory bandwidth. The `varlen` suffix means this kernel supports variable-length sequences packed into one flat tensor (multiple prompts concatenated end-to-end). This packing is what enables continuous batching: the engine can add or remove sequences from the batch without padding waste.
 
 ### Decode — Generate One Token at a Time (Memory-Bound)
 
 ```python
 # attention.py:71-74
 else:
-    store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
+    store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)  # slot_mapping = pre-computed write addresses for new KV pairs
     o = flash_attn_with_kvcache(
         q.unsqueeze(1), k_cache, v_cache,
         cache_seqlens=context.context_lens,
-        block_table=context.block_tables,
+        block_table=context.block_tables,   # block_tables = the paged-memory address map (see [[ml-systems/llm-inference-engines]])
         softmax_scale=1/sqrt(64), causal=True)
 ```
 

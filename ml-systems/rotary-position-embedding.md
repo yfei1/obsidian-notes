@@ -125,7 +125,7 @@ Also note: the key algebraic fact used is `R(mθ)ᵀ · R(nθ) = R((n−m)θ)`, 
 
 ### Step 3 — Extending to d Dimensions (block diagonal)
 
-A head vector has `d` dimensions (e.g. 64). The strategy: pair every two adjacent dimensions into an independent 2D plane and rotate each pair independently with its own frequency.
+A head vector has `d` dimensions (e.g. 64). We apply the same 2D rotation independently to each consecutive pair of dimensions, giving `d/2` independent rotations — one per pair, each with its own frequency. In matrix notation this is a block-diagonal matrix, described below.
 
 ```
 x = [x₁, x₂ | x₃, x₄ | x₅, x₆ | … | x_{d−1}, x_d]
@@ -170,7 +170,7 @@ RoPE uses `d/2` different frequencies simultaneously. The full "position signatu
 sig(Δ) = [cos(Δ·θ₀), sin(Δ·θ₀), cos(Δ·θ₁), sin(Δ·θ₁), …, cos(Δ·θ_{d/2−1}), sin(Δ·θ_{d/2−1})]
 ```
 
-For two different distances `Δ₁ ≠ Δ₂` to produce identical signatures, **all** `d/2` pairs would need to collide simultaneously. Because `θᵢ = base^(−2i/d)` values are irrational and their ratios are irrational, the periods are incommensurate — there is no finite `Δ` that is simultaneously a multiple-period of all frequencies within any practical context length.
+For two different distances `Δ₁ ≠ Δ₂` to produce identical signatures, **all** `d/2` pairs would need to collide simultaneously. Because `θᵢ = base^(−2i/d)` values are irrational and their ratios are irrational, the periods are incommensurate — there is no finite `Δ` that is simultaneously a multiple-period of all frequencies within any practical context length. Exponential spacing ensures the frequencies span multiple orders of magnitude, letting different dimension pairs distinguish positions at different scales.
 
 The slowest frequency (i = d/2 − 1, base = 1,000,000, d = 128):
 
