@@ -80,15 +80,7 @@ Weight: [151936, 1024]       (one row per vocabulary token)
 Output: [N, 1024]            (dense float vectors)
 ```
 
-**Multi-GPU (all_reduce)**: Vocabulary rows are sharded across GPUs. Each GPU masks out-of-range IDs to zero, does local lookup, then `all_reduce` (sum) combines results. Sum works because only one GPU has the real embedding — all others contribute zeros:
-
-```
-Example: 2 GPUs, token ID = 4
-  GPU 0 (owns tokens 0-2):  ID 4 out of range → masked → [0, 0, 0, 0]
-  GPU 1 (owns tokens 3-5):  ID 4 in range → lookup → [1.7, 1.8, 1.9, 2.0]
-
-  all_reduce (sum):  [0,0,0,0] + [1.7,1.8,1.9,2.0] = [1.7,1.8,1.9,2.0]  ← correct
-```
+**Multi-GPU**: Vocabulary rows sharded across GPUs. Uses `all_reduce` (sum) — only one GPU has the real embedding, others contribute zeros. See [[ml-systems/parallelism-strategies]] for the concrete example and why this differs from the LM head.
 
 ### RMSNorm — Stabilizer
 
@@ -158,22 +150,7 @@ LM Head:  [num_seqs, 1024] @ [1024, 151936] → [num_seqs, 151936]  (logits)
 Sampler:  [num_seqs, 151936] + temperatures → [num_seqs]  (token IDs)
 ```
 
-**Multi-GPU (gather + concat, NOT all_reduce)**: Each GPU computes logits for its vocabulary slice. These are logits for **different** tokens — summing them would be nonsensical. Instead, `gather` collects all slices on rank 0, then `concat` stitches them into full vocabulary logits:
-
-```
-Example: 2 GPUs, hidden = [0.5, 0.5, 0.5, 0.5], vocab_size=6
-  GPU 0 (weight rows 0-2):  logits = [0.5, 1.3, 2.1]   ← scores for tokens 0,1,2
-  GPU 1 (weight rows 3-5):  logits = [2.9, 3.7, 4.5]   ← scores for tokens 3,4,5
-
-  ✗ all_reduce (sum): [0.5+2.9, 1.3+3.7, 2.1+4.5] = [3.4, 5.0, 6.6]  ← WRONG
-    (adds logit_0 + logit_3 — meaningless, they're different tokens)
-
-  ✓ gather + concat:  [0.5, 1.3, 2.1] ++ [2.9, 3.7, 4.5]
-                     = [0.5, 1.3, 2.1, 2.9, 3.7, 4.5]   ← full vocab, correct
-    argmax → token 5 (score 4.5)
-```
-
-**Why the asymmetry with embedding**: Embedding produces a **complete** hidden vector per GPU (or zeros) — sum works. LM Head produces **non-overlapping vocab slices** per GPU — they must be concatenated, not summed.
+**Multi-GPU**: Uses `gather + concat` (NOT all_reduce) because each GPU computes logits for a different vocabulary slice — summing would mix scores for unrelated tokens. See [[ml-systems/parallelism-strategies]] for the concrete example showing why embedding and LM head need different collective operations despite sharing weights.
 
 **Sampler**: (1) Divide logits by temperature (higher = more random, lower = more deterministic). (2) Softmax to get probabilities. (3) Exponential sampling trick: `(probs / Exponential(1)).argmax()`. This works because dividing each probability by an independent Exp(1) draw and taking argmax is mathematically equivalent to categorical sampling (equivalent to the Gumbel-max trick since `Gumbel(0,1) = -log(Exp(1))`). The advantage over `torch.multinomial`: uses only element-wise ops and `argmax`, which are fully compatible with `@torch.compile` — `multinomial` uses a sequential CDF scan that can't be compiled.
 

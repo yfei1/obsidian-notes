@@ -147,6 +147,38 @@ MLP uses column-parallel on the first linear, row-parallel on the second:
 - Used by both vLLM and SGLang for inference.
 - `nano-vLLM` uses TP: each worker process in `ModelRunner` gets `rank` and splits attention heads with `num_kv_heads // world_size`.
 
+### TP for Embedding and LM Head: all_reduce vs gather
+
+Embedding and LM head share the same weight matrix but need **different collective operations** because they produce fundamentally different outputs.
+
+**Embedding (all_reduce)**: Each GPU holds a vocabulary slice. For a given token ID, only one GPU has the matching row — all others mask to zero and contribute nothing. `all_reduce` (sum) works because zeros + real embedding = real embedding:
+
+```
+Example: 2 GPUs, vocab_size=6, token ID = 4
+  GPU 0 (owns tokens 0-2):  ID 4 out of range → masked → [0, 0, 0, 0]
+  GPU 1 (owns tokens 3-5):  ID 4 in range → lookup → [1.7, 1.8, 1.9, 2.0]
+
+  all_reduce (sum):  [0,0,0,0] + [1.7,1.8,1.9,2.0] = [1.7,1.8,1.9,2.0]  ✓
+  Both GPUs now have the complete embedding vector.
+```
+
+**LM Head (gather + concat)**: Each GPU computes logits for its vocabulary slice via matmul (`hidden @ weight_slice.T`). These are scores for **different** tokens — summing them would be nonsensical. They must be concatenated:
+
+```
+Example: 2 GPUs, hidden = [0.5, 0.5, 0.5, 0.5], vocab_size=6
+  GPU 0 (weight rows 0-2):  logits = [0.5, 1.3, 2.1]   ← scores for tokens 0,1,2
+  GPU 1 (weight rows 3-5):  logits = [2.9, 3.7, 4.5]   ← scores for tokens 3,4,5
+
+  ✗ all_reduce (sum): [0.5+2.9, 1.3+3.7, 2.1+4.5] = [3.4, 5.0, 6.6]
+    WRONG — adds logit_0 + logit_3, mixing scores for unrelated tokens
+
+  ✓ gather + concat:  [0.5, 1.3, 2.1] ++ [2.9, 3.7, 4.5]
+                     = [0.5, 1.3, 2.1, 2.9, 3.7, 4.5]   ← full vocab logits
+    argmax → token 5 (score 4.5)
+```
+
+**The asymmetry**: Embedding produces a **complete** vector per GPU (or zeros) — sum recombines. LM Head produces **non-overlapping partial logit slices** — they must be stitched together. Same weight matrix, different operations, different collectives.
+
 ---
 
 ## 4. Pipeline Parallelism (PP)
