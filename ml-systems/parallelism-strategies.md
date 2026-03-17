@@ -140,10 +140,100 @@ MLP uses column-parallel on the first linear, row-parallel on the second:
   All-Reduce(Y)         ← one sync per MLP block
 ```
 
+### Column vs Row Naming Convention
+
+**"Column" and "Row" refer to the mathematical weight matrix A `[in, out]`** (Megatron convention), which is the **transpose** of PyTorch's W `[out, in]`:
+
+| Megatron name | Splits math A along | Splits PyTorch W along | tp_dim | After matmul |
+|---|---|---|---|---|
+| ColumnParallel | columns (output dim) | dim=0 (rows) | 0 | partial output, no comm needed |
+| RowParallel | rows (input dim) | dim=1 (columns) | 1 | partial dot product, needs all_reduce |
+
+### Why Column→Row Pairing (Not Other Combinations)
+
+For consecutive linear layers `Y = f(XA) · B` (e.g., gate_up → SiluAndMul → down), four TP pairings are possible. Only Column→Row requires a single communication. Full walkthrough with Qwen3-0.6B shapes (tp=2, hidden=1024, intermediate=3072):
+
+**Design 1: Col→Row ✅ (1 communication)**
+
+```
+Initial: both GPUs have x [N, 1024]
+
+gate_up (Col): W [6144,1024] split dim=0 → each GPU has [3072,1024]
+  GPU0: [N,1024] @ W_0.T → [N,3072]    GPU1: [N,1024] @ W_1.T → [N,3072]
+  (no comm)
+
+SiluAndMul:
+  GPU0: [N,3072] → [N,1536]            GPU1: [N,3072] → [N,1536]
+  (no comm — element-wise ops, TP-safe)
+
+down (Row): W [1024,3072] split dim=1 → each GPU has [1024,1536]
+  GPU0: [N,1536] @ W_0.T → [N,1024]    GPU1: [N,1536] @ W_1.T → [N,1024]
+  🔴 all_reduce(sum) → [N, 1024]
+
+Total: 1 communication
+```
+
+**Design 2: Col→Col (2 communications)**
+
+```
+gate_up (Col): same as above → GPU0: [N,1536], GPU1: [N,1536]
+
+down (Col): W [1024,3072] split dim=0 → each GPU has [512,3072]
+  ❌ needs full [N,3072] input, but each GPU only has [N,1536]
+  🔴 all-gather → [N,3072] on both GPUs
+  GPU0: [N,3072] @ W_0.T → [N,512]    GPU1: [N,3072] @ W_1.T → [N,512]
+  ❌ next layer needs [N,1024]
+  🔴 all-gather → [N,1024]
+
+Total: 2 communications
+```
+
+**Design 3: Row→Row (2 communications + memory waste)**
+
+```
+gate_up (Row): W [6144,1024] split dim=1 → each GPU has [6144,512]
+  GPU0: x[:,:512] @ W_0.T → [N,6144]   GPU1: x[:,512:] @ W_1.T → [N,6144]
+  🔴 all_reduce → full [N,6144] on both GPUs (memory waste: not sharded)
+
+SiluAndMul: [N,6144] → [N,3072] (full, replicated)
+
+down (Row): W [1024,3072] split dim=1 → each GPU has [1024,1536]
+  GPU0: [N,:1536] @ W_0.T → [N,1024]   GPU1: [N,1536:] @ W_1.T → [N,1024]
+  🔴 all_reduce → [N,1024]
+
+Total: 2 communications + full intermediate tensor on each GPU
+```
+
+**Design 4: Row→Col (2 communications + memory waste)**
+
+```
+gate_up (Row): same as Design 3
+  🔴 all_reduce → full [N,6144] on both GPUs
+
+SiluAndMul: [N,6144] → [N,3072] (full)
+
+down (Col): W [1024,3072] split dim=0 → each GPU has [512,3072]
+  GPU0: [N,3072] @ W_0.T → [N,512]    GPU1: [N,3072] @ W_1.T → [N,512]
+  🔴 all-gather → [N,1024]
+
+Total: 2 communications + memory waste
+```
+
+**Summary**:
+
+| Design | Comms | Intermediate per GPU | Winner? |
+|---|---|---|---|
+| **Col→Row** | **1** | [N, 1536] (sharded) | ✅ |
+| Col→Col | 2 | [N, 1536] → all-gather | ❌ |
+| Row→Row | 2 | [N, 3072] (full, wasted) | ❌ |
+| Row→Col | 2 | [N, 3072] (full, wasted) | ❌ |
+
+The insight comes from partitioned matrix multiplication (standard in HPC/ScaLAPACK since the 1990s): column-splitting produces sharded output, row-splitting consumes sharded input. They're natural complements — the output format of one matches the input format of the other, eliminating the intermediate communication step.
+
 ### Key properties
 
 - **Requires high-bandwidth interconnect** — all-reduce after every transformer layer. Only practical within a node (NVLink: ~900 GB/s). Across nodes (InfiniBand: ~50 GB/s) the communication kills throughput.
-- Pioneered by **Megatron-LM** (2019).
+- Pioneered by **Megatron-LM** (2019), applying HPC partitioned matrix multiplication patterns to Transformers.
 - Used by both vLLM and SGLang for inference.
 - `nano-vLLM` uses TP: each worker process in `ModelRunner` gets `rank` and splits attention heads with `num_kv_heads // world_size`.
 
@@ -178,6 +268,33 @@ Example: 2 GPUs, hidden = [0.5, 0.5, 0.5, 0.5], vocab_size=6
 ```
 
 **The asymmetry**: Embedding produces a **complete** vector per GPU (or zeros) — sum recombines. LM Head produces **non-overlapping partial logit slices** — they must be stitched together. Same weight matrix, different operations, different collectives.
+
+**"Why not zero-pad + all_reduce?"** — Mathematically equivalent: GPU 0 pads its [0.5, 1.3, 2.1] to [0.5, 1.3, 2.1, 0, 0, 0] and all_reduce sums with GPU 1's [0, 0, 0, 2.9, 3.7, 4.5]. Result is correct. But communication cost is N× higher (each GPU sends full vocab_size instead of vocab_size/N). With vocab=128K and N=8 GPUs, gather saves 7/8 of the bandwidth.
+
+**Gather vs All-gather**: Gather sends each GPU's shard to rank 0 only. All-gather sends to *all* GPUs. For LM Head, sampling happens on rank 0 once — other GPUs don't need the full logits. Using all-gather wastes (N-1)/N of the communication.
+
+**NCCL collective summary**:
+
+| Op | Data flow | Who gets result | Use case |
+|---|---|---|---|
+| Reduce | all → one (compute: sum/max) | rank 0 only | gradient reduce |
+| All-reduce | all → all (compute: sum/max) | all GPUs | embedding, gradient sync |
+| Gather | all → one (concat) | rank 0 only | **LM Head logits** |
+| All-gather | all → all (concat) | all GPUs | weight prefetch in ZeRO |
+| Reduce-scatter | all → all (reduce then scatter pieces) | each GPU gets a shard | ZeRO gradient step |
+
+**OOM risk with large vocab + batch**: `vocab_size × batch_size × sizeof(fp16)` must fit on rank 0.
+
+```
+vocab=128K, batch=1,   fp16 → 256 KB    ← fine
+vocab=128K, batch=512, fp16 → 128 MB    ← large but usually OK
+vocab=256K, batch=512, fp16 → 256 MB    ← borderline
+```
+
+Mitigations:
+1. **Greedy decoding**: distributed argmax — each GPU finds (local_max, local_idx), then `reduce(argmax)` across GPUs. Communication = 2 scalars per GPU, no full gather needed.
+2. **Top-k/Top-p sampling**: each GPU keeps only top-k candidates before gather. `k=50` reduces transmission by `vocab_size/k` (e.g., 2560× for vocab=128K).
+3. vLLM limits `--max-logprobs` to bound logit transfer in practice.
 
 ---
 

@@ -90,6 +90,47 @@ Divides by root-mean-square, scales by learned weight. Simpler than LayerNorm (n
 Input:  [N, 1024] → Output: [N, 1024]
 ```
 
+**Formula**:
+
+```
+RMS(x)      = sqrt( mean(x²) )          # scalar per token
+RMSNorm(x)  = (x / RMS(x)) * γ          # γ is learned weight [hidden_dim]
+```
+
+**Why sqrt(mean(x²)) and not mean(x)?** Mean can be zero when positives and negatives cancel out (`[3, -3, 3, -3]` → mean=0, division by zero). `mean(x²)` is always non-negative and measures the vector's *energy* regardless of sign direction.
+
+**RMSNorm vs LayerNorm**:
+
+| | LayerNorm | RMSNorm |
+|---|---|---|
+| Subtracts mean | ✅ | ❌ |
+| Divides by std / RMS | std | RMS |
+| Learned params | γ + β | γ only |
+| Speed | baseline | ~10–15% faster |
+| Effect | ≈ equivalent | ≈ equivalent |
+
+The re-centering (mean subtraction) in LayerNorm turns out to be unnecessary for Transformers — ablation studies show removing it doesn't hurt quality. This is empirical, not mathematically proven.
+
+**Where RMSNorm appears in Qwen3**:
+
+| Location | Weight shape | Purpose |
+|---|---|---|
+| `input_layernorm` | [1024] | Normalize before Attention |
+| `post_attn_layernorm` | [1024] | Normalize before MLP |
+| `q_norm` | [64] | Per-head Q normalization (Qwen3-specific) |
+| `k_norm` | [64] | Per-head K normalization (Qwen3-specific) |
+| `final norm` | [1024] | Normalize before LM Head |
+
+**Pre-Norm placement** (modern standard): RMSNorm is applied *before* each sub-block (Attention, MLP), not after. This is called Pre-Norm:
+
+```
+hidden → RMSNorm → Attention → + residual → RMSNorm → MLP → + residual → output
+```
+
+Post-Norm (original Transformer) placed norm *after* residual add, which caused gradient instability in deep networks. Pre-Norm fixes this by ensuring the residual stream is never normalized — it accumulates cleanly. Backed by gradient flow analysis at initialization (Xiong et al. 2020), but not a formal proof of global optimality.
+
+**Why Q/K norm but not V norm?** Q and K participate in the dot-product `score = QKᵀ / √d_k`. Large Q or K magnitudes cause attention scores to explode → softmax saturates → gradients vanish. V is only weighted-summed by attention weights, so its magnitude doesn't affect score sharpness. Normalizing V would erase useful semantic magnitude information for free.
+
 **Fused add+norm** (`add_rms_forward`): Combines residual addition and normalization into one `@torch.compile` kernel. Returns `(normalized, un-normalized_sum)`.
 
 ### QKVParallelLinear — Three-Way Projector
@@ -115,7 +156,7 @@ Input:  Q [N, 16, 64]  K [N, 8, 64]  V [N, 8, 64]
 Output: [N, 16, 64] → flatten → [N, 1024]
 ```
 
-Two phases: **Prefill** (`flash_attn_varlen_func`, full prompt) and **Decode** (`flash_attn_with_kvcache`, 1 new token against cached K/V). See [[ml-systems/llm-inference-engines]] for engine-level details. KV cache writes use a Triton kernel; prefix caching reuses cached K/V for shared prefixes (see [[ml-systems/prefix-caching]]).
+Two phases: **Prefill** (`flash_attn_varlen_func`, full prompt) and **Decode** (`flash_attn_with_kvcache`, 1 new token against cached K/V). For the full math walkthrough (scaled dot-product, causal mask, softmax, shape tracking, GQA mechanics, Triton KV cache kernel, and TP sharding), see [[ml-systems/attention-mechanics]]. See [[ml-systems/llm-inference-engines]] for engine-level details; [[ml-systems/prefix-caching]] for KV cache reuse.
 
 ### MergedColumnParallelLinear — Fused Dual Projector (gate_up_proj)
 
@@ -158,89 +199,37 @@ Sampler:  [num_seqs, 151936] + temperatures → [num_seqs]  (token IDs)
 
 ## Rotary Position Embedding (RoPE)
 
-### Why It Exists
+Rotates Q and K vectors by position-dependent angles so that `dot(Q_m, K_n)` depends only on relative distance `(m − n)`. Each head's `d`-dim vector is split into `d/2` independent 2D pairs, each rotated at a different base frequency `θᵢ = base^(−2i/d)`. V is not rotated. Zero extra parameters.
 
-Transformers process all tokens in parallel (unlike RNNs), so "The cat sat" = "sat The cat" without positional info. RoPE encodes position by **rotating** Q and K vectors.
-
-### The Clock Analogy
-
-Each 64-dim head vector = 32 clock hands ticking at different speeds:
-
-```
-inv_freq[i] = 1 / (1_000_000 ** (2*i/64))    # i = 0..31
-```
-
-- Clock 0: ticks fast (distinguishes nearby tokens)
-- Clock 31: ticks very slowly (distinguishes far-apart tokens)
-
-Like second/minute/hour hands — multiple time scales for different distance ranges.
-
-### The Math
-
-At position `p`, each dimension pair `(x1, x2)` is rotated by angle `θ = p × inv_freq[i]`:
-
-```
-y1 = x1 × cos(θ) - x2 × sin(θ)
-y2 = x2 × cos(θ) + x1 × sin(θ)
-```
-
-This is a standard 2D rotation matrix applied to each pair independently.
-
-**Key property**: After rotation, `dot(Q_pos_m, K_pos_n)` depends only on `(m - n)` — relative position awareness for free. Proof for one dimension pair:
-
-```
-After rotating at positions m and n:
-  Q_m = [q1·cos(mθ) - q2·sin(mθ),  q2·cos(mθ) + q1·sin(mθ)]
-  K_n = [k1·cos(nθ) - k2·sin(nθ),  k2·cos(nθ) + k1·sin(nθ)]
-
-  Q_m · K_n = ... (expand and apply cos(A-B) = cosA·cosB + sinA·sinB)
-            = (q1·k1 + q2·k2)·cos((m-n)θ) + (q2·k1 - q1·k2)·sin((m-n)θ)
-```
-
-The result depends only on `(m - n)`, not on `m` or `n` individually. Absolute positions cancel out via the trig identity, leaving only relative distance.
-
-### Implementation
-
-```python
-# Precomputed once at load time:
-freqs = outer_product(positions, inv_freq)    # [max_pos, 32]
-cache = cat(freqs.cos(), freqs.sin())         # [max_pos, 64]
-
-# Per forward pass (compiled with @torch.compile):
-cos_sin = cache[positions]                     # lookup by position
-query = apply_rotary_emb(query, cos, sin)      # rotate Q
-key = apply_rotary_emb(key, cos, sin)          # rotate K
-# V is NOT rotated — only Q and K need positional info
-```
-
-**`@lru_cache(1)`**: All attention layers share one `RotaryEmbedding` instance.
-
-### Shapes
-
-```
-Input:  positions [N], Q [N, 16, 64], K [N, 8, 64]
-Output: Q [N, 16, 64], K [N, 8, 64]   (rotated, same shape)
-```
+For the full derivation (Euler's formula → 2D rotation → block diagonal extension → why 2D not 3D → multi-frequency uniqueness → implementation shapes), see [[ml-systems/rotary-position-embedding]].
 
 ---
 
 ## SwiGLU MLP
 
-### From ReLU to Gated MLPs
+### MLP Evolution
 
-In 2016, a hidden layer was `ReLU(x @ W)`. Modern LLMs use a **gated** MLP with three projections:
+| Era | Architecture | Formula |
+|---|---|---|
+| Original Transformer (2017) | 2-layer FFN + ReLU | `ReLU(x @ W1) @ W2` |
+| GPT/BERT | 2-layer FFN + GELU | `GELU(x @ W1) @ W2` |
+| GLU (Dauphin 2017) | Gated unit + sigmoid | `sigmoid(x @ W_gate) * (x @ W_up) @ W_down` |
+| **SwiGLU** (Shazeer 2020) | Gated unit + SiLU | `SiLU(x @ W_gate) * (x @ W_up) @ W_down` |
+
+SwiGLU is used by LLaMA, Qwen, Mistral, and most modern LLMs.
+
+**Why intermediate_size ≈ 3× instead of 4×**: Original FFN had 2 weight matrices with 4× expansion. SwiGLU has 3 matrices (gate + up + down). To keep total parameter count equal: `3 × d × intermediate = 2 × d × 4d` → `intermediate = 8d/3 ≈ 2.67d`. Qwen3 rounds up to 3× (3072/1024).
+
+### SwiGLU = SiLU decomposed into gate and content
 
 ```
-output = W_down(SiLU(W_gate(x)) * W_up(x))
+SiLU(x)    =  x        × sigmoid(x)         ← same x for gate and content
+SwiGLU(x)  =  W_up(x)  × SiLU(W_gate(x))   ← separate linear transforms
+                ↑              ↑
+            content path   gate path (decoupled)
 ```
 
-### Why Two Projections?
-
-- **gate_proj** → passed through SiLU → "how much to let through" (0 to ~x)
-- **up_proj** → "what to let through" (raw content)
-- Element-wise multiply: gate controls which features pass.
-
-Both projections receive the **same input** `x`. This is key: the gate path learns to detect *whether* a feature is relevant in the current context, while the up path learns to represent *what* that feature is. The element-wise multiply `SiLU(gate) * up` lets the network selectively activate features — "this feature matters here, suppress it there." Conceptually analogous to the forget gate in an LSTM, except here the gate is computed afresh per token rather than carried over time.
+SwiGLU decouples gate and content into independent learnable projections: gate learns *whether* a feature matters, up learns *what* the feature is. Conceptually analogous to LSTM forget gates, but computed afresh per token.
 
 ### SiLU vs ReLU
 
@@ -256,6 +245,14 @@ Breaking down SiLU: `sigmoid(x) = 1/(1 + e^{-x})` maps any input to (0, 1). Then
 - At x ≈ -1.28: SiLU reaches its minimum of ≈ -0.28 — unlike ReLU which is exactly 0 for all negatives
 
 The crucial difference: ReLU has **zero gradient** for all x < 0. Once a neuron "dies" (consistently receives negative inputs), it can never recover — the gradient is permanently zero, wasting that parameter forever. SiLU has **non-zero gradient everywhere**, so all neurons stay trainable. At LLM scale with billions of parameters, dying neurons compound catastrophically.
+
+### Why Expand Then Contract?
+
+```
+[N, 1024] → expand → [N, 3072] → contract → [N, 1024]
+```
+
+Attention handles "which tokens interact." MLP handles "how each token's features transform." The expanded intermediate dimension provides a larger non-linear workspace — more dimensions = more capacity for complex feature mappings — before contracting back to the model's uniform hidden size for the next layer.
 
 ### Shapes Through the MLP
 
@@ -277,7 +274,35 @@ The crucial difference: ReLU has **zero gradient** for all x < 0. Once a neuron 
 [N, 1024]                         back to hidden_size
 ```
 
-`gate_up_proj` fuses two matmuls into one — same math, half the kernel launches. `@torch.compile` fuses `SiLU(gate) * up` into a single GPU kernel.
+### MergedColumnParallelLinear — Why gate and up Are One Matmul
+
+Conceptually gate_proj and up_proj are two separate `[3072, 1024]` matrices. In practice, they're stacked vertically into one `[6144, 1024]` matrix:
+
+```
+W_merged [6144, 1024] =  ┌─────────────┐
+                          │   W_gate    │  rows 0–3071
+                          ├─────────────┤
+                          │    W_up     │  rows 3072–6143
+                          └─────────────┘
+
+F.linear(x, W_merged)  →  [N, 6144]     ← one kernel launch instead of two
+```
+
+`SiluAndMul` then splits and activates:
+
+```python
+# activation.py — the entire implementation
+@torch.compile
+def forward(self, x):
+    x, y = x.chunk(2, -1)    # gate [N,3072], up [N,3072]
+    return F.silu(x) * y     # silu(gate) * up → [N, 3072]
+```
+
+`@torch.compile` fuses the SiLU + multiply into a single GPU kernel. Weight loading (`weight_loader`) fills gate weights at offset 0 and up weights at offset `intermediate_size // tp_size` in the merged matrix.
+
+### Why SwiGLU Is TP-Friendly
+
+SiLU and element-wise multiply are both **per-element operations**: `output[i] = silu(gate[i]) * up[i]`. The i-th output depends only on the i-th gate and i-th up value. This means tensor-parallel sharding (each GPU computing a slice) produces identical results to computing the full tensor — unlike softmax, which requires a global denominator across all dimensions.
 
 ---
 
@@ -380,8 +405,10 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 
 ## See Also
 
+- [[ml-systems/attention-mechanics]] — full attention math, causal mask, shape tracking, GQA, prefill vs decode, KV cache Triton kernel, TP sharding
 - [[ml-systems/llm-inference-engines]]
 - [[ml-systems/parallelism-strategies]]
 - [[ml-systems/prefix-caching]]
 - [[ml-systems/gpu-memory-hierarchy]]
 - [[ml-systems/pytorch-module-hooks]]
+- [[ml-systems/norms-and-regularization]] — L1/L2 norm theory, Ridge vs Lasso, why RMS beats mean(|x|)

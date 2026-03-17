@@ -448,6 +448,7 @@ self.uva = get_accelerator_view_from_cpu_tensor(self.cpu_buf)
 ## See Also
 
 - [[ml-systems/transformer-model-internals]]
+- [[ml-systems/attention-mechanics]] — attention math, causal mask, prefill vs decode kernels, KV cache Triton writes
 - [[ml-systems/parallelism-strategies]]
 - [[ml-systems/prefix-caching]]
 - [[ml-systems/gpu-memory-hierarchy]]
