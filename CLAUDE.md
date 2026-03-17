@@ -81,3 +81,23 @@ Wikilinks to related notes: [[topic/subtopic]]
 - Use `#interview-prep` for interview-relevant notes
 - Use topic tags matching directory names: `#data-engineering`, `#distributed-systems`
 - Tags go on line 3, right after the title
+
+## Readability — The 3-Second Rule
+
+- **Two consecutive sentences must connect in under 3 seconds** for a reader with basic 2016-era deep learning knowledge (knows neural nets, backprop, embeddings, softmax, ReLU, BatchNorm, RNNs — but NOT transformers, attention, or modern LLM serving).
+- Each sentence introduces **at most 1 new concept**. If you need to introduce 3 concepts, use 3 sentences.
+- **No jargon without inline definition** at first use. If a term is defined in another note, add a brief parenthetical + wikilink rather than leaving the reader to guess.
+- **Motivation before implementation**: always explain *why* before *how*. Start with the problem, then the solution.
+
+## Progressive Disclosure
+
+- **Within each file**: Flow from high-level overview → building blocks → details → edge cases. Never start with implementation details.
+- **Each file must be independent**: A reader should be able to pick up any single note and understand it without having read the others. If a concept depends on another note, provide a one-sentence summary + wikilink — don't assume the reader has the other file open.
+- **TL;DR must be self-sufficient**: After reading only the TL;DR, the reader should know what the note covers and why it matters.
+- **Section independence**: Any section should be understandable if jumped to directly. If a section depends on an earlier section, say so explicitly.
+
+## Zero Knowledge Loss on Rewrites
+
+- When rewriting or restructuring a note, **never delete factual content**. Restructure, don't remove.
+- If content is moved to another file, ensure the destination file actually contains the full explanation before trimming the source.
+- **No blind expansion**: When closing a 3-second gap between concepts A and C, it's OK to add a bridging sentence about B. It is NOT OK to write paragraphs about B if B was not part of the original study. Keep additions minimal and focused.

@@ -80,7 +80,7 @@ Weight: [151936, 1024]       (one row per vocabulary token)
 Output: [N, 1024]            (dense float vectors)
 ```
 
-**Multi-GPU**: Vocabulary rows sharded across GPUs. Uses `all_reduce` (sum) — only one GPU has the real embedding, others contribute zeros. See [[ml-systems/parallelism-strategies]] for the concrete example and why this differs from the LM head.
+**Multi-GPU** (requires Tensor Parallelism knowledge — see [[ml-systems/parallelism-strategies]]): Vocabulary rows sharded across GPUs. Uses `all_reduce` (sum) — only one GPU has the real embedding, others contribute zeros. See the parallelism note for the concrete example and why this differs from the LM head.
 
 ### RMSNorm — Stabilizer
 
@@ -145,7 +145,7 @@ Output: Q [N, 16, 64]  K [N, 8, 64]  V [N, 8, 64]
 
 **GQA**: 16 query heads but only 8 KV heads — two Q heads share one KV head. KV cache reduction factor = `num_kv_heads / num_q_heads` (here: 8/16 = 0.5, halved). For models like Llama 3 70B with 8 KV heads and 64 Q heads, this is an 8x reduction.
 
-**Qwen3-specific**: Per-head RMSNorm on Q and K after projection, before RoPE. Rationale: QKV projection can produce heads with very different L2 norms. Without normalization, a single high-magnitude head dominates softmax scores (attention collapse). Normalizing each head to unit scale prevents one head from monopolizing attention across the sequence.
+**Qwen3-specific**: Per-head RMSNorm on Q and K after projection, before RoPE. Rationale: QKV projection can produce heads with very different L2 norms. Without normalization, a single high-magnitude head dominates softmax scores — attention collapse (i.e., one head's scores swamp all others in softmax). Normalizing each head to unit scale prevents one head from monopolizing attention across the sequence.
 
 ### Attention — Focus Mechanism
 
@@ -160,7 +160,7 @@ Two phases: **Prefill** (`flash_attn_varlen_func`, full prompt) and **Decode** (
 
 ### MergedColumnParallelLinear — Fused Dual Projector (gate_up_proj)
 
-Fuses `gate_proj` and `up_proj` into one matmul. **Column-parallel** means the output dimension is split across GPUs — each GPU independently computes its slice with zero communication.
+Fuses `gate_proj` and `up_proj` into one matmul. **Column-parallel** means the output dimension is split across GPUs — each GPU independently computes its slice with zero communication. For how this fits into the full TP pattern, see [[ml-systems/parallelism-strategies]].
 
 ```
 Input:  [N, 1024]
@@ -172,7 +172,7 @@ Weight loading: `weight_loader(param, loaded_weight, shard_id)` places gate weig
 
 ### RowParallelLinear — The Recombiner (o_proj, down_proj)
 
-Partner to ColumnParallel. Splits the **input** dimension: each GPU holds `weight[output_size, input_size/tp_size]` and computes a partial result. Then `dist.all_reduce()` sums partials across GPUs to get the correct final output.
+Partner to ColumnParallel. Splits the **input** dimension: each GPU holds `weight[output_size, input_size/tp_size]` and computes a partial result. Then `dist.all_reduce()` sums partials across GPUs to get the correct final output. No activation function is applied — in the attention path (`o_proj`), softmax already provides non-linearity; the MLP block that follows handles further non-linear transformation.
 
 ```
 Input:  [N, 3072] (MLP) or [N, 1024] (attention)
@@ -193,7 +193,7 @@ Sampler:  [num_seqs, 151936] + temperatures → [num_seqs]  (token IDs)
 
 **Multi-GPU**: Uses `gather + concat` (NOT all_reduce) because each GPU computes logits for a different vocabulary slice — summing would mix scores for unrelated tokens. See [[ml-systems/parallelism-strategies]] for the concrete example showing why embedding and LM head need different collective operations despite sharing weights.
 
-**Sampler**: (1) Divide logits by temperature (higher = more random, lower = more deterministic). (2) Softmax to get probabilities. (3) Exponential sampling trick: `(probs / Exponential(1)).argmax()`. This works because dividing each probability by an independent Exp(1) draw and taking argmax is mathematically equivalent to categorical sampling (equivalent to the Gumbel-max trick since `Gumbel(0,1) = -log(Exp(1))`). The advantage over `torch.multinomial`: uses only element-wise ops and `argmax`, which are fully compatible with `@torch.compile` — `multinomial` uses a sequential CDF scan that can't be compiled.
+**Sampler**: (1) Divide logits by temperature (higher = more random, lower = more deterministic). (2) Softmax to get probabilities. (3) Exponential sampling trick: draw independent `Exp(1)` samples, divide each probability by its draw, and take `argmax`. This is mathematically equivalent to categorical sampling — it works because `Gumbel(0,1) = -log(Exp(1))`, making it identical to the Gumbel-max trick. The advantage over `torch.multinomial`: it uses only element-wise ops and `argmax`, which are fully compatible with `@torch.compile`. By contrast, `multinomial` uses a sequential CDF scan that can't be compiled.
 
 ---
 
@@ -308,7 +308,7 @@ SiLU and element-wise multiply are both **per-element operations**: `output[i] =
 
 ## Residual Connection Pattern
 
-nano-vLLM uses a fused add+norm pattern where `residual` always holds the **un-normalized accumulated sum**:
+Deep networks suffer from vanishing gradients — each layer's backward pass multiplies by its Jacobian, and many such multiplications shrink the signal to near-zero. Residual connections fix this by providing a shortcut that carries gradients directly from later layers back to earlier ones. nano-vLLM uses a fused add+norm pattern where `residual` always holds the **un-normalized accumulated sum**:
 
 ```python
 # Layer 0: residual=None → just save a copy

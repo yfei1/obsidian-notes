@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-An LLM inference engine has three layers: a **Scheduler** (CPU, manages memory + request queues), a **ModelRunner** (GPU, executes forward passes), and optionally an **Async Server Frontend** (HTTP, routes user requests). The key innovations are **PagedAttention** (virtual memory for KV cache), **Continuous Batching** (dynamically swap sequences in/out of GPU batches per step), and **Chunked Prefill** (mix prefill + decode tokens in one step to prevent starvation). Studied via `nano-vLLM` (educational, ~400 LOC) with comparisons to production `vLLM`.
+An LLM inference engine has three layers: a **scheduler** (CPU, manages memory + request queues), a **model runner** (GPU, executes forward passes), and optionally an **async server frontend** (HTTP, routes user requests). The key innovations are **PagedAttention** (virtual memory for KV cache), **continuous batching** (dynamically swap sequences in/out of GPU batches per step), and **chunked prefill** (mix prefill + decode tokens in one step to prevent starvation). Studied via `nano-vLLM` (educational, ~400 LOC) with comparisons to production `vLLM`.
 
 ---
 
@@ -86,26 +86,24 @@ Lifecycle of 2 prompts (SeqA: 2 tokens, SeqB: 3 tokens, max_tokens=3):
 
 For a given prompt: prefill happens **exactly once** (unless preempted), decode runs **at most `max_tokens` times**.
 
-### The Mechanics: Prefill vs Decode
+### Prefill mechanics (compute-bound)
 
-The reason **Prefill** only happens once is because of the **KV Cache**. We do not need to resend the entire prompt through the model to generate word 4; the context is already saved.
+Prefill only happens once because the KV cache retains the context. No need to resend the full prompt for subsequent tokens.
 
-1.  **Prefill = Batch KV Cache Insert (Compute-Bound)**
-    -   It takes the entire prompt (e.g., 40 tokens) simultaneously.
-    -   It computes all 40 Key and Value vectors in parallel using massive matrix multiplication.
-    -   It inserts all 40 vectors into the newly allocated KV cache blocks at once.
-    -   **Metric**: Time To First Token (TTFT) measures how fast the GPU can crunch this massive batch math.
+1. Takes the entire prompt (e.g., 40 tokens) simultaneously.
+2. Computes all 40 Key and Value vectors in parallel via matrix multiplication.
+3. Inserts all 40 vectors into newly allocated KV cache blocks at once.
+4. **Metric**: Time To First Token (TTFT) measures prefill speed.
 
-2.  **Decode = Single KV Cache Insert (Memory-Bound)**
-    -   It takes *only* the single newly generated token.
-    -   It computes its single Key and Value vector.
-    -   It performs an attention look-back by physically reading the saved history (the 40 previous K/V vectors) directly from the GPU RAM.
-    -   It inserts that single new K and V vector into the next available slot in the cache block.
-    -   **Metric**: Time Per Output Token (TPOT) measures how fast the GPU can repeatedly run this memory-bandwidth-bound single-insert loop.
+### Decode mechanics (memory-bound)
 
-### Hardware-Aware Execution (Why C++ Kernels Separate Them)
+1. Takes only the single newly generated token.
+2. Computes its single Key and Value vector.
+3. Performs attention by reading all previous K/V vectors from GPU HBM (the 40 prior entries).
+4. Inserts the new K and V into the next available cache slot.
+5. **Metric**: Time Per Output Token (TPOT) measures decode throughput.
 
-The Python engine explicitly separates these phases because the underlying CUDA kernels configure GPU SRAM entirely differently for each. See [[ml-systems/gpu-memory-hierarchy]] for the full Tiling vs Split-K deep dive.
+The Python engine separates these phases because the underlying CUDA kernels configure GPU SRAM differently for each. See [[ml-systems/gpu-memory-hierarchy]] for the tiling vs split-K deep dive.
 
 ### Decode starvation problem
 
@@ -115,40 +113,41 @@ if scheduled_seqs:           # If ANY prefill was scheduled...
     return scheduled_seqs, True  # ...return immediately, skip decode!
 ```
 
-If requests arrive faster than the engine can prefill them, the decode path is **never reached**. Running sequences sit idle forever, waiting for the massive compute-bound prefill phase to clear out. This causes intense latency spikes and horrific Time Per Output Token (TPOT) metrics.
+If requests arrive faster than the engine can prefill them, the decode path is never reached. Running sequences sit idle, waiting for compute-bound prefills to clear. This causes latency spikes and poor TPOT.
 
-### Solution: Chunked Prefill (vLLM/SGLang)
+### Solution: chunked prefill (vLLM/SGLang)
 
-Instead of the strict "Prefill OR Decode" binary, modern engines assign a fixed **token budget** per step (e.g., 2048 tokens). They mix both phases into a single GPU heartbeat:
+Instead of the strict "prefill OR decode" binary, modern engines assign a fixed **token budget** per step (e.g., 2048 tokens). Both phases share a single forward pass:
 
 ```
 Budget: 2048 tokens per step
-  - 64 currently running sequences × 1 decode token = 64 tokens allocated
+  - 64 currently running sequences x 1 decode token = 64 tokens allocated
   - New prompt chunk: 1984 tokens of prefill allocated
   - Total: 2048 tokens processed in one forward pass
 ```
 
-By "chunking" a giant 8,000-token input prompt into four pieces (1984 tokens each), the engine ensures that the 64 running decode sequences get their 1 token processed *equitably* alongside the massive prefill. 
-- **The Catch:** You can no longer use the standard PagedAttention (Decode) kernel. The engine must use the Var-Len Flash Attention kernel (`flash_attn_varlen_func`) for *everything*. Each decode sequence declares its own `cu_seqlens_q` difference of exactly 1. 
+By chunking a large 8,000-token prompt into four pieces (1984 tokens each), the engine ensures that 64 running decode sequences get their 1 token processed alongside the prefill work.
+
+Trade-off: standard PagedAttention (decode) kernel can no longer be used. The engine must use the varlen flash attention kernel (`flash_attn_varlen_func`) for everything, with each decode sequence declaring a `cu_seqlens_q` difference of exactly 1.
 
 ---
 
 ## Continuous Batching vs Static Batching
 
-Before 2023, standard text generation engines used **Static Batching**.
-- **The flaw:** If you batch 4 sequences together, Sequence A might finish in 20 tokens, but Sequence B takes 1000 tokens. Sequences C and D arrive in the queue but must wait **outside the GPU** for Sequence B to finish the entire 1000-token generated block before a new static batch can be formed.
+Before 2023, engines used **static batching**: if you batch 4 sequences together, sequence A might finish in 20 tokens, but sequence B takes 1000. Sequences C and D must wait outside the GPU for B to finish before a new batch can form.
 
-**Continuous Batching** (pioneered by Orca) breaks this paradigm. Sequences are completely independent and fluidly enter and exit the batch on a *per-step* basis:
-1. Step 18: Sequence A hits an EOS (End Of String) token and finishes.
-2. Step 19: The CPU Scheduler immediately ejects A, reclaims its KV blocks, grabs Sequence C from the queue, and inserts C directly into the running batch alongside B.
+**Continuous batching** (pioneered by Orca) breaks this constraint. Sequences enter and exit the batch independently on a per-step basis:
 
-**Why this works:** The GPU doesn't know what a "sequence" is. It only processes an array of 64 tokens. By continuously hot-swapping the contents of the batch millisecond-by-millisecond without padding, GPU utilization jumps from ~30% to nearly 100%.
+1. Step 18: Sequence A hits EOS and finishes.
+2. Step 19: The scheduler ejects A, reclaims its KV blocks, pulls sequence C from the queue, and inserts C into the running batch alongside B.
+
+The GPU does not track sequences — it only processes an array of tokens. By continuously swapping batch contents without padding, GPU utilization jumps from ~30% to near 100%.
 
 ---
 
 ## PagedAttention: Virtual Memory for KV Cache
 
-### Physical allocation happens ONCE at startup
+### Physical allocation at startup
 
 ```python
 # ModelRunner.allocate_kv_cache():
@@ -158,9 +157,9 @@ self.kv_cache = torch.empty(
 # One giant tensor. Never resized. Chopped into logical "blocks."
 ```
 
-### Logical allocation happens every step (CPU)
+### Logical allocation per step (CPU)
 
-The `BlockManager` is a hotel manager assigning room numbers:
+The `BlockManager` assigns block IDs like a hotel manager assigning rooms:
 
 ```python
 # During schedule():
@@ -171,57 +170,46 @@ self.block_manager.may_append(seq)   # Decode: if block 87 is full, assign block
 self.block_manager.deallocate(seq)   # SeqA finished: blocks [42, 87] → free list
 ```
 
-### The 5 Core Tensors of a GPU Forward Pass
+### The 5 core tensors per forward pass
 
-The GPU is essentially a blind, hyper-optimized calculator. It does not manage memory or track sequences. For every single forward pass (step), the CPU scheduler must pre-calculate and send exactly what data to crunch, where to read history from, and where to write the new results to.
+The GPU is essentially a blind, hyper-optimized calculator. It does not manage memory or track sequences. Every step, the CPU scheduler pre-calculates and sends exactly what to compute, where to read, and where to write:
 
-1. **`input_ids` (The Data)**: The actual integer tokens to be processed in this step. In the Prefill phase, this contains the entire prompt. In the Decode phase, it contains exactly 1 token per sequence.
-2. **`positions` (The Positional Math)**: The absolute sequence index of each token. This is fundamentally required to calculate **Rotary Positional Embeddings (RoPE)**. Modern LLMs do not use absolute positional embeddings added at the first layer. Instead, RoPE mathematically rotates the Q and K vectors inside the Attention layers based on their distance. The GPU kernel needs this `positions` array to know exactly how many "degrees" to rotate each specific token in the dynamic batch.
-3. **`block_tables` (The Read Map)**: A 2D array telling FlashAttention which physical blocks contain the past KV cache for a given sequence (e.g., `[42, 87, 103]`). It uses `-1` padding to align ragged arrays into the rectangular grid required by the GPU.
-4. **`context_lens` (The Read Limit)**: A 1D array telling FlashAttention exactly how many historical tokens to evaluate. While the `block_table` points to the physical chunks, the final block is almost always partially empty. `context_lens` acts as an absolute integer boundary to prevent the GPU from reading leftover garbage memory past the true length of the sequence.
-5. **`slot_mapping` (The Write Pointer)**: A 1D array of exact physical memory addresses. After the newly generated token computes its K and V vectors, it must save them. Instead of forcing the GPU to do slow integer modulo math inside the hot loop to find the address, the CPU pre-calculates the exact absolute 1D pointer (e.g., `54910`). The GPU blindly dumps the K/V vectors into this slot.
+1. **`input_ids`**: The token IDs to process. Prefill: entire prompt. Decode: 1 token per sequence.
+2. **`positions`**: Absolute sequence index of each token, required for Rotary Positional Embeddings (RoPE). RoPE rotates Q and K vectors based on position distance — the kernel needs this array to know the rotation angle per token.
+3. **`block_tables`**: 2D array mapping each sequence to its physical KV cache blocks (e.g., `[42, 87, 103]`). Padded with `-1` to align ragged arrays into the rectangular grid required by CUDA kernels.
+4. **`context_lens`**: 1D array with the true token count per sequence. The last block is usually partially empty, so `context_lens` prevents the kernel from reading garbage past the actual length.
+5. **`slot_mapping`**: 1D array of pre-calculated physical write addresses. After computing a new K/V pair, the GPU writes directly to this address — no modulo math needed in the hot loop.
 
-### Structural Differences: Prefill vs Decode Tensors
+### Tensor shape differences: prefill vs decode
 
-While the concepts remain the same, the actual arrays passed to the GPU change shape drastically depending on the phase.
+**Decode (`prepare_decode`)**: Every sequence generates exactly 1 token, so `input_ids`, `positions`, `context_lens`, and `slot_mapping` are all 1D arrays of length `batch_size`. The `block_table` is heavily used to fetch historical KV cache.
 
-#### During Decode (`prepare_decode`)
-Because every sequence generates exactly 1 token, the arrays are highly uniform:
-- `input_ids`, `positions`, `context_lens`, and `slot_mapping` are all exactly 1-Dimensional arrays of length `batch_size`.
-- The `block_table` is heavily relied upon to fetch historical memory.
+**Prefill (`prepare_prefill`)**: Sequences have wildly different lengths (e.g., A=10, B=500), so a rectangular batch is impossible.
+- `input_ids` and `positions` are flattened into a single 1D array: `[A1, A2...A10, B1, B2...B500]`.
+- `context_lens` and `block_table` are not needed. During prefill, all Q and K tokens are being computed in the current step — the attention math runs entirely in-place in SRAM without reading historical KV from HBM. Providing block maps to historical storage would be pointless.
+- Instead, the scheduler passes `cu_seqlens` (cumulative sequence lengths), e.g., `[0, 10, 510]`. The `flash_attn_varlen_func` kernel uses these boundaries to separate sequences within the flattened array.
 
-#### During Prefill (`prepare_prefill`)
-Because sequences are wildly different lengths (e.g., A=10 tokens, B=500 tokens), it is impossible to process them as a rectangular batch.
-- `input_ids` and `positions` are squashed into a giant 1D flat array: `[A1, A2... A10, B1, B2... B500]`.
-- **`context_lens` and `block_table` are discarded!** 
-  - Why? Because in a "Normal" Prefill, $Q$ length equals $K$ length. Every single token required to compute the Attention Matrix is currently inside the engine being calculated right now. The GPU performs the $Q \times K$ math entirely **in-place** inside its ultra-fast SRAM (the microscopic memory directly attached to the Tensor Cores). 
-  - Because it never reaches out into the slow HBM pool (VRAM) to read past history, giving it a map to historical blocks (`block_tables`) would be pointless.
-- Instead, the scheduler passes a new array: `cu_seqlens` (Cumulative Sequence Lengths). It looks like `[0, 10, 510]`. The `flash_attn_varlen_func` (Var-Len Flash Attention kernel) uses these integer boundaries to know where Sequence A ends and Sequence B begins inside the giant 1D flattened input array.
+### Prefix caching (exception to the above)
 
-### Advanced Prefill: Prefix Caching
+If many requests share a common prefix (e.g., system prompt), the engine reuses cached KV vectors instead of recomputing. The tell: `cu_seqlens_k > cu_seqlens_q` during prefill (Q is only the uncached suffix, K spans the full context). This is the exception where prefill does use `block_tables`. See [[ml-systems/prefix-caching]] for the hash-chain mechanism and stale entry problem.
 
-If many requests share the same prefix (e.g., a system prompt or PDF), the engine can reuse cached KV vectors instead of recomputing them. The key tell: `cu_seqlens_k > cu_seqlens_q` during prefill (Q is only the uncached suffix, K spans the full context including cached prefix). This is the exception where prefill uses `block_tables`. See [[ml-systems/prefix-caching]] for the full hash-chain mechanism, allocation traces, and the stale entry problem.
+### Rebuilding block tables per step
 
-### `prepare_block_tables`: The Bridge to the GPU
+Because continuous batching changes the batch composition almost every step, and CUDA kernels require rectangular 2D tensors (not ragged arrays), the CPU must rebuild the `block_table` tensor each step:
 
-Because of **Continuous Batching**, the mix of sequences inside the GPU batch changes on almost every single step. A sequence might finish generating and get ejected, a new prompt might arrive, or a sequence might get preempted (evicted) due to memory pressure.
+1. Check which sequences are in the current batch.
+2. Find the maximum block count: `max_len = max(len(seq.block_table) for seq in seqs)`.
+3. Pad shorter sequences with `-1` to reach `max_len`.
+4. Send the rectangular `int32` tensor to the GPU.
 
-Furthermore, CUDA kernels (like FlashAttention) require inputs to be perfectly rectangular 2D memory grids. They cannot process ragged arrays (lists of different lengths like `[[5, 42], [107]]`).
-
-Therefore, on **every single step**, the CPU must dynamically rebuild the `block_table` tensor:
-1. Check who is currently in the batch this exact millisecond.
-2. Find the sequence that currently possesses the most blocks (`max_len = max(len(seq.block_table) for seq in seqs)`).
-3. Pad the shorter sequences with `-1` (meaning "ignore this slot") until all are `max_len` long.
-4. Stream this perfectly rectangular 2D tensor of `int32` block IDs across the PCIe bus to the GPU.
-
-*(Note: The `block_table` uses `int32` instead of `int16` because it is used for memory pointer offset calculations. An `int16` would require extra cast instructions inside the AGU and risk overflowing if the cache exceeds 32,767 blocks on a large VRAM system).*
+The `block_table` uses `int32` (not `int16`) because it holds memory pointer offsets. An `int16` would require extra cast instructions and risks overflow beyond 32,767 blocks on large-VRAM systems.
 
 ### Scheduling priority and preemption
 
 nano-vLLM uses **FIFO** scheduling with **LIFO eviction**:
-- Schedule: whoever called `add_request()` first gets scheduled first
-- Preempt: when out of memory, evict the **newest** running sequence (least work wasted)
-- Evicted sequences go back to the Waiting Room and must re-prefill from scratch
+- Schedule: whoever called `add_request()` first gets scheduled first.
+- Preempt: when out of memory, evict the **newest** running sequence (least work wasted).
+- Evicted sequences return to the waiting queue and must re-prefill from scratch.
 
 ---
 
@@ -237,10 +225,10 @@ for i in range(1, config.tensor_parallel_size):
 ```
 
 Key details:
-- Uses `torch.multiprocessing` (not native `multiprocessing`) for **zero-copy tensor sharing** via shared memory
-- `ModelRunner` is a class, not a process. Passing it as `target=` calls its `__init__`, which enters an infinite `self.loop()` waiting for commands
-- Main process (Rank 0) communicates via **SharedMemory** — writes commands, calls `event.set()` to wake workers
-- Workers call `event.wait()` → read command → execute → `event.clear()` → wait again
+- Uses `torch.multiprocessing` (not native `multiprocessing`) for **zero-copy tensor sharing** via shared memory.
+- `ModelRunner` is a class, not a process. Passing it as `target=` calls its `__init__`, which enters an infinite `self.loop()` waiting for commands.
+- Main process (Rank 0) communicates via SharedMemory — writes commands, calls `event.set()` to wake workers.
+- Workers call `event.wait()` → read command → execute → `event.clear()` → wait again.
 
 ```python
 # ModelRunner.loop() — what worker processes do forever:
@@ -292,7 +280,7 @@ vLLM uses a **1-deep batch queue** to overlap:
 ```
 Synchronous (nano-vLLM):
   [CPU: schedule N] → [GPU: run N] → [CPU: postprocess N] → [CPU: schedule N+1] → ...
-  GPU idle ↑ here                     GPU idle ↑ here
+  GPU idle ^ here                       GPU idle ^ here
 
 Async (vLLM):
   [CPU: schedule N+1]  ← runs WHILE →  [GPU: run N]
@@ -301,7 +289,114 @@ Async (vLLM):
   GPU utilization: ~100%
 ```
 
-Trade-off: the CPU schedules step N+1 **before knowing** if any sequences finished in step N. It conservatively over-allocates blocks for one step, which is negligible waste.
+Trade-off: the CPU schedules step N+1 before knowing if any sequences finished in step N. It conservatively over-allocates blocks for one step, which is negligible waste.
+
+---
+
+## PyTorch Inference Optimizations
+
+### `@torch.inference_mode()` vs `no_grad()`
+
+During training, PyTorch builds a computation graph to calculate gradients, consuming VRAM and CPU cycles. For inference, this must be disabled.
+
+- `no_grad()`: Stops tracking gradients but leaves autograd infrastructure largely intact.
+- `inference_mode()` (PyTorch 1.9+): Entirely disables autograd tracking, allowing the C++ backend to bypass safety checks and view tracking. Strictly faster and uses less memory for inference.
+
+### Global device allocation
+
+If a tensor is created without `.cuda()` or `device="cuda"`, PyTorch defaults to CPU allocation. When that tensor is used in GPU math, it triggers a synchronous PCIe copy that destroys throughput. Engines run `torch.set_default_device("cuda")` at startup to force all tensor factory functions to allocate directly in VRAM.
+
+---
+
+## CPU Overhead and CUDA Graphs
+
+### The problem: kernel launch overhead
+
+During decode, a single forward pass across 32 transformer layers requires ~100+ separate CUDA kernel launches from Python. The GPU computation takes ~0.1ms, but Python dispatch overhead takes ~1.5ms. The GPU spends >90% of its time idle, waiting for launch instructions.
+
+### CUDA graphs: record once, replay many
+
+A CUDA graph records a sequence of GPU instructions once, compiles them into a single blob, and replays them with one Python call. This drops CPU overhead from 1.5ms to ~0.005ms.
+
+Three phases:
+
+1. **Pre-allocation**: Graph memory shapes cannot change after recording, so input/output tensors must be statically sized (e.g., `block_tables = torch.zeros(max_batch_size, max_model_len / block_size)`). Uses `max_model_len` to guarantee worst-case capacity.
+2. **Capture**: Run exactly one forward pass using the static tensors. PyTorch records the execution sequence.
+3. **Replay**: Each inference step, copy dynamic data into the static tensors and call `graph.replay()`.
+
+### Feeding data into a recorded graph
+
+Once recorded, a CUDA graph hardcodes the physical memory addresses of its tensors. It cannot be redirected to read from new tensors. To feed new data during continuous batching, the engine performs in-place copies:
+
+```python
+# graph_vars["input_ids"] is the permanently locked static tensor
+# input_ids is the new tensor for the current step
+graph_vars["input_ids"][:bs] = input_ids
+```
+
+The `[:bs] =` syntax copies data directly into the memory the graph is hardwired to read from.
+
+### Preventing garbage collection
+
+Engines store static tensors in a class attribute (e.g., `self.graph_vars = dict(...)`). Without this, Python's garbage collector would free the tensors when the capture function returns. Subsequent `graph.replay()` calls would read from freed memory, causing a segmentation fault.
+
+### Why CUDA graphs are decode-only
+
+CUDA graphs require fixed tensor shapes. For decode, this works well:
+- **Compute shapes are predictable**: Every sequence processes exactly 1 token, so the matrix shape into linear/MLP layers is `[batch_size, 1, hidden_dim]`. Zero wasted compute.
+- **Memory padding is cheap**: The `block_table` is padded with `-1` entries, but FlashAttention respects `context_lens` as a read boundary. Padded entries are never accessed.
+
+For prefill, fixed shapes are impractical:
+- The compute matrix shape is `[prompt_len, hidden_dim]`, which varies per request.
+- A static graph must be sized for `max_model_len` (e.g., 8192). A 72-token prompt would be padded with 8,120 zero tokens.
+- `nn.Linear` layers perform dense matrix multiplication (`X @ W`) with no short-circuit for zero tokens. All 8,192 rows are multiplied against the full weight matrix.
+- Flash attention can skip padding if coded correctly, but linear projections (QKV, output) and MLP blocks cannot. These make up ~66% of a transformer's compute.
+- Result: for a 72-token prompt in a graph sized for 8,192, the GPU wastes ~99% of tensor core cycles on padding across all 32 layers.
+
+---
+
+## CPU → GPU Memory Transfer
+
+In a continuous batching engine, the scheduler rebuilds metadata arrays (`block_tables`, `slot_mappings`) every step. These must cross the PCIe bus before the CUDA graph can run.
+
+### 1. Naive (standard PyTorch)
+
+```python
+# Creates tensor in pageable CPU RAM.
+cpu_tensor = torch.tensor(data)
+# PCIe bus blocks CPU until transfer is completely finished.
+gpu_tensor = cpu_tensor.cuda()
+```
+
+### 2. Pinned memory (nano-vLLM)
+
+```python
+# 1. Ask OS to lock the RAM, preventing it from ever swapping to disk.
+cpu_tensor = torch.tensor(data, pin_memory=True)
+# 2. Tell GPU's DMA controller to fetch it asynchronously across PCIe.
+gpu_tensor = cpu_tensor.cuda(non_blocking=True)
+# 3. Copy into the static CUDA Graph inbox.
+static_inbox.copy_(gpu_tensor)
+```
+
+**Problem:** This allocates a wasteful, temporary `gpu_tensor` in VRAM every step just to immediately copy its contents into the static inbox.
+
+### 3. Unified Virtual Addressing (vLLM)
+
+```python
+# 1. Allocate a persistent pinned memory buffer on the CPU at startup.
+self.cpu_buf = torch.zeros(size, pin_memory=True)
+# 2. UVA: give the GPU a direct mapping to that CPU memory address.
+self.uva = get_accelerator_view_from_cpu_tensor(self.cpu_buf)
+```
+
+How it works during inference:
+- The scheduler writes data sequentially into `self.cpu_buf`.
+- It calls `graph.replay()`.
+- The FlashAttention kernel on the GPU reads from `self.uva`. Because of UVA, the GPU itself reaches across the PCIe bus and pulls data directly into its SMs during computation.
+- Zero CPU copying, zero temporary GPU tensors, zero explicit PCIe transfer commands.
+
+See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of pageable vs pinned vs UVA memory.
 
 ---
 
@@ -324,7 +419,7 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 
 1. **"Walk me through one inference step."** — Scheduler picks sequences + allocates blocks (CPU) → Prepare tensors with block_tables and slot_mapping (CPU) → Forward pass reads/writes KV cache via block addressing (GPU) → Sample next token (GPU) → Postprocess: append token, free finished blocks (CPU).
 
-2. **"Why separate prefill and decode?"** — Different GPU kernels (compute-bound vs memory-bound). Mixing requires the varlen attention kernel, which is slightly slower for pure-decode batches. Chunked Prefill in vLLM/SGLang mixes them with a token budget to prevent decode starvation.
+2. **"Why separate prefill and decode?"** — Different GPU kernels (compute-bound vs memory-bound). Mixing requires the varlen attention kernel, which is slightly slower for pure-decode batches. Chunked prefill in vLLM/SGLang mixes them with a token budget to prevent decode starvation.
 
 3. **"What is PagedAttention?"** — Virtual memory for KV cache. GPU memory is pre-allocated as fixed-size blocks. Scheduler assigns logical block IDs to sequences. GPU reads/writes KV cache using block_tables (like a page table). Eliminates fragmentation and enables dynamic memory sharing.
 
@@ -336,120 +431,11 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 
 ---
 
-## PyTorch Inference Optimizations
-
-When building a high-performance LLM engine in Python, several PyTorch-specific tricks are required to maximize performance and guarantee VRAM safety.
-
-### 1. `@torch.inference_mode()` vs `no_grad()`
-During training, PyTorch builds a massive, hidden Computation Graph in the background to calculate gradients, which consumes enormous amounts of VRAM and CPU cycles. For pure inference engines, this must be completely disabled.
-
-While older codebases use `with torch.no_grad():`, modern inference engines use the `@torch.inference_mode()` decorator. 
-- `no_grad()`: Stops tracking gradients, but leaves autograd infrastructure largely intact.
-- `inference_mode()`: A more extreme version introduced in PyTorch 1.9. It entirely rips out the Autograd tracking engine for that block, allowing the C++ backend to bypass thousands of slow safety checks and view tracking operations. It is strictly faster and uses significantly less memory for pure C++/CUDA inference loops.
-
-### 2. Global Device Allocation
-If developers forget to explicitly add `.cuda()` or `device="cuda"` to a tensor creation call (like `torch.zeros()`), PyTorch defaults to allocating memory on the CPU. During runtime, this triggers an invisible, synchronous CPU-to-GPU memory copy over the PCIe bus whenever that tensor is used in GPU math, destroying throughput.
-To prevent this, engines like nano-vLLM run `torch.set_default_device("cuda")` during the boot sequence. This globally forces all subsequent tensor factory functions to allocate natively in VRAM, guaranteeing no arrays secretly reside on the slow CPU.
-
----
-
-## CPU Overhead & CUDA Graphs
-
-During Decode, making a single Forward pass across 32 transformer layers requires Python to dispatch ~100+ separate kernel launch instructions to the GPU.
-- **The specific math computation (GPU)**: Takes ~0.1ms.
-- **Python kernel dispatch overhead (CPU)**: Takes 1.5ms.
-Result: The GPU spends >90% of its time idling, waiting for instructions from Python.
-
-### The Solution: CUDA Graphs (The "Tape Recorder")
-A CUDA Graph allows PyTorch to record a sequence of GPU instructions once, compile them into a single blob, and "replay" them later with a single Python call.
-
-1. **Phase 1: Pre-allocation (Static Memory):** Because graph memory shapes can never change once recorded, you must pre-allocate entirely static input/output tensors (e.g. `block_tables = torch.zeros(max_batch_size, max_model_len/block_size)`). It uses `max_model_len` to guarantee the tensor is wide enough to hold the absolute worst-case sequence length.
-2. **Phase 2: Capture:** Run exactly one forward pass using the static memory. PyTorch records the execution sequence.
-3. **Phase 3: Usage (Replay):** Every inference step, simply copy the dynamic list of block tables/inputs directly into the static "Inbox" tensor, and call `graph.replay()`. CPU overhead drops from 1.5ms to 0.005ms.
-
-### The In-Place Memory Copy Trick (Feeding the Graph)
-Once a CUDA graph is recorded, the GPU hardcodes the absolute physical memory addresses of the static tensors (`input_ids`, `block_tables`, `outputs`). The graph is physically locked; it cannot be told to read from a new dynamic tensor.
-
-To feed new data into the graph during continuous batching, the engine performs an **in-place memory copy** into the locked memory address:
-```python
-# graph_vars["input_ids"] is the permanently locked static address
-# input_ids is the tiny new tensor for the current step
-graph_vars["input_ids"][:bs] = input_ids 
-```
-Using the `[:bs] =` syntax physically copies the new integers directly into the pre-existing silicon memory slots that the blind CUDA graph is hardwired to read from. 
-
-### Preventing Garbage Collection (`self.graph_vars`)
-Engines intentionally store these static INBOX/OUTBOX tensors in a class attribute (e.g., `self.graph_vars = dict(...)`). This is purely to defeat Python's Garbage Collector. 
-If the tensors were local variables, Python would delete them from VRAM when the `capture_cudagraph()` function finished. When `graph.replay()` is subsequently called, the GPU would attempt to read from freed or overwritten memory, causing a Segmentation Fault. Storing them in `self.graph_vars` guarantees the locked memory addresses survive permanently.
-
-### Why are CUDA Graphs Decode-Only?
-
-Because CUDA Graph memory sizes are statically locked, compiling a graph for the **Prefill** phase is mathematically wasteful to the point of impossibility. To understand why, we must establish a critical difference between **Memory Formatting Padding (cheap)** and **Compute Matrix Padding (disastrous).**
-
-#### 1. Decode Phase (Perfect for Graphs)
-During decode, every sequence in the batch processes exactly **1 new token**.
-- **Fixed Compute Matrix:** The matrix shape sent into the massive Linear / MLP layers is perfectly predictable (`[batch_size, 1, hidden_dim]`). Standard PyTorch `nn.Linear` layers do matrix math for exactly 1 token. Zero compute is wasted.
-- **Cheap Memory Padding:** The only thing that grows dynamically is the *historical* KV cache look-back. The static graph passes a giant `block_table` array padded with `-1`s (e.g., `[42, 107, -1, -1, ...]`). The FlashAttention kernel respects `context_lens` as an absolute upper bound on how many tokens to read — padded `-1` entries beyond the sequence's actual length are never accessed. Zero compute is wasted.
-
-#### 2. Prefill Phase (Terrible for Graphs)
-During prefill, we must process the *entire user prompt* at once. The compute matrix shape is `[prompt_len, hidden_dim]`.
-If we try to use a static CUDA graph, we must pre-allocate it for the absolute maximum capacity: `max_model_len` (e.g., 8192).
-
-If a user submits a 72-token prompt:
-1. We must pad it with **8,120 fake "zero" tokens** to fit the static `[8192, hidden_dim]` GPU inbox.
-2. **QKV Projections:** A standard PyTorch `nn.Linear` layer **does not** have `if (token == 0) break;` logic! It is a pure dense matrix multiplier (`X @ W`). It blindly multiplies all 8192 tokens by the gigantic $4096 \times 12288$ weight matrix. We just executed millions of wasted operations on zeros.
-3. **Flash Attention:** (Skips the padding if coded correctly).
-4. **O Projection & MLP Block:** Two more massive matrix multiplications (`X @ W`) blindly executed on all 8192 tokens.
-
-**The Cost:** The Linear Projections and the MLP blocks make up roughly 66% of the mathematics in a Transformer model. If forced into a static graph padded to 8192, the GPU would spend 99% of its Tensor Core cycles blindly executing massive matrix algebra on 8120 blank padding tokens across 32 transformer layers. In short, it would crush the throughput of the inference engine.
-
----
-
-## CPU → GPU Memory Transfer Evolution
-
-In a Continuous Batching engine, the Python CPU Scheduler rebuilds the metadata arrays (like `block_tables` and `slot_mappings`) every single step. These arrays must cross the PCIe bus to reach the GPU before the CUDA Graph can run.
-
-How inference engines evolved to solve this transfer bottleneck:
-
-### 1. The Naive Way (Standard PyTorch)
-```python
-# Creates tensor in pageable CPU RAM.
-cpu_tensor = torch.tensor(data) 
-# PCIe bus blocks CPU until transfer is completely finished.
-gpu_tensor = cpu_tensor.cuda() 
-```
-
-### 2. The Educational Engine Way (NanoVLLM: Pinned Memory)
-```python
-# 1. Ask OS to lock the RAM, preventing it from ever swapping to disk.
-cpu_tensor = torch.tensor(data, pin_memory=True)
-# 2. Tell GPU's DMA controller to fetch it asynchronously across PCIe.
-gpu_tensor = cpu_tensor.cuda(non_blocking=True)
-# 3. Copy into the static CUDA Graph Inbox.
-static_inbox.copy_(gpu_tensor)
-```
-**Problem:** This allocates a wasteful, temporary `gpu_tensor` in VRAM every step just to immediately copy its contents into the static Inbox.
-
-### 3. The Production Way (vLLM: Unified Virtual Addressing - UVA)
-```python
-# 1. Allocate a persistent Pinned Memory buffer on the CPU at startup.
-self.cpu_buf = torch.zeros(size, pin_memory=True)
-# 2. UVA Magic: Give the GPU root access mapping to that CPU memory address.
-self.uva = get_accelerator_view_from_cpu_tensor(self.cpu_buf)
-```
-**How it works during inference:**
-- The Scheduler writes data sequentially into the `self.cpu_buf`.
-- It calls `graph.replay()`.
-- The FlashAttention kernel running on the GPU simply reads the memory from `self.uva`. Because of UVA, **the GPU itself** automatically reaches across the PCIe bus and pulls down the data directly into its SMs as it calculates.
-- **Zero CPU copying, zero temporary GPU tensors, and zero explicit PCIe transfer commands.**
-
----
-
 ## See Also
 
 - [[ml-systems/transformer-model-internals]]
 - [[ml-systems/attention-mechanics]] — attention math, causal mask, prefill vs decode kernels, KV cache Triton writes
 - [[ml-systems/parallelism-strategies]]
 - [[ml-systems/prefix-caching]]
-- [[ml-systems/gpu-memory-hierarchy]]
+- [[ml-systems/gpu-memory-hierarchy]] — memory wall, tiling vs split-K, quantization as compression
 - [[ml-systems/pytorch-module-hooks]]
