@@ -104,3 +104,9 @@ The scheduling infrastructure already tracks morsel state. Adding durability mea
 
 ## Original Paper
 Leis et al., "Morsel-Driven Parallelism: A NUMA-Aware Query Evaluation Framework for the Many-Core Age" (SIGMOD 2014)
+
+---
+
+## See Also
+
+- [[data-processing/checkpointing]]

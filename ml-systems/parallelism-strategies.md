@@ -446,5 +446,7 @@ PT-MoE is a case of **co-designing the model architecture with the hardware para
 
 ## See Also
 
+- [[ml-systems/transformer-model-internals]]
+- [[ml-systems/gpu-memory-hierarchy]]
 - [[distributed-systems/chandy-lamport]]
 - [[ml-systems/llm-inference-engines]]

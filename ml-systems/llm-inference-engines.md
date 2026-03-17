@@ -104,11 +104,8 @@ The reason **Prefill** only happens once is because of the **KV Cache**. We do n
     -   **Metric**: Time Per Output Token (TPOT) measures how fast the GPU can repeatedly run this memory-bandwidth-bound single-insert loop.
 
 ### Hardware-Aware Execution (Why C++ Kernels Separate Them)
-*(For a hardcore deep dive into how SRAM is configured differently for these two phases, see [[ml-systems/gpu-memory-and-quantization#Hardcore Microarchitecture Tiling vs Split-K]])*
 
-The Python engine explicitly separates these phases because the underling C++ CUDA kernels must configure the GPU's microscopic memory (SRAM) entirely differently:
-1. **Prefill (FlashAttention-2):** A math-bound "tiling" operation. The kernel locks large grid chunks of $Q$ in SRAM and streams $K/V$ past them to maximize Tensor Core utilization.
-2. **Decode (Flash-Decoding):** A memory-bound "vacuum" operation. Because $Q$ is just 1 token, the kernel abandons matrix grid optimizations and configures SRAM purely to suck in the massive historical KV Cache from VRAM as fast as possible. To prevent idle GPU cores during low batch sizes, it uses **Split-K**, splitting the history sequence across 100+ SMs to compute attention in parallel.
+The Python engine explicitly separates these phases because the underlying CUDA kernels configure GPU SRAM entirely differently for each. See [[ml-systems/gpu-memory-hierarchy]] for the full Tiling vs Split-K deep dive.
 
 ### Decode starvation problem
 
@@ -202,15 +199,8 @@ Because sequences are wildly different lengths (e.g., A=10 tokens, B=500 tokens)
 - Instead, the scheduler passes a new array: `cu_seqlens` (Cumulative Sequence Lengths). It looks like `[0, 10, 510]`. The `flash_attn_varlen_func` (Var-Len Flash Attention kernel) uses these integer boundaries to know where Sequence A ends and Sequence B begins inside the giant 1D flattened input array.
 
 ### Advanced Prefill: Prefix Caching
-What if 1,000 users ask different questions about the exact same 10,000-word PDF? 
-Historically, the engine would re-compute the Key and Value matrices for those 10,000 words 1,000 separate times, devastating TTFT (Time To First Token).
 
-**Prefix Caching** keeps the computed KV vectors for the PDF alive in the GPU memory pool across different requests. When a new user hits the engine:
-1. The engine checks the hash of the prompt and detects a 10,000-word cache hit.
-2. **The Query Length Shrinks:** The CPU only sends the 20-word unique question to the GPU to be computed as Queries (`cu_seqlens_q` jumps by 20).
-3. **The Key Length Stays Massive:** Those 20 Queries must still perform Attention Lookbacks against the entire 10,020-word history. (`cu_seqlens_k` jumps by 10,020).
-4. **The Exception to the Prefill Rule:** Normally Prefill ignores `block_table`. But because of the cache hit, the CPU dynamically reconstructs a `block_table` containing the physical block IDs of the cached PDF and passes it to the GPU during the Prefill phase so the newly minted Queries can find their historical Keys.
-This is exactly why `cu_seqlens_q` and `cu_seqlens_k` are split into two separate arrays in modern var-len attention APIs.
+If many requests share the same prefix (e.g., a system prompt or PDF), the engine can reuse cached KV vectors instead of recomputing them. The key tell: `cu_seqlens_k > cu_seqlens_q` during prefill (Q is only the uncached suffix, K spans the full context including cached prefix). This is the exception where prefill uses `block_tables`. See [[ml-systems/prefix-caching]] for the full hash-chain mechanism, allocation traces, and the stale entry problem.
 
 ### `prepare_block_tables`: The Bridge to the GPU
 
@@ -399,7 +389,7 @@ Because CUDA Graph memory sizes are statically locked, compiling a graph for the
 #### 1. Decode Phase (Perfect for Graphs)
 During decode, every sequence in the batch processes exactly **1 new token**.
 - **Fixed Compute Matrix:** The matrix shape sent into the massive Linear / MLP layers is perfectly predictable (`[batch_size, 1, hidden_dim]`). Standard PyTorch `nn.Linear` layers do matrix math for exactly 1 token. Zero compute is wasted.
-- **Cheap Memory Padding:** The only thing that grows dynamically is the *historical* KV cache look-back. The static graph passes a giant `block_table` array padded with `-1`s (e.g., `[42, 107, -1, -1, ...]`). However, the custom **FlashAttention CUDA kernel** explicitly contains `if (block_id == -1) break;` logic. It physically stops the loop when it sees a `-1` and ignores the padded history. Again, zero compute is wasted.
+- **Cheap Memory Padding:** The only thing that grows dynamically is the *historical* KV cache look-back. The static graph passes a giant `block_table` array padded with `-1`s (e.g., `[42, 107, -1, -1, ...]`). The FlashAttention kernel respects `context_lens` as an absolute upper bound on how many tokens to read — padded `-1` entries beyond the sequence's actual length are never accessed. Zero compute is wasted.
 
 #### 2. Prefill Phase (Terrible for Graphs)
 During prefill, we must process the *entire user prompt* at once. The compute matrix shape is `[prompt_len, hidden_dim]`.
@@ -457,4 +447,8 @@ self.uva = get_accelerator_view_from_cpu_tensor(self.cpu_buf)
 
 ## See Also
 
+- [[ml-systems/transformer-model-internals]]
 - [[ml-systems/parallelism-strategies]]
+- [[ml-systems/prefix-caching]]
+- [[ml-systems/gpu-memory-hierarchy]]
+- [[ml-systems/pytorch-module-hooks]]

@@ -1,3 +1,13 @@
+# GPU Memory Hierarchy
+
+#ml-systems #inference #interview-prep
+
+## TL;DR
+
+GPU inference is **memory-bandwidth bound**: Tensor Cores crunch math far faster than HBM can deliver weights. The memory hierarchy (HBM → SRAM → Registers) determines kernel design: Prefill tiles Q in SRAM and streams K/V (compute-bound), Decode uses Split-K to vacuum the KV cache across SMs (memory-bound). Quantization (int4/int8) is a **compression format** to reduce HBM reads — weights are decompressed to fp16 on-the-fly in registers, and the decompression compute is "free" because the GPU is idle waiting for memory anyway.
+
+---
+
 ## The GPU Memory Hierarchy
 
 To understand why large language model inference employs aggressive quantization (like `int4` and `int8`) despite hardware registers being 32-bit (or 64-bit), we first need to understand the physical architecture of a GPU.
@@ -32,7 +42,7 @@ During the Prefill phase, the Var-Len FlashAttention kernel computes everything 
 If the CPU did not pre-calculate and pass these two integers into the API (`set_context(..., max_seqlen_q, max_seqlen_k)`), the GPU would be forced to launch a slow "pre-kernel" just to iterate through the VRAM `cu_seqlens` boundaries, find the maximum length, configure its SRAM, and then finally launch the real FlashAttention kernel. By calculating this on the CPU beforehand, the C++ backend can instantly configure the SRAM, pick the fastest compiled Triton kernel variant, and launch it immediately.
 
 ### Hardcore Microarchitecture: Tiling vs Split-K
-*(See [[ml-systems/llm-inference-engines#Decode starvation problem]] for how this impacts scheduling).*
+*(See [[ml-systems/llm-inference-engines]] for how decode starvation impacts scheduling).*
 
 To understand *why* the metrics and bottlenecks of an inference engine are so different between Prefill and Decode phases, we must look at how the C++ CUDA Kernels configure the GPU's SRAM.
 
@@ -115,3 +125,25 @@ This is exactly why high-performance inference engines (like vLLM) **pre-calcula
    - Instead of making the GPU kernel perform this slow integer math to resolve the 1D memory array coordinate, the Python CPU Scheduler calculates the exact physical `slot_mapping` array pointer (e.g., `54910`) ahead of time.
    - It hands this pre-calculated array of pure, definitive pointers to the GPU.
    - The GPU just blindly writes to the provided memory addresses, keeping its Tensor Cores firing at maximum speed.
+
+---
+
+## Interview Talking Points
+
+1. **"Why is LLM inference memory-bandwidth bound?"** — Tensor Cores can compute matrix multiplies far faster than HBM can deliver weights. For a 7B fp16 model at batch size 1, the arithmetic intensity is ~2 FLOPs/byte, while H100's compute-to-bandwidth ratio is ~295 FLOPs/byte (989 TFLOPS bf16 / 3.35 TB/s HBM3). The GPU has ~150x more compute than it can feed with data — it spends nearly all its time waiting for memory.
+
+2. **"How does int4 quantization help if the GPU computes in fp16?"** — int4 is a compression format, not a compute format. Weights are packed 8-per-32-bit word in HBM, decompressed to fp16 on-the-fly via bitwise shifts in registers. The decompression compute is free — the GPU has idle cycles waiting for the next memory fetch. Cuts HBM bandwidth demand by 4x.
+
+3. **"Why does the CPU pre-calculate slot_mapping?"** — Integer division and modulo are slow on GPUs (20-50 cycles vs 1 on CPU) because GPUs sacrifice ALU complexity for Tensor Core density. The CPU computes exact memory addresses ahead of time so the GPU just does blind writes at maximum throughput.
+
+4. **"How do Prefill and Decode differ at the hardware level?"** — Prefill is compute-bound: the kernel tiles large Q blocks in SRAM and streams K/V past them (FlashAttention-2 tiling). Decode is memory-bound: Q is 1 token, the bottleneck is reading the KV cache from HBM. Flash-Decoding uses Split-K — duplicating Q across 100+ SMs to vacuum the cache in parallel.
+
+---
+
+## See Also
+
+- [[ml-systems/llm-inference-engines]]
+- [[ml-systems/transformer-model-internals]]
+- [[ml-systems/prefix-caching]]
+- [[ml-systems/parallelism-strategies]]
+- [[ml-systems/pytorch-module-hooks]]

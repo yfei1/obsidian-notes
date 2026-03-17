@@ -84,3 +84,10 @@ Flink's barriers ARE the markers. The adaptation:
 1. **Reliable FIFO channels** — markers arrive in order. Fine for TCP. Breaks with UDP or message reordering.
 2. **No process failures during snapshot** — if a process dies mid-snapshot, the snapshot is incomplete. Flink handles this by retrying the entire checkpoint.
 3. **Finite channel state** — you must be able to record all in-flight messages. At high throughput with large messages, this can be expensive (Flink unaligned checkpoint size issue).
+
+---
+
+## See Also
+
+- [[data-processing/checkpointing]]
+- [[ml-systems/parallelism-strategies]]

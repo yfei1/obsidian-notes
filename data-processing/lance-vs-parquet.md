@@ -94,3 +94,9 @@ In theory: store each column as a separate Parquet file, manage joins in the cat
 2. Iceberg's merge-on-read has limits on performance vs copy-on-write
 3. You've reinvented Lance's fragment model with worse random access
 4. No engine natively does this — you'd build it yourself
+
+---
+
+## See Also
+
+- [[data-processing/checkpointing]]
