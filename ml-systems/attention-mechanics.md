@@ -418,6 +418,7 @@ all_reduce(sum) → [N, 1024] correct output on both GPUs
 
 - [[ml-systems/transformer-model-internals]] — full decoder layer architecture, SwiGLU MLP
 - [[ml-systems/rotary-position-embedding]] — full RoPE derivation and evolution history
+- [[ml-systems/kv-cache-internals]] — 6-D tensor layout, profile-based sizing, Triton flat addressing
 - [[ml-systems/llm-inference-engines]] — prefill/decode engine lifecycle, PagedAttention, continuous batching
 - [[ml-systems/parallelism-strategies]] — Column→Row TP pattern, why 1 all_reduce suffices
 - [[ml-systems/gpu-memory-hierarchy]] — why decode is memory-bound, tiling strategies
