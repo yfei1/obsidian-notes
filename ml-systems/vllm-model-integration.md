@@ -1,274 +1,237 @@
-# vLLM Model Integration
+# vLLM Model Integration: TAMM 3B Case Study
 
 #ml-systems #inference #interview-prep
 
 ## TL;DR
 
-To serve a custom model on vLLM, you implement a single Python file with 4-6 classes that wire together vLLM's pre-built building blocks (QKVParallelLinear, Attention, RMSNorm, etc.). The model never touches KV cache memory directly, never implements its own RoPE, and never handles TP sharding — vLLM's layers do all of that. The only custom code is (1) the layer wiring specific to your architecture and (2) weight name remapping from your checkpoint format to vLLM's parameter tree.
+Integrating a custom model into vLLM means building a thin wiring layer that connects your model's architecture to vLLM's standard building blocks (QKVParallelLinear, Attention, RMSNorm, etc.). The model code contains zero custom kernels — only the assembly differs. Weight loading maps checkpoint tensor names to vLLM parameter names via a remapping function. This note documents the TAMM AFM 3B integration: 56 layers (35 full-QKV + 21 KV-reuse), SwiGLU MLP, non-standard norm placement, and tied embeddings.
 
 ---
 
-## The Two-Class Pattern
+## The vLLM Integration Contract
 
-Every vLLM model has two main classes with distinct responsibilities:
+Every vLLM model follows the same 4-class structure (reference: `qwen3.py`, ~340 lines):
 
 ```
-MyForCausalLM (nn.Module)          ← what vLLM's engine talks to
-├── model: MyModel                 ← the transformer itself
-│   ├── embed_tokens               ← VocabParallelEmbedding
-│   ├── layers[0..N]               ← decoder layers
-│   └── norm                       ← final RMSNorm
-├── lm_head                        ← ParallelLMHead (or tied with embed_tokens)
-├── logits_processor               ← LogitsProcessor
-├── forward()                      ← delegates to self.model
-├── compute_logits()               ← lm_head → logits
-├── embed_input_ids()              ← delegates to embed_tokens
-└── load_weights()                 ← reads checkpoint, maps names, loads tensors
+ForCausalLM (top-level, what vLLM engine calls)
+├── model: Model (the transformer backbone)
+│   ├── embed_tokens    ← VocabParallelEmbedding
+│   ├── layers[0..N]    ← DecoderLayer instances
+│   └── norm            ← final RMSNorm
+├── lm_head             ← tied with embed_tokens (or ParallelLMHead)
+├── logits_processor    ← LogitsProcessor (handles quant-aware matmul + TP gather)
+└── load_weights()      ← maps checkpoint names to model parameters
 ```
 
-| | ForCausalLM | Model |
+### Required methods on `ForCausalLM`
+
+| Method | Called by | What it does |
 |---|---|---|
-| Responsibility | Serving interface | Pure transformer computation |
-| Contains | Model + LM head + logits + weight loading | Embedding + layers + norm |
-| Why separate | LM head/logits are "serving concerns" | The transformer is the "model concern" |
-| PP support | Orchestrates which parts run on which rank | Layers are partitioned by `make_layers()` |
+| `__init__(*, vllm_config, prefix)` | Model loader at startup | Constructs the model |
+| `forward(input_ids, positions, intermediate_tensors, inputs_embeds)` | Engine every step | Runs the transformer, returns hidden states |
+| `compute_logits(hidden_states)` | Engine after forward | Projects to vocab via `logits_processor(lm_head, hidden)` |
+| `embed_input_ids(input_ids)` | Speculative decoding / PP | Delegates to `embed_tokens` |
+| `load_weights(weights)` | Model loader at startup | Maps checkpoint names → model params |
+
+`load_weights` is NOT defined by an abstract interface — it's a **duck-typing convention**. vLLM's `DefaultModelLoader` simply calls `model.load_weights(weights_iterator)` and expects it to exist. Every vLLM model implements it.
+
+### Config access
+
+```python
+config = vllm_config.model_config.hf_config   # the HuggingFace config object
+```
+
+For text-only models, `hf_config` and `hf_text_config` return the same object. `hf_text_config` exists for multimodal models where the outer config wraps text + vision sub-configs.
+
+`vllm_config` bundles everything: `model_config` (architecture), `cache_config` (KV cache), `quant_config` (quantization), `parallel_config` (TP/PP). Inner layers extract what they need from it.
+
+### Prefix threading
+
+`prefix` is a string that tracks module location in the parameter tree:
+
+```python
+self.model = Model(prefix="model")              # → "model.*"
+self.layers[0] = DecoderLayer(prefix="model.layers.0")  # → "model.layers.0.*"
+self.attn = Attention(prefix="model.layers.0.self_attn.attn")  # → KV cache key
+```
+
+`kv_sharing_target_layer_name` uses this prefix string to find the target layer's KV cache slot.
 
 ---
 
-## The __init__ Signature Contract
+## Building Blocks: What vLLM Provides vs What You Write
 
-vLLM instantiates your model with a specific signature:
+| Concern | vLLM provides | You write |
+|---|---|---|
+| Token embedding | `VocabParallelEmbedding` (vocab-sharded, TP all_reduce) | Just instantiate it |
+| QKV projection | `QKVParallelLinear` (fused, GQA-aware, TP-sharded) | Just instantiate it |
+| Q-only projection (KV reuse) | `ColumnParallelLinear` | Just instantiate it |
+| Output projection | `RowParallelLinear` (built-in all_reduce) | Just instantiate it |
+| RoPE | `get_rope()` (precomputed cache, all theta values) | Just call `rotary_emb(positions, q, k)` |
+| QK norm | `RMSNorm(head_dim)`, supports `has_weight=False` | Just instantiate it |
+| Layer norms | `RMSNorm(hidden_size)` | Just instantiate it |
+| Attention + KV cache | `Attention(prefix=..., kv_sharing_target_layer_name=...)` | Just instantiate it |
+| MLP gate/up | `ColumnParallelLinear` (or `MergedColumnParallelLinear` for fused) | Just instantiate it |
+| MLP down | `RowParallelLinear` | Just instantiate it |
+| Activation | `SiluAndMul` | Just instantiate it |
+| LM head + logits | `LogitsProcessor(lm_head, hidden)` | Just call it |
+| Weight loading | `param.weight_loader(param, tensor)` on each parameter | Write name remapping |
+| KV sharing | `kv_sharing_target_layer_name` on `Attention` | Just pass the target prefix string |
 
-```python
-class MyForCausalLM(nn.Module):
-    def __init__(self, *, vllm_config: VllmConfig, prefix: str = ""):
-```
-
-`vllm_config` bundles everything the model needs:
-
-```python
-vllm_config.model_config.hf_config    # model architecture (hidden_size, num_heads, ...)
-vllm_config.cache_config              # KV cache settings
-vllm_config.quant_config              # quantization method (FP8, AWQ, None)
-vllm_config.parallel_config           # TP/PP sizes
-```
-
-`prefix` tracks the parameter path. `maybe_prefix(prefix, "model")` produces `"model"` for the inner model, then `f"{prefix}.layers.{i}"` for each layer, and `f"{prefix}.self_attn.attn"` for the attention backend. These strings must match the weight names after remapping.
-
----
-
-## What vLLM Provides vs What You Write
-
-| Component | vLLM provides | You write |
-|-----------|--------------|-----------|
-| Token embedding | `VocabParallelEmbedding` — TP-sharded vocab lookup | Just instantiate it |
-| QKV projection | `QKVParallelLinear` — fused, TP-sharded, GQA-aware | Just instantiate it |
-| Output projection | `RowParallelLinear` — includes all_reduce | Just instantiate it |
-| MLP gate/up | `ColumnParallelLinear` or `MergedColumnParallelLinear` | Just instantiate it |
-| MLP down | `RowParallelLinear` — includes all_reduce | Just instantiate it |
-| RoPE | `get_rope()` — precomputed cos/sin, arbitrary theta | Just call `rotary_emb(positions, q, k)` |
-| Normalization | `RMSNorm` — fused kernel, optional `has_weight=False` | Just instantiate it |
-| Attention + KV cache | `Attention(prefix=...)` — flash attention, paged KV, decode/prefill | Just call `attn(q, k, v)` |
-| LM head | `ParallelLMHead` — TP-aware vocab projection | Just instantiate it |
-| Logits | `LogitsProcessor` — sampling, temperature | Just call `logits_processor(lm_head, hidden)` |
-| KV sharing | `kv_sharing_target_layer_name` on `Attention` | Set the target string |
-| **Layer wiring** | — | **You write**: residual pattern, norm placement |
-| **Weight name remapping** | — | **You write**: checkpoint → vLLM name mapping |
+**Zero custom layers needed.** The only model-specific code is: the `forward` wiring (norm placement, residual pattern) and the `load_weights` name remapping.
 
 ---
 
-## The forward() Contract
+## TAMM 3B Architecture (from checkpoint + ajax training code)
 
-vLLM calls two methods separately:
-
-```python
-# Step 1: Engine calls forward() to get hidden states
-hidden_states = model.forward(input_ids, positions)
-
-# Step 2: Engine calls compute_logits() to get vocab scores
-logits = model.compute_logits(hidden_states)
+```
+Config (from weights/config.json → tamm_config):
+  hidden_dim: 2048          num_heads: 16
+  num_kv_heads: 2           head_dim: 128 (= 2048/16)
+  num_layers: 56            num_kv_reuse_layers: 21
+  intermediate_size: 6656   (= hidden_dim × 3.25)
+  vocab_size: 153600        rope_theta: 22443170.0
+  apply_pre_norm: false     apply_pre_residual_norm: true
+  apply_post_norm: true     apply_qk_norm: true
+  remove_key_scale: true    (K norm stateless, no learned weight)
 ```
 
-The `forward` signature must accept these parameters:
+### Layer structure
 
-```python
-def forward(
-    self,
-    input_ids: torch.Tensor | None,      # token IDs (None on non-first PP rank)
-    positions: torch.Tensor,              # position indices for RoPE
-    intermediate_tensors=None,            # for pipeline parallelism
-    inputs_embeds: torch.Tensor | None = None,  # pre-computed embeddings (optional)
-) -> torch.Tensor:
+```
+56 layers total:
+  Segment 0 (layers 0-34):  Full QKV attention
+    - QKVParallelLinear (fused Q+K+V in checkpoint)
+    - Q norm (learned weight) + K norm (stateless, has_weight=False)
+    - Standard KV cache via Attention(prefix=...)
+
+  Segment 1 (layers 35-55): Q-only, KV reuse from layer 34
+    - ColumnParallelLinear for Q only (no K/V weights in checkpoint)
+    - Q norm only (K already normed in shared cache)
+    - Shared KV cache via kv_sharing_target_layer_name="model.layers.34.self_attn.attn"
 ```
 
-`compute_logits` always follows the same pattern:
+### TAMM's norm pattern vs standard (Qwen3/LLaMA)
 
-```python
-def compute_logits(self, hidden_states):
-    return self.logits_processor(self.lm_head, hidden_states)
 ```
+Qwen3 (standard pre-norm):          TAMM v2 (res_norm + out_norm):
+  norm(x + residual) → sublayer       sublayer(x) → res_norm → x + residual → out_norm
+  ↑ 2 fused norms per layer            ↑ 4 separate norms per layer
+  ↑ fused add+norm kernel              ↑ 3 explicit ops (cannot fuse)
+```
+
+Driven by config flags:
+- `apply_pre_norm=false` → no norm before sublayer (unlike Qwen3's `input_layernorm`)
+- `apply_pre_residual_norm=true` → norm on sublayer OUTPUT before residual add
+- `apply_post_norm=true` → norm AFTER residual add
+
+### RoPE ordering (TAMM vs Qwen3)
+
+```
+Qwen3:  linear → QK norm → RoPE      (norm first, then rotate)
+TAMM:   linear → RoPE → QK norm      (rotate first, then norm)
+```
+
+Both use the same `get_rope()` and `RMSNorm`. Only the call order in `forward()` differs. This matters because the checkpoint weights were trained with TAMM's order.
 
 ---
 
-## Weight Loading
+## Weight Loading: Checkpoint Name → Model Parameter
 
-vLLM's engine calls `model.load_weights(weights_iterable)` at startup. The `weights_iterable` yields `(name, tensor)` pairs from safetensors files. Your job: map checkpoint names to your model's parameter names and call the right `weight_loader`.
+The checkpoint uses TAMM naming. The vLLM model uses standard naming. A `_remap_tamm_name()` function translates:
 
-### Option A: AutoWeightsLoader (simplest, used by Qwen3)
-
-Works when checkpoint names match your model's parameter names exactly:
-
-```python
-def load_weights(self, weights):
-    loader = AutoWeightsLoader(self, skip_prefixes=["lm_head."])
-    return loader.load_weights(weights)
+```
+Checkpoint:                                              vLLM model:
+transformer.tamm_model.embedding.weight                → model.embed_tokens.weight
+transformer.tamm_model.output_norm.weight              → model.norm.weight
+...segment_0.layer_N.attention.qkv_transform.fused_linear.weight → model.layers.N.self_attn.qkv_proj.weight
+...segment_0.layer_N.attention.output_transform.weight           → model.layers.N.self_attn.o_proj.weight
+...segment_0.layer_N.attention.qk_norm.query_norm.weight         → model.layers.N.self_attn.q_norm.weight
+...segment_0.layer_N.feed_forward.hidden_transform.linear_0.weight → model.layers.N.mlp.gate_proj.weight
+...segment_0.layer_N.feed_forward.hidden_transform.linear_1.weight → model.layers.N.mlp.up_proj.weight
+...segment_1.layer_M.attention.q_transform.weight                → model.layers.(35+M).self_attn.q_proj.weight
+...segment_1.layer_M.attention.q_norm.query_norm.weight          → model.layers.(35+M).self_attn.q_norm.weight
 ```
 
-### Option B: Custom load_weights with name remapping (used when checkpoint format differs)
+Key facts about the checkpoint format:
+- **QKV is already fused** (`qkv_transform.fused_linear.weight`) → call `weight_loader(param, tensor)` with no `shard_id`, and `QKVParallelLinear` auto-splits
+- **Gate and up are separate** (`linear_0`, `linear_1`) → load directly into separate `ColumnParallelLinear` layers
+- **No lm_head weight** → tied with `embed_tokens` (same parameter)
+- **No K norm weight** → `RMSNorm(has_weight=False)` (stateless)
+- **562 total weights** = 35 × 10 + 21 × 10 + 2
 
-```python
-def load_weights(self, weights):
-    params_dict = dict(self.named_parameters(remove_duplicate=False))
-    loaded_params = set()
+### Why not AutoWeightsLoader?
 
-    for orig_name, tensor in weights:
-        name = _remap_name(orig_name)          # your custom remapping
-        if name is None or name not in params_dict:
-            continue
-        param = params_dict[name]
-        weight_loader = getattr(param, "weight_loader", default_weight_loader)
-        weight_loader(param, tensor)            # TP sharding happens inside
-        loaded_params.add(name)
-
-    return loaded_params
-```
-
-The `weight_loader` on each parameter is set by the parallel linear layer at construction time. For `QKVParallelLinear`, calling `weight_loader(param, fused_tensor)` with no `shard_id` auto-splits a pre-fused QKV tensor across TP ranks. For `ColumnParallelLinear`, it slices the output dimension. For `RowParallelLinear`, it slices the input dimension. You never do TP sharding manually.
-
-### Option C: stacked_params_mapping (used when checkpoint has separate q/k/v but model has fused qkv)
-
-```python
-stacked_params_mapping = [
-    ("qkv_proj", "q_proj", "q"),    # checkpoint's q_proj → model's qkv_proj, shard "q"
-    ("qkv_proj", "k_proj", "k"),
-    ("qkv_proj", "v_proj", "v"),
-    ("gate_up_proj", "gate_proj", 0),
-    ("gate_up_proj", "up_proj", 1),
-]
-```
-
-Then in `load_weights`, check each name against the mapping and call `weight_loader(param, tensor, shard_id)` with the explicit shard_id.
+`AutoWeightsLoader` requires checkpoint tensor names to match vLLM module names exactly. TAMM uses a completely different naming scheme (`transformer.tamm_model.layers.segment_0.layer_N` vs `model.layers.N`), and the segment flattening requires arithmetic (not static string substitution). A custom `load_weights` with `_remap_tamm_name()` is simpler and more explicit.
 
 ---
 
-## MLP Implementation Patterns
+## LogitsProcessor: Why Not Call lm_head Directly?
 
-Two equivalent patterns depending on checkpoint format:
-
-### Pattern 1: MergedColumnParallelLinear + SiluAndMul
-
-Used when you want one kernel launch for gate+up. Requires `stacked_params_mapping` if checkpoint stores them separately:
+nano-vllm's `ParallelLMHead.forward()` does the matmul + TP gather in one class. Public vLLM separates them:
 
 ```python
-self.gate_up_proj = MergedColumnParallelLinear(hidden, [intermediate, intermediate])
-self.act_fn = SiluAndMul()
+# nano-vllm: all-in-one
+logits = self.lm_head(hidden_states)  # matmul + gather inside forward()
 
-gate_up, _ = self.gate_up_proj(x)      # one matmul → [N, 2*inter/tp]
-x = self.act_fn(gate_up)               # split + silu + mul → [N, inter/tp]
-x, _ = self.down_proj(x)               # [N, hidden]
+# public vLLM: separated for quantization support
+logits = self.logits_processor(self.lm_head, hidden_states)
+#        ↑ calls lm_head.quant_method.apply() → matmul (may be FP8/int4)
+#        ↑ then _gather_logits() → TP gather
+#        ↑ then trim vocab padding
 ```
 
-`SiluAndMul` splits its input in half: first half through SiLU (the gate), second half untouched (the value), then element-wise multiply.
+`VocabParallelEmbedding.forward(input_ids)` does token **lookup** (embedding direction). `LogitsProcessor` calls `quant_method.apply()` which does the **reverse matmul** (logits direction). Same weight, two directions — `LogitsProcessor` knows which direction to use.
 
-### Pattern 2: Separate ColumnParallelLinear + F.silu
-
-Used when checkpoint stores gate and up separately and you want the simplest loading:
-
-```python
-self.gate_proj = ColumnParallelLinear(hidden, intermediate)
-self.up_proj = ColumnParallelLinear(hidden, intermediate)
-
-gate, _ = self.gate_proj(x)            # [N, inter/tp]
-up, _ = self.up_proj(x)                # [N, inter/tp]
-x = F.silu(gate) * up                  # [N, inter/tp]
-x, _ = self.down_proj(x)               # [N, hidden]
-```
-
-Pattern 1 is faster (one kernel launch). Pattern 2 is simpler (no weight packing needed). Both produce identical results — the SwiGLU formula is `down(SiLU(gate(x)) * up(x))` either way.
+With tied weights (`lm_head = embed_tokens`), calling `lm_head(hidden_states)` would do a token lookup (wrong), not a matmul.
 
 ---
 
-## KV Sharing (for KV-Reuse Architectures)
+## KV Reuse via `kv_sharing_target_layer_name`
 
-Some models have layers that skip K/V computation and reuse another layer's KV cache. vLLM supports this via `kv_sharing_target_layer_name`:
+vLLM's built-in mechanism (also used by Gemma3n):
 
-```python
-# Full attention layer (computes and caches its own K/V):
-self.attn = Attention(num_heads, head_dim, scale, num_kv_heads,
-                      prefix="model.layers.34.self_attn.attn")
+1. **Construction**: Segment 1 `Attention` instances pass `kv_sharing_target_layer_name="model.layers.34.self_attn.attn"`
+2. **KV cache allocation**: vLLM skips allocating cache for sharing layers — they get a pointer to layer 34's cache
+3. **Forward**: Sharing layers read from (but don't write to) the shared cache. Pass `key=None, value=None` to `Attention.forward()`
 
-# KV-reuse layer (reads K/V from layer 34's cache):
-self.attn = Attention(num_heads, head_dim, scale, num_kv_heads,
-                      prefix="model.layers.35.self_attn.attn",
-                      kv_sharing_target_layer_name="model.layers.34.self_attn.attn")
-```
-
-What happens under the hood:
-1. No KV cache is allocated for the sharing layer (memory savings)
-2. The sharing layer's cache pointer is aliased to the target's cache
-3. During forward, the sharing layer reads K/V from the target's cache
-4. The sharing layer only needs Q projection weights (no K/V weights in checkpoint)
-
-Reference implementation: Gemma3n in vLLM (`gemma3n.py:350-401`).
+This means segment 1 layers have **no KV cache memory cost** — the 21 Q-only layers share layer 34's single cache slot.
 
 ---
 
-## Capability Mixins
+## cpu_linear: Why Forward Fails on CPU Without Weight Loading
 
-vLLM detects model capabilities via class inheritance:
+vLLM's linear layers dispatch through `quant_method.apply()` → `dispatch_unquantized_gemm()`. On CPU, this calls `layer.cpu_linear(x, weight, bias)`. But `cpu_linear` is only set by `process_weights_after_loading()` — which vLLM calls after `load_weights`. Without loaded weights, `cpu_linear` doesn't exist.
 
+Fix for testing: manually call `process_weights_after_loading` on all modules:
 ```python
-class MyForCausalLM(nn.Module):                    # basic — just inference
-class MyForCausalLM(nn.Module, SupportsPP):        # + pipeline parallelism
-class MyForCausalLM(nn.Module, SupportsLoRA):      # + LoRA fine-tuning
-class MyForCausalLM(nn.Module, SupportsPP, SupportsLoRA):  # both
-```
-
-Start with just `nn.Module`. Add mixins later as needed.
-
----
-
-## Model Registration
-
-For an out-of-tree plugin, register in your plugin callback:
-
-```python
-from vllm import ModelRegistry
-
-def general_plugins_callback():
-    ModelRegistry.register_model("MyArchitectureName", MyForCausalLM)
-    # "MyArchitectureName" must match config.json's "architectures" field
+for name, module in model.named_modules():
+    if hasattr(module, "quant_method") and hasattr(module.quant_method, "process_weights_after_loading"):
+        module.quant_method.process_weights_after_loading(module)
 ```
 
 ---
 
 ## Interview Talking Points
 
-1. **"How do you add a new model to vLLM?"** — Write one Python file with ForCausalLM (serving wrapper) and Model (transformer backbone). Use vLLM's building blocks (QKVParallelLinear, Attention, RMSNorm, get_rope). The only custom code is layer wiring and weight name remapping.
+1. **"How do you integrate a custom model into vLLM?"** — Write a 4-class model file (Attention, MLP, DecoderLayer, Model, ForCausalLM) using vLLM's standard building blocks. No custom kernels. The only custom code is the forward wiring (norm placement, residual pattern) and the weight name remapping in `load_weights`.
 
-2. **"What does the model NOT need to implement?"** — KV cache management (Attention handles it), TP sharding (parallel linear layers handle it), RoPE math (get_rope handles it), flash attention dispatch (Attention backend handles it).
+2. **"How does KV reuse work?"** — Set `kv_sharing_target_layer_name` on the `Attention` layer. vLLM aliases the KV cache pointer — sharing layers read from the target's cache without separate allocation. Segment 1 layers only compute Q (no K/V weights).
 
-3. **"How does weight loading work?"** — vLLM yields (name, tensor) pairs from safetensors. The model remaps checkpoint names to parameter names, then calls `param.weight_loader(param, tensor)`. The weight_loader (set by each parallel layer at init time) handles TP sharding automatically.
+3. **"Why not just call lm_head(hidden_states)?"** — `VocabParallelEmbedding.forward()` does token lookup (wrong direction). `LogitsProcessor` routes through `quant_method.apply()` which does the reverse matmul, handles quantization formats (FP8/int4), and performs TP gather.
 
-4. **"What is prefix for?"** — It's a string path that tracks where each module lives in the parameter tree. It's used for weight loading (matching names) and KV cache slot assignment (Attention uses its prefix as its cache key).
+4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking.
 
-5. **"ForCausalLM vs Model?"** — ForCausalLM is the serving interface (logits, weight loading, PP orchestration). Model is the pure transformer (embedding, layers, norm). Separated for PP support — different ranks run different parts.
+5. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
+
+6. **"How does TAMM's RoPE order differ?"** — TAMM applies RoPE before QK norm (linear→RoPE→norm). Qwen3 applies QK norm before RoPE (linear→norm→RoPE). Same `get_rope()` and `RMSNorm`, just different call order in `forward()`.
 
 ---
 
 ## See Also
 
-- [[ml-systems/transformer-model-internals]] — the building blocks (QKV, RoPE, MLP, norms)
-- [[ml-systems/parallelism-strategies]] — TP, PP, and how parallel linear layers work
-- [[ml-systems/llm-inference-engines]] — how the engine calls the model
-- [[ml-systems/parallel-track-architecture]] — PT architecture and how it composes with TP
+- [[ml-systems/transformer-model-internals]] — building blocks: QKVParallelLinear, RMSNorm, RoPE, SwiGLU
+- [[ml-systems/attention-mechanics]] — attention math, causal mask, KV cache
+- [[ml-systems/parallelism-strategies]] — TP column/row pattern, all_reduce
+- [[ml-systems/llm-inference-engines]] — engine architecture, weight loading, CUDA graphs
+- [[ml-systems/prefix-caching]] — KV cache sharing mechanism
