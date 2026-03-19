@@ -408,6 +408,8 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/attention-mechanics]] — full attention math, causal mask, shape tracking, GQA, prefill vs decode, KV cache Triton kernel, TP sharding
 - [[ml-systems/llm-inference-engines]]
 - [[ml-systems/parallelism-strategies]]
+- [[ml-systems/parallel-track-architecture]] — PT: independent tracks with periodic sync
+- [[ml-systems/vllm-model-integration]] — how to wire these building blocks into a vLLM model
 - [[ml-systems/prefix-caching]]
 - [[ml-systems/gpu-memory-hierarchy]]
 - [[ml-systems/pytorch-module-hooks]]

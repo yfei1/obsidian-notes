@@ -607,6 +607,8 @@ PT-MoE is a case of **co-designing the model architecture with the hardware para
 
 - [[ml-systems/transformer-model-internals]]
 - [[ml-systems/gpu-memory-hierarchy]]
+- [[ml-systems/parallel-track-architecture]] — PT architecture: tracks, sync every D layers, composition with TP
+- [[ml-systems/vllm-model-integration]] — how parallel linear layers are used in practice
 - [[distributed-systems/chandy-lamport]]
 - [[ml-systems/llm-inference-engines]]
 - [[ml-systems/rotary-position-embedding]] — RoPE applied inside the QKV pipeline that tensor parallelism splits
