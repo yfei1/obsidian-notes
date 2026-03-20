@@ -63,48 +63,40 @@ def pick_calibration_notes() -> list[str]:
 
 
 def score_note_on_dim(note_path: str, dimension: str, prompts: dict) -> int:
-    """Score a single note on a single dimension using current rubric."""
-    from score import read_note, REPO_ROOT as SR
+    """Score a single note on a single dimension using current rubric.
+
+    Returns score (0-10) or ERROR_SCORE (-1) on failure.
+    """
+    from score import (read_note, _build_scale_text, _run_claude,
+                       _extract_json_object, CONTENT_TRUNCATE, ERROR_SCORE)
 
     note_file = REPO_ROOT / note_path
     content = read_note(note_file)
     info = prompts[dimension]
+    preamble = _build_scale_text(dimension, info)
 
-    prompt = f"""You are scoring an Obsidian note on the dimension: {dimension}.
-
-Definition: {info['description']}
-
-Scale (0-10):
-0-2 = {info['poor']}
-3-4 = Below average, noticeable issues
-5-6 = Adequate, some room for improvement
-7-8 = Good, minor issues only
-9-10 = {info['excellent']}
+    prompt = f"""{preamble}
 
 Note path: {note_path}
 
 Note content:
 ---
-{content[:8000]}
+{content[:CONTENT_TRUNCATE]}
 ---
 
 Respond with ONLY valid JSON (no markdown fences, no extra text):
 {{"score": <0-10 integer>, "reason": "<one sentence justification>"}}"""
 
-    try:
-        result = subprocess.run(
-            ["claude", "--model", "sonnet", "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=300,
-            cwd=str(REPO_ROOT),
-        )
-        output = result.stdout.strip()
-        json_match = re.search(r'\{[^}]+\}', output, re.DOTALL)
-        if json_match:
-            data = json.loads(json_match.group())
-            return max(0, min(10, int(data.get("score", 5))))
-    except Exception as e:
-        print(f"    Error scoring: {e}", file=sys.stderr)
-    return 5
+    output = _run_claude(prompt)
+    if output is None:
+        return ERROR_SCORE
+
+    data = _extract_json_object(output)
+    if data is None:
+        print(f"    Warning: Could not parse score for {dimension}", file=sys.stderr)
+        return ERROR_SCORE
+
+    return max(0, min(10, int(data.get("score", ERROR_SCORE))))
 
 
 def rewrite_rubric_description(dimension: str, prompts: dict, note_path: str,
@@ -232,13 +224,16 @@ def main():
         worst_scores = []
 
         for note_path in calibration_notes:
-            scores = []
+            raw_scores = []
             for i in range(NUM_SAMPLES):
                 s = score_note_on_dim(note_path, dim, prompts)
-                scores.append(s)
+                raw_scores.append(s)
                 print(f"  {note_path} run {i+1}: {s}/10")
-                if i < NUM_SAMPLES - 1:
-                    time.sleep(RATE_LIMIT_SECONDS)
+
+            scores = [s for s in raw_scores if s >= 0]
+            if len(scores) < 2:
+                print(f"  → skipping (not enough valid scores: {raw_scores})")
+                continue
 
             variance = max(scores) - min(scores)
             all_variances.append(variance)
@@ -248,8 +243,6 @@ def main():
                 worst_variance = variance
                 worst_note = note_path
                 worst_scores = scores
-
-            time.sleep(RATE_LIMIT_SECONDS)
 
         max_variance = max(all_variances)
         avg_variance = sum(all_variances) / len(all_variances)
@@ -283,13 +276,16 @@ def main():
         test_prompts[dim]["description"] = new_desc
 
         print(f"\n  Validating new rubric on {worst_note}...")
-        val_scores = []
+        raw_val_scores = []
         for i in range(NUM_SAMPLES):
             s = score_note_on_dim(worst_note, dim, test_prompts)
-            val_scores.append(s)
+            raw_val_scores.append(s)
             print(f"    Validation run {i+1}: {s}/10")
-            if i < NUM_SAMPLES - 1:
-                time.sleep(RATE_LIMIT_SECONDS)
+
+        val_scores = [s for s in raw_val_scores if s >= 0]
+        if len(val_scores) < 2:
+            print(f"  ✗ Validation failed (not enough valid scores: {raw_val_scores})")
+            continue
 
         new_variance = max(val_scores) - min(val_scores)
         print(f"  Old spread: {worst_variance}, New spread: {new_variance}")

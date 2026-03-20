@@ -404,91 +404,27 @@ def score_naming_structure(note: Path, content: str) -> dict:
 # ---------------------------------------------------------------------------
 
 def score_with_claude(note_path: str, content: str, dimension: str) -> dict:
-    """Score a note on a subjective dimension using Claude CLI headless mode."""
-    info = SUBJECTIVE_PROMPTS[dimension]
+    """Score a note on a subjective dimension using Claude CLI headless mode.
 
-    prompt = f"""You are scoring an Obsidian note on the dimension: {dimension}.
-
-Definition: {info['description']}
-
-Scale (0-10):
-0-2 = {info['poor']}
-3-4 = Below average, noticeable issues
-5-6 = Adequate, some room for improvement
-7-8 = Good, minor issues only
-9-10 = {info['excellent']}
-
-Note path: {note_path}
-
-Note content:
----
-{content[:8000]}
----
-
-Respond with ONLY valid JSON (no markdown fences, no extra text):
-{{"score": <0-10 integer>, "reason": "<one sentence justification>", "suggestion": "<one concrete improvement suggestion>"}}"""
-
-    try:
-        result = subprocess.run(
-            ["claude", "--model", "sonnet", "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=300,
-            cwd=str(REPO_ROOT),
-        )
-        output = result.stdout.strip()
-
-        json_match = re.search(r'\{[^}]+\}', output, re.DOTALL)
-        if json_match:
-            data = json.loads(json_match.group())
-            score = int(data.get("score", 5))
-            score = max(0, min(10, score))
-            return {
-                "score": score,
-                "reason": data.get("reason", "No reason provided"),
-                "suggestion": data.get("suggestion", "No suggestion provided"),
-            }
-        else:
-            print(f"  Warning: Could not parse Claude output for {dimension}: {output[:200]}", file=sys.stderr)
-            return {"score": 5, "reason": "Could not parse Claude response", "suggestion": "Re-run scoring"}
-
-    except subprocess.TimeoutExpired:
-        print(f"  Warning: Claude CLI timed out for {dimension}", file=sys.stderr)
-        return {"score": 5, "reason": "Scoring timed out", "suggestion": "Re-run scoring"}
-    except FileNotFoundError:
-        print("  Error: 'claude' CLI not found. Install it or use --rule-only mode.", file=sys.stderr)
-        return {"score": 5, "reason": "Claude CLI not available", "suggestion": "Install Claude CLI"}
-    except Exception as e:
-        print(f"  Warning: Claude CLI error for {dimension}: {e}", file=sys.stderr)
-        return {"score": 5, "reason": f"Error: {e}", "suggestion": "Re-run scoring"}
-
-
-def score_batch_on_dim(notes: dict[str, str], dimension: str) -> dict[str, dict]:
-    """Score all notes on a single dimension in one Claude CLI call.
-
-    Args:
-        notes: {relative_path: content} for each note
-        dimension: the subjective dimension to score
-
-    Returns: {relative_path: {"score": int, "reason": str, "suggestion": str}}
+    Delegates to score_batch_on_dim with a single-note dict.
     """
+    results = score_batch_on_dim({note_path: content}, dimension)
+    return results.get(note_path, _error_result(f"Scoring failed for {dimension}"))
+
+
+def _score_batch_chunk(notes: dict[str, str], dimension: str) -> dict[str, dict]:
+    """Score a chunk of notes on a single dimension in one Claude CLI call."""
     info = SUBJECTIVE_PROMPTS[dimension]
+    preamble = _build_scale_text(dimension, info)
 
     note_blocks = []
     for i, (path, content) in enumerate(notes.items(), 1):
-        note_blocks.append(f"--- Note {i}: {path} ---\n{content[:8000]}\n--- End Note {i} ---")
+        note_blocks.append(f"--- Note {i}: {path} ---\n{content[:CONTENT_TRUNCATE]}\n--- End Note {i} ---")
     all_notes_text = "\n\n".join(note_blocks)
 
     paths_list = "\n".join(f'  "{p}": {{"score": ..., "reason": "...", "suggestion": "..."}}' for p in notes)
 
-    prompt = f"""You are scoring {len(notes)} Obsidian notes on the dimension: {dimension}.
-
-Definition: {info['description']}
-
-Scale (0-10):
-0-2 = {info['poor']}
-3-4 = Below average, noticeable issues
-5-6 = Adequate, some room for improvement
-7-8 = Good, minor issues only
-9-10 = {info['excellent']}
+    prompt = f"""{preamble}
 
 {all_notes_text}
 
@@ -498,51 +434,66 @@ The keys must be the exact note paths shown above:
 {paths_list}
 }}"""
 
-    try:
-        result = subprocess.run(
-            ["claude", "--model", "sonnet", "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=600,
-            cwd=str(REPO_ROOT),
-        )
-        output = result.stdout.strip()
+    output = _run_claude(prompt, timeout=600)
+    if output is None:
+        return {p: _error_result(f"Claude call failed for {dimension}") for p in notes}
 
-        # Extract the JSON object (find outermost balanced braces)
-        first_brace = output.find('{')
-        last_brace = output.rfind('}')
-        if first_brace == -1 or last_brace == -1 or last_brace <= first_brace:
-            print(f"  Warning: No JSON found in batch output for {dimension}: {output[:300]}", file=sys.stderr)
-            return {p: {"score": 5, "reason": "Batch parse failed", "suggestion": "Re-run"} for p in notes}
+    data = _extract_json_object(output)
+    if data is None:
+        print(f"  Warning: No valid JSON in batch output for {dimension}: {output[:300]}", file=sys.stderr)
+        return {p: _error_result(f"JSON parse failed for {dimension}") for p in notes}
 
-        data = json.loads(output[first_brace:last_brace + 1])
-        results = {}
-        for path in notes:
-            entry = data.get(path, {})
-            score = int(entry.get("score", 5))
-            score = max(0, min(10, score))
-            results[path] = {
-                "score": score,
-                "reason": entry.get("reason", "No reason provided"),
-                "suggestion": entry.get("suggestion", "No suggestion provided"),
-            }
-        return results
-
-    except subprocess.TimeoutExpired:
-        print(f"  Warning: Batch scoring timed out for {dimension}", file=sys.stderr)
-        return {p: {"score": 5, "reason": "Batch timed out", "suggestion": "Re-run"} for p in notes}
-    except json.JSONDecodeError as e:
-        print(f"  Warning: JSON parse error in batch for {dimension}: {e}", file=sys.stderr)
-        return {p: {"score": 5, "reason": "JSON parse error", "suggestion": "Re-run"} for p in notes}
-    except Exception as e:
-        print(f"  Warning: Batch scoring error for {dimension}: {e}", file=sys.stderr)
-        return {p: {"score": 5, "reason": f"Error: {e}", "suggestion": "Re-run"} for p in notes}
+    results = {}
+    for path in notes:
+        entry = data.get(path)
+        if entry is None:
+            print(f"  Warning: {path} missing from batch response for {dimension}", file=sys.stderr)
+            results[path] = _error_result("Missing from batch response")
+        else:
+            results[path] = _parse_score_entry(entry)
+    return results
 
 
-def score_rule_based(note: Path, content: str, all_notes: list[Path]) -> dict[str, dict]:
+def score_batch_on_dim(notes: dict[str, str], dimension: str) -> dict[str, dict]:
+    """Score all notes on a single dimension, chunking by prompt size if needed.
+
+    Splits notes into chunks that fit within BATCH_PROMPT_LIMIT, then merges results.
+    """
+    # Build chunks that fit within the prompt size limit
+    chunks: list[dict[str, str]] = []
+    current_chunk: dict[str, str] = {}
+    current_size = 0
+
+    for path, content in notes.items():
+        truncated_size = min(len(content), CONTENT_TRUNCATE)
+        if current_chunk and current_size + truncated_size > BATCH_PROMPT_LIMIT:
+            chunks.append(current_chunk)
+            current_chunk = {}
+            current_size = 0
+        current_chunk[path] = content
+        current_size += truncated_size
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    if len(chunks) == 1:
+        return _score_batch_chunk(chunks[0], dimension)
+
+    # Multiple chunks needed
+    print(f"  [Batch] Splitting {len(notes)} notes into {len(chunks)} chunks for {dimension}")
+    all_results: dict[str, dict] = {}
+    for chunk in chunks:
+        all_results.update(_score_batch_chunk(chunk, dimension))
+    return all_results
+
+
+def score_rule_based(note: Path, content: str, all_notes: list[Path],
+                     content_cache: dict[str, str] | None = None) -> dict[str, dict]:
     """Score a note on all rule-based dimensions (instant, no Claude)."""
     return {
-        "Cross-Linking": score_cross_linking(note, content, all_notes),
+        "Cross-Linking": score_cross_linking(note, content, all_notes, content_cache),
         "Code Quality": score_code_quality(content),
-        "Uniqueness": score_uniqueness(note, content, all_notes),
+        "Uniqueness": score_uniqueness(note, content, all_notes, content_cache),
         "Naming & Structure": score_naming_structure(note, content),
     }
 
@@ -568,7 +519,7 @@ def score_all_notes_batched(all_notes: list[Path], concurrency: int = 1) -> dict
     # Rule-based dims (instant, per-note)
     for note in all_notes:
         note_rel = relative_path(note)
-        all_scores[note_rel].update(score_rule_based(note, note_contents[note_rel], all_notes))
+        all_scores[note_rel].update(score_rule_based(note, note_contents[note_rel], all_notes, content_cache=note_contents))
 
     # Subjective dims — one batch call per dim
     dims = sorted(SUBJECTIVE_DIMS)
@@ -706,9 +657,10 @@ def write_report(all_scores: dict[str, dict[str, dict]]):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Score Obsidian notes on 12 quality dimensions (0-10 scale)")
+    parser = argparse.ArgumentParser(description="Score Obsidian notes on 13 quality dimensions (0-10 scale)")
     parser.add_argument("note", nargs="?", help="Specific note to score (relative path)")
     parser.add_argument("--rule-only", action="store_true", help="Only run rule-based scoring (skip Claude CLI)")
+    parser.add_argument("--concurrency", type=int, default=1, help="Parallel Claude CLI calls (default: 1)")
     args = parser.parse_args()
 
     os.chdir(REPO_ROOT)
@@ -724,20 +676,29 @@ def main():
     if args.rule_only:
         print("(rule-only mode — subjective dimensions will be skipped)\n")
     else:
-        print("(Using Claude CLI for subjective dimensions)\n")
+        print(f"(Using Claude CLI, concurrency={args.concurrency})\n")
 
-    all_scores = {}
-    for note in notes_to_score:
-        note_rel = relative_path(note)
-        print(f"\n{'='*60}")
-        print(f"Scoring: {note_rel}")
-        print(f"{'='*60}")
-        all_scores[note_rel] = score_note(note, all_notes, rule_only=args.rule_only)
+    # Use batched mode for all-notes scoring (unless a specific note or rule-only)
+    if not args.note and not args.rule_only:
+        all_scores = score_all_notes_batched(all_notes, concurrency=args.concurrency)
+        for note_path in sorted(all_scores):
+            scores = all_scores[note_path]
+            non_zero = [scores[d]["score"] for d in DIMENSIONS if scores.get(d, {}).get("score", 0) > 0]
+            if non_zero:
+                print(f"  {note_path}: avg {sum(non_zero)/len(non_zero):.1f}/10")
+    else:
+        all_scores = {}
+        for note in notes_to_score:
+            note_rel = relative_path(note)
+            print(f"\n{'='*60}")
+            print(f"Scoring: {note_rel}")
+            print(f"{'='*60}")
+            all_scores[note_rel] = score_note(note, all_notes, rule_only=args.rule_only, concurrency=args.concurrency)
 
-        scores = all_scores[note_rel]
-        non_zero = [scores[d]["score"] for d in DIMENSIONS if scores[d]["score"] > 0]
-        if non_zero:
-            print(f"\n  Average: {sum(non_zero)/len(non_zero):.1f}/10")
+            scores = all_scores[note_rel]
+            non_zero = [scores[d]["score"] for d in DIMENSIONS if scores[d]["score"] > 0]
+            if non_zero:
+                print(f"\n  Average: {sum(non_zero)/len(non_zero):.1f}/10")
 
     write_scores_tsv(all_scores)
     write_report(all_scores)

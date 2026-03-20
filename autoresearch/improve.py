@@ -346,11 +346,16 @@ def run_calibration(discard_log: list[dict]):
         worst_scores = []
 
         for note_path in calibration_notes:
-            scores = []
+            raw_scores = []
             for i in range(NUM_SAMPLES):
                 s = score_note_on_dim(note_path, dim, prompts)
-                scores.append(s)
+                raw_scores.append(s)
                 print(f"    {note_path} run {i+1}: {s}/10")
+
+            scores = [s for s in raw_scores if s >= 0]
+            if len(scores) < 2:
+                print(f"    Skipping (not enough valid scores: {raw_scores})")
+                continue
 
             variance = max(scores) - min(scores)
             if variance > worst_variance:
@@ -375,11 +380,16 @@ def run_calibration(discard_log: list[dict]):
         test_prompts = {k: dict(v) for k, v in prompts.items()}
         test_prompts[dim]["description"] = new_desc
 
-        val_scores = []
+        raw_val_scores = []
         for i in range(NUM_SAMPLES):
             s = score_note_on_dim(worst_note, dim, test_prompts)
-            val_scores.append(s)
+            raw_val_scores.append(s)
             print(f"    Validation run {i+1}: {s}/10")
+
+        val_scores = [s for s in raw_val_scores if s >= 0]
+        if len(val_scores) < 2:
+            print(f"  ✗ Validation failed (not enough valid scores: {raw_val_scores})")
+            continue
 
         new_variance = max(val_scores) - min(val_scores)
         if new_variance < worst_variance:
