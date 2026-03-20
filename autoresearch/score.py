@@ -119,11 +119,11 @@ def _build_scale_text(dimension: str, info: dict) -> str:
     )
 
 
-def _run_claude(prompt: str, timeout: int = 300) -> str | None:
+def _run_claude(prompt: str, timeout: int = 300, max_tokens: int = 16000) -> str | None:
     """Run Claude CLI and return stripped output, or None on failure."""
     try:
         result = subprocess.run(
-            ["claude", "--model", "sonnet", "--print", "-p", prompt],
+            ["claude", "--model", "sonnet", "--print", "--max-tokens", str(max_tokens), "-p", prompt],
             capture_output=True, text=True, timeout=timeout,
             cwd=str(REPO_ROOT),
         )
@@ -428,7 +428,8 @@ def _score_batch_chunk(notes: dict[str, str], dimension: str) -> dict[str, dict]
 
 {all_notes_text}
 
-Score EVERY note. Respond with ONLY valid JSON (no markdown fences, no extra text).
+Score EVERY note. Keep each reason under 15 words and each suggestion under 20 words.
+Respond with ONLY valid JSON (no markdown fences, no extra text).
 The keys must be the exact note paths shown above:
 {{
 {paths_list}
