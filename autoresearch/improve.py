@@ -54,6 +54,17 @@ def git_commit(message: str):
     run_cmd(["git", "commit", "-m", message])
 
 
+def git_push():
+    """Push to remote. Fails silently if no remote is configured."""
+    result = run_cmd(["git", "push"])
+    if result.returncode == 0:
+        print("  Pushed to remote.")
+    else:
+        stderr = result.stderr.strip()
+        if stderr:
+            print(f"  Push failed: {stderr}", file=sys.stderr)
+
+
 def git_head_hash() -> str:
     """Get current HEAD commit hash (short)."""
     result = run_cmd(["git", "rev-parse", "--short", "HEAD"])
@@ -537,6 +548,7 @@ def main():
             commit_hash = git_head_hash()
             print(f"\n  KEPT: {dimension} {score_before}->{score_after}/10 (commit {commit_hash})")
             log_result(commit_hash, note_path, dimension, score_before, score_after, "kept", commit_msg)
+            git_push()
             # Reset fail count on success
             fail_counts.pop((note_path, dimension), None)
         else:
