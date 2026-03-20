@@ -132,10 +132,11 @@ Rewrite ONLY the description to be more precise. Rules:
 Respond with ONLY the new description string (no quotes, no JSON, no explanation):"""
 
     try:
+        from score import _claude_env
         result = subprocess.run(
             ["claude", "--model", "sonnet", "--print", "-p", prompt],
             capture_output=True, text=True, timeout=300,
-            cwd=str(REPO_ROOT),
+            cwd=str(REPO_ROOT), env=_claude_env(),
         )
         output = result.stdout.strip()
 

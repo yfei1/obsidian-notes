@@ -98,6 +98,27 @@ EP is only needed when a single track's experts don't fit on one GPU.
 
 ---
 
+## TP Rebuild Risk Analysis
+
+Narrowing `_TP` after `initialize_model_parallel()` was validated safe for PT-MoE's current models (V9/V11, 1 KV head). See [[ml-systems/vllm-distributed-groups]] for how the rebuild works.
+
+| Concern | Risk | Reason |
+|---------|------|--------|
+| Memory profiling | None | `determine_available_memory()` runs after `load_model()` — measures actual usage |
+| KV cache sizing | None | Based on measured memory, not TP formula |
+| Scheduler decisions | None | Reads `parallel_config.tensor_parallel_size` (unchanged config value) |
+| Worker count | None | All workers stay alive, just regroup for communication |
+| Weight loading | None | Custom `load_weights` runs after narrowing |
+| Layer dimensions | None | Layers created after narrowing, see correct TP=4 |
+| KV heads calculation | Safe for now | `max(1, 1//32) = max(1, 1//4) = 1`. Would break with >1 KV head per track |
+| Config divergence | Monitor | `parallel_config.tensor_parallel_size` stays 32, `get_tp_group().world_size` is 4. SP padding (gpu_model_runner.py:2979) pads to 32 instead of 4 — wasteful but correct |
+
+### Blast radius for future parallelism support
+
+Adding PP/DP support later requires zero changes — they're "above" TP, already correct. Adding PCP/DCP requires rebuilding those groups too (same pattern as TP rebuild). EP should also be rebuilt to scope within-track (currently safe because V9/V11 have 1 KV head, but incorrect for models with more KV heads).
+
+---
+
 ## Why EP=1 Doesn't "Give Up" Performance
 
 With PT=8, EP=1: each GPU has ALL 300 experts locally. No all-to-all dispatch needed. The performance win comes from PT eliminating 87.5% of cross-device syncs, not from expert distribution.
@@ -131,18 +152,37 @@ Everything else uses standard vLLM components. PTSegment is the only new logic:
 ```python
 class PTSegment(nn.Module):
     def __init__(self, ...):
-        self.layers = nn.ModuleList([DecoderLayer(...) for _ in range(4)])
-        # DecoderLayer is standard vLLM components (QKVParallelLinear, Attention, etc.)
+        self.layers = nn.ModuleList([PTDecoderLayer(...) for _ in range(D)])
+        # PTDecoderLayer wires standard vLLM components (Attention, FFN/MoE, 4 norms)
 
     def forward(self, hidden_states, positions):
+        residual = None
         for layer in self.layers:
-            hidden_states = layer(hidden_states, positions)
+            hidden_states, residual = layer(hidden_states, positions, residual)
 
         # THE ONLY CUSTOM COMMUNICATION:
-        dist.all_reduce(hidden_states, group=cross_track_group)
-        hidden_states /= num_tracks
+        hidden_states = _PT.all_reduce(hidden_states) / num_tracks
         return hidden_states
 ```
+
+### How `_PT.all_reduce()` scopes to the correct cross-track group
+
+When `init_model_parallel_group` receives multiple rank lists (e.g. `[[0,4,8,...], [1,5,9,...], ...]`), it calls `torch.distributed.new_group()` for **every** list — all ranks participate in every `new_group()` call (NCCL collective requirement). But the resulting `GroupCoordinator` stores only the group whose rank list contains the current rank (parallel_state.py:316-395):
+
+```python
+for ranks in group_ranks:
+    device_group = torch.distributed.new_group(ranks, backend=backend)
+    if self.rank in ranks:
+        self.device_group = device_group  # only keep "my" group
+```
+
+So rank 0's `_PT.device_group` points to group `[0,4,8,...]`, rank 1's points to `[1,5,9,...]`, etc. `_PT.all_reduce()` automatically scopes to the correct same-position-across-tracks group.
+
+`all_reduce` is **out-of-place** — it returns a new tensor (parallel_state.py:489-511). The docstring states: "PyTorch custom ops do not support mutation or returning a new tensor in the same op. So we always make the all-reduce operation out-of-place."
+
+### Mean vs sum: paper says sum, training code says mean
+
+The PT paper's Algorithm 1 notation shows `h = all-reduce(h_0, ..., h_{N-1})` — appears to be a plain sum. But the ajax training code uses `jnp.mean(x, axis=0)` (parallel_track_transformer.py `MeanOutputMerger`), which divides by N. The mean is correct — it prevents activation magnitude from scaling with track count.
 
 ---
 
@@ -161,4 +201,5 @@ class PTSegment(nn.Module):
 - [[ml-systems/pt-moe-architecture]] — Architecture details, layer patterns, checkpoint structure
 - [[ml-systems/parallelism-strategies]] — TP, EP, PP fundamentals
 - [[ml-systems/mixture-of-experts]] — MoE internals, FusedMoE, load balancing
+- [[ml-systems/vllm-distributed-groups]] — vLLM process group internals, rebuild pattern, config divergence risks
 - [[ml-systems/vllm-weight-loading]] — weight_loader convention for TP-aware checkpoint loading

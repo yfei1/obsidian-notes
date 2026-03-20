@@ -674,3 +674,4 @@ PT-MoE is a case of **co-designing the model architecture with the hardware para
 - [[ml-systems/vllm-weight-loading]] — `weight_loader` convention for TP-aware checkpoint loading
 - [[ml-systems/mixture-of-experts]] — MoE fundamentals, expert parallelism details
 - [[ml-systems/pt-moe-architecture]] — Apple's PT-MoE: 150B model architecture, sync point reduction
+- [[ml-systems/vllm-distributed-groups]] — vLLM process group internals, how TP/PP/EP groups are built and can be rebuilt

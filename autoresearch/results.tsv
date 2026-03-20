@@ -8,3 +8,5 @@ none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: 
 ff0f321	distributed-systems/chandy-lamport.md	Concrete Examples	2	7	kept	autoresearch: improve distributed-systems/chandy-lamport.md on Concrete Examples (2->7/10)
 489b170	ml-systems/pt-moe-vllm-implementation.md	Interview Readiness	2	9	kept	autoresearch: improve ml-systems/pt-moe-vllm-implementation.md on Interview Readiness (2->9/10)
 2e2c92f	ml-systems/mixture-of-experts.md	Uniqueness	2	5	kept	autoresearch: improve ml-systems/mixture-of-experts.md on Uniqueness (2->5/10)
+4c58041	ml-systems/parallelism-strategies.md	Interview Readiness	2	3	kept	autoresearch: improve ml-systems/parallelism-strategies.md on Interview Readiness (2->3/10)
+none	data-processing/lance-vs-parquet.md	Code Quality	3	3	failed	Edit generation returned no usable output

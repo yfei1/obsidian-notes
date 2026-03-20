@@ -119,13 +119,31 @@ def _build_scale_text(dimension: str, info: dict) -> str:
     )
 
 
+def _claude_env() -> dict[str, str]:
+    """Build env for Claude CLI subprocess, forcing ~/.claude config dir.
+
+    Strips all session-specific vars so the child process starts
+    completely fresh with its own proxy.
+    """
+    env = os.environ.copy()
+    env["CLAUDE_CONFIG_DIR"] = os.path.expanduser("~/.claude")
+    # Remove parent session vars that prevent child from starting its own proxy
+    for key in list(env):
+        if key.startswith("APPLE_CLAUDE_CODE_"):
+            del env[key]
+    for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy",
+                "CLAUDE_CODE_SHELL_PREFIX", "CLAUDECODE"):
+        env.pop(key, None)
+    return env
+
+
 def _run_claude(prompt: str, timeout: int = 300, max_tokens: int = 16000) -> str | None:
     """Run Claude CLI and return stripped output, or None on failure."""
     try:
         result = subprocess.run(
             ["claude", "--model", "sonnet", "--print", "--max-tokens", str(max_tokens), "-p", prompt],
             capture_output=True, text=True, timeout=timeout,
-            cwd=str(REPO_ROOT),
+            cwd=str(REPO_ROOT), env=_claude_env(),
         )
         output = result.stdout.strip()
         return output if output else None
