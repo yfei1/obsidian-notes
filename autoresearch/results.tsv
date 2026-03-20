@@ -6,3 +6,4 @@ none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: 
 none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: Clarity: 4->3, Knowledge Density: 5->4, Progressive Disclosure: 5->4, Completeness: 4->3, Freshness: 5->4
 2c9642a	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	7	kept	autoresearch: improve ml-systems/gpu-memory-hierarchy.md on Code Quality (1->7/10)
 ff0f321	distributed-systems/chandy-lamport.md	Concrete Examples	2	7	kept	autoresearch: improve distributed-systems/chandy-lamport.md on Concrete Examples (2->7/10)
+489b170	ml-systems/pt-moe-vllm-implementation.md	Interview Readiness	2	9	kept	autoresearch: improve ml-systems/pt-moe-vllm-implementation.md on Interview Readiness (2->9/10)
