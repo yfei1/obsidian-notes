@@ -101,3 +101,23 @@ Wikilinks to related notes: [[topic/subtopic]]
 - When rewriting or restructuring a note, **never delete factual content**. Restructure, don't remove.
 - If content is moved to another file, ensure the destination file actually contains the full explanation before trimming the source.
 - **No blind expansion**: When closing a 3-second gap between concepts A and C, it's OK to add a bridging sentence about B. It is NOT OK to write paragraphs about B if B was not part of the original study. Keep additions minimal and focused.
+
+## Architecture Over Implementation
+
+- **Describe WHAT to compute and WHY, then point to WHERE to find HOW.** Notes should explain the mathematical operation, its purpose, and reference the source code location (file:line) — not re-implement the code in prose.
+- **Stack trace guidance**: When referencing framework internals (vLLM, PyTorch, etc.), include file:line call chains so readers can trace execution flow. Example: `vllm/model_executor/model_loader/weight_utils.py:230 → safetensors.torch.load_file()`.
+- **Anti-pattern warnings**: Explicitly call out wrong approaches with concrete alternatives. Format: "Don't call X — call Y instead (X is 3-5x slower because Z)." This prevents readers from falling into the same traps.
+- **One-sentence summary test**: Every section should be summarizable in one sentence a non-expert understands. If you can't summarize it, the section is doing too much — split it.
+- **Checkpoint-first verification**: When documenting model architectures or weight loading, ground truth is the checkpoint's actual tensor names/shapes (via `safetensors.metadata()` or weight index JSON), not the code. Code may be wrong; the checkpoint is the source of truth.
+
+## AutoResearch Loop
+
+This repo includes an `autoresearch/` directory with automated note quality scoring and improvement:
+
+- `autoresearch/score.py` — Scores all notes on 12 dimensions (see `autoresearch/rubric.md`)
+- `autoresearch/improve.py` — Autonomous loop: score → pick weakest → improve → re-score → keep/discard
+- `autoresearch/program.md` — Agent instructions for the improvement loop
+- **Modifiable files**: Only notes (`*.md` in topic dirs) and `CLAUDE.md` may be modified by the loop
+- **Fixed files**: `autoresearch/rubric.md`, `autoresearch/score.py` are not modified by the loop
+- Run scoring: `python autoresearch/score.py`
+- Run improvement loop: `python autoresearch/improve.py`

@@ -669,3 +669,5 @@ PT-MoE is a case of **co-designing the model architecture with the hardware para
 - [[ml-systems/llm-inference-engines]]
 - [[ml-systems/rotary-position-embedding]] — RoPE applied inside the QKV pipeline that tensor parallelism splits
 - [[ml-systems/vllm-weight-loading]] — `weight_loader` convention for TP-aware checkpoint loading
+- [[ml-systems/mixture-of-experts]] — MoE fundamentals, expert parallelism details
+- [[ml-systems/pt-moe-architecture]] — Apple's PT-MoE: 150B model architecture, sync point reduction

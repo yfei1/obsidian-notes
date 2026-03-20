@@ -409,7 +409,9 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/llm-inference-engines]]
 - [[ml-systems/parallelism-strategies]]
 - [[ml-systems/prefix-caching]]
+- [[ml-systems/vllm-weight-loading]] — how checkpoint tensors map to `named_parameters()` via `load_weights()`
 - [[ml-systems/gpu-memory-hierarchy]]
 - [[ml-systems/pytorch-module-hooks]]
 - [[ml-systems/norms-and-regularization]] — L1/L2 norm theory, Ridge vs Lasso, why RMS beats mean(|x|)
-- [[ml-systems/vllm-model-integration]]
+- [[ml-systems/mixture-of-experts]] — MoE replaces the dense FFN with router + expert FFNs
+- [[ml-systems/pt-moe-architecture]] — PT-MoE 150B model: parallel tracks of decoder layers

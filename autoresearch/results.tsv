@@ -1,0 +1,6 @@
+commit	note	dimension	before	after	status	description
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: Clarity: 4->3, Knowledge Density: 5->4, Interview Readiness: 5->4, Freshness: 5->4
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: Knowledge Density: 5->4
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	1	failed	Claude CLI returned no usable output
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: Knowledge Density: 5->4, Motivation: 5->4, Freshness: 5->4
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: Clarity: 4->3, Knowledge Density: 5->4, Progressive Disclosure: 5->4, Completeness: 4->3, Freshness: 5->4

@@ -49,6 +49,26 @@ GPU registers are 32-bit (or wider). Formats like `int4` and `int8` are not nati
 4. **Scale to fp16.** Each 4-bit integer is multiplied by a per-group scale factor, producing an fp16 value.
 5. **Tensor Core math.** The restored fp16 values enter the Tensor Cores for native 16-bit matrix multiplication.
 
+```python
+# Simulates int4 pack → register unpack → dequantize (mirrors GPU kernel logic)
+weights_int4 = [3, 7, 1, 5, 2, 6, 0, 4]          # 8 int4 values, range 0–15
+packed = 0
+for i, w in enumerate(weights_int4):
+    packed |= (w & 0xF) << (i * 4)               # pack 8 weights into one 32-bit word
+
+# Inside the GPU kernel: unpack from the 32-bit register
+unpacked    = [(packed >> (i * 4)) & 0x0F for i in range(8)]
+scale       = 0.25                                # per-group scale factor (fp16 on GPU)
+weights_fp16 = [w * scale for w in unpacked]
+print(unpacked)        # raw int4
+print(weights_fp16)    # dequantized to fp16 before Tensor Core
+```
+
+```
+[3, 7, 1, 5, 2, 6, 0, 4]
+[0.75, 1.75, 0.25, 1.25, 0.5, 1.5, 0.0, 1.0]
+```
+
 ### Why the extra compute is free
 
 Unpacking adds ALU instructions, but the GPU is memory-bound — the ALU has idle cycles while waiting for the next HBM cache line. The unpack work fits inside that idle window. The net effect: `int4` cuts HBM traffic by 4x, which translates to roughly 4x faster token generation, without requiring native 4-bit silicon.
@@ -102,6 +122,23 @@ Concrete example from vLLM's `slot_mapping`:
 - To write a new token's K/V vectors, the engine needs `block_id = seq_len // block_size` and `offset = seq_len % block_size`.
 - Instead of computing this inside the GPU kernel, the Python scheduler computes the exact physical slot index (e.g., `54910`) on the CPU and passes a flat `slot_mapping` array to the GPU.
 - The GPU kernel just writes to `slot_mapping[i]` — no division, no modulo, maximum Tensor Core throughput.
+
+```python
+# CPU scheduler pre-computes the physical slot index before kernel launch
+block_size     = 16
+seq_len        = 54                              # sequence currently has 54 tokens
+logical_block  = seq_len // block_size           # = 3
+offset         = seq_len % block_size            # = 6
+physical_block = 47                              # vLLM allocator: logical block 3 → HBM block 47
+slot           = physical_block * block_size + offset
+print(f"logical block {logical_block}, offset {offset} → physical slot {slot}")
+# GPU kernel receives `slot` as int32: kv_cache[slot] = new_kv_vec
+# No // or % executed on GPU — direct indexed write at full HBM bandwidth
+```
+
+```
+logical block 3, offset 6 → physical slot 758
+```
 
 Similarly, `context_lens` tells the GPU exactly how many tokens to read per sequence, avoiding any block-capacity arithmetic on the GPU side.
 

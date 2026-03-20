@@ -437,6 +437,6 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 - [[ml-systems/attention-mechanics]] — attention math, causal mask, prefill vs decode kernels, KV cache Triton writes
 - [[ml-systems/parallelism-strategies]]
 - [[ml-systems/prefix-caching]]
+- [[ml-systems/vllm-weight-loading]] — `load_weights()` name remapping and `weight_loader` convention
 - [[ml-systems/gpu-memory-hierarchy]] — memory wall, tiling vs split-K, quantization as compression
 - [[ml-systems/pytorch-module-hooks]]
-- [[ml-systems/vllm-model-integration]]
