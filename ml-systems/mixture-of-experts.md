@@ -160,9 +160,38 @@ EP assigns whole experts to dedicated GPUs and routes tokens via All-to-All; TP 
 
 ---
 
+## vLLM MoE Implementation Details
+
+### Why the router must be ReplicatedLinear, not ColumnParallelLinear
+
+`ColumnParallelLinear` shards the output dim across TP ranks — rank 0 sees scores for experts 0-74, rank 1 sees 75-149, etc. Each rank would pick different experts, and the computation would diverge. `ReplicatedLinear` keeps the full weight on every TP rank so all ranks compute identical routing decisions independently.
+
+### FusedMoE takes hidden_states AND router_logits separately
+
+The router only produces scores — it doesn't transform the data. `FusedMoE.forward(hidden_states, router_logits)` receives the same `x` that went to the router, plus the routing scores. FusedMoE uses the scores to pick top-k experts, runs `x` through those expert SwiGLU FFNs, and returns the weighted combination. The pattern:
+
+```python
+self.gate = ReplicatedLinear(hidden_size, num_experts, bias=False)
+self.experts = FusedMoE(num_experts=N, top_k=k, hidden_size=H, intermediate_size=expert_H)
+
+def forward(self, x):
+    router_logits = self.gate(x)           # [N, num_experts] — scores only
+    return self.experts(x, router_logits)   # [N, hidden_size] — transformed
+```
+
+### Dimension semantics in FusedMoE
+
+- `hidden_size`: input/output dim of each expert (same as model hidden dim, e.g. 2048)
+- `intermediate_size`: internal dim of each expert's SwiGLU FFN (e.g. 768 for V9)
+
+Common confusion: the router projects `[N, hidden_size] → [N, num_experts]` (300 scores), NOT `[N, hidden_size] → [N, intermediate_size]`. The router output dim is `num_experts`, not `intermediate_size`.
+
+---
+
 ## See Also
 
 - [[ml-systems/transformer-model-internals]] — dense FFN (SwiGLU) that MoE replaces
 - [[ml-systems/pt-moe-architecture]] — Apple's PT-MoE combining parallel tracks with MoE
 - [[ml-systems/parallelism-strategies]] — expert parallelism vs tensor parallelism
+- [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE vLLM implementation using FusedMoE + ReplicatedLinear
 - [[ml-systems/attention-mechanics]] — attention is unchanged by MoE
