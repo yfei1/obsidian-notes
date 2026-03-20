@@ -649,16 +649,19 @@ PT-MoE is a case of **co-designing the model architecture with the hardware para
 
 3. **"Why not TP across nodes?"** — TP requires all-reduce after every transformer layer. NVLink gives ~900 GB/s within a node. InfiniBand gives ~50 GB/s across nodes. The communication latency would dominate compute time.
 
-4. **"How does EP differ from TP for MoE?"** — TP splits each expert across all GPUs (wasteful since tokens only activate 2/64 experts). EP puts whole experts on dedicated GPUs and uses All-to-All to route tokens. Better utilization for sparse models.
+4. **"Why Column→Row TP pairing?"** — Column-parallel splits the output dimension: each GPU gets a shard of the output, no sync needed. Row-parallel splits the input dimension: each GPU computes a partial dot product, then one all-reduce combines them. The output shard from Column feeds directly into the input shard expected by Row — exactly 1 all-reduce per block. Any other pairing (Col→Col, Row→Row, Row→Col) requires 2 communication steps because the tensor shapes don't align naturally.
 
-5. **"What's the pipeline bubble?"** — In PP, GPUs sit idle waiting for activations from the previous stage. Mitigation: split batch into micro-batches (GPipe) or interleave forward/backward passes (PipeDream). Not a concern in inference (no backward pass).
+5. **"How does EP differ from TP for MoE?"** — TP splits each expert across all GPUs (wasteful since tokens only activate 2/64 experts). EP puts whole experts on dedicated GPUs and uses All-to-All to route tokens. Better utilization for sparse models.
 
-6. **"SP vs CP?"** — SP splits activations for non-TP ops (LayerNorm) — saves memory, always paired with TP. CP splits the sequence length for attention — solves long-context (128K+), uses Ring Attention. Different axes, composable.
+6. **"What's the pipeline bubble?"** — In PP, GPUs sit idle waiting for activations from the previous stage. Mitigation: split batch into micro-batches (GPipe) or interleave forward/backward passes (PipeDream). Not a concern in inference (no backward pass).
 
-7. **"Which strategies work for inference?"** — TP, SP, PP, EP, CP all work. DP is trivial (independent replicas). ZeRO/FSDP are irrelevant (no optimizer states or gradients to shard). vLLM and SGLang are inference-only engines — they don't support ZeRO/FSDP because there's nothing to shard.
+7. **"SP vs CP?"** — SP splits activations for non-TP ops (LayerNorm) — saves memory, always paired with TP. CP splits the sequence length for attention — solves long-context (128K+), uses Ring Attention. Different axes, composable.
 
-8. **"What's Apple PT-MoE?"** — Not a new parallelism strategy, but a model architecture co-designed with hardware parallelism. Splits the model into independent parallel tracks instead of sequential layers, eliminating the pipeline bubble. Each track runs on separate GPUs with near-zero synchronization. Shows how architecture and systems optimization are converging.
+8. **"Which strategies work for inference?"** — TP, SP, PP, EP, CP all work. DP is trivial (independent replicas). ZeRO/FSDP are irrelevant (no optimizer states or gradients to shard). vLLM and SGLang are inference-only engines — they don't support ZeRO/FSDP because there's nothing to shard.
 
+9. **"When do you compose strategies?"** — Standard recipe: TP within a node (NVLink bandwidth), PP across nodes (InfiniBand for activations only), DP for replicas, ZeRO-1/2 on top of DP to cut optimizer memory. For MoE, add EP alongside TP within a node. SP comes free with TP. CP only when sequences exceed ~64K tokens.
+
+10. **"What's Apple PT-MoE?"** — Not a new parallelism strategy, but a model architecture co-designed with hardware parallelism. Splits the model into independent parallel tracks instead of sequential layers, eliminating the pipeline bubble. Each track runs on separate GPUs with near-zero synchronization. Shows how architecture and systems optimization are converging.
 ---
 
 ## See Also
