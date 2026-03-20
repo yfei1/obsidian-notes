@@ -49,8 +49,9 @@ def run_cmd(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
 
 
 def git_commit(message: str):
-    """Stage all changes and commit."""
-    run_cmd(["git", "add", "-A"])
+    """Stage note changes and commit. Only stages known directories to avoid sweeping up unrelated changes."""
+    for d in ["ml-systems", "data-processing", "distributed-systems", "autoresearch/results.tsv", "autoresearch/scores.tsv"]:
+        run_cmd(["git", "add", d])
     run_cmd(["git", "commit", "-m", message])
 
 
