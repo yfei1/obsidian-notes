@@ -105,16 +105,7 @@ A 150B-parameter MoE model might activate only ~15B parameters per token. It "kn
 
 ## Not Every Layer Is MoE
 
-Models often mix dense and MoE layers. In the Apple 150B PT-MoE model, the pattern per 4-layer block is:
-
-```
-Layer 0: Attention + Dense FFN     ← regular
-Layer 1: Attention + Dense FFN     ← regular
-Layer 2: Attention + Dense FFN     ← regular
-Layer 3: Attention + MoE FFN       ← 300 experts, top-8
-```
-
-This is a repeating 4-element cycle across all 48 layers: 36 dense + 12 MoE. The dense layers handle common transformations; the MoE layers provide specialized capacity where needed.
+Models often mix dense and MoE layers. Dense layers handle common transformations cheaply (no routing overhead); MoE layers add specialized capacity where needed. The mixing ratio is model-specific — for a concrete example, see [[ml-systems/pt-moe-architecture]] for Apple's 3-dense-per-1-MoE cycle across 48 layers.
 
 ---
 
@@ -151,16 +142,7 @@ If all tokens route to the same few experts, those experts overfit while others 
 
 ## Expert Parallelism vs Tensor Parallelism for MoE
 
-Two ways to distribute MoE across GPUs. See [[ml-systems/parallelism-strategies]] for the general theory.
-
-| | Tensor Parallelism | Expert Parallelism |
-|---|---|---|
-| Each expert | Split across all GPUs | Lives entirely on one GPU |
-| Communication | All-reduce per layer | All-to-All token dispatch |
-| When a token uses 8/300 experts | All GPUs do work (mostly wasted) | Only 8 GPUs do work |
-| Sweet spot | Dense layers | MoE layers |
-
-In practice, large MoE models combine both: TP for the dense attention layers, EP for the expert layers.
+EP assigns whole experts to dedicated GPUs and routes tokens via All-to-All; TP splits each expert across all GPUs and syncs via All-Reduce. For sparse MoE, EP wins: a token activating 8/300 experts only needs 8 GPUs to do work — TP wastes the other GPUs. In practice, large MoE models combine both: TP for dense attention layers, EP for expert layers. Full comparison in [[ml-systems/parallelism-strategies]].
 
 ---
 
