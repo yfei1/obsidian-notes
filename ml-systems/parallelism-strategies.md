@@ -306,6 +306,64 @@ Mitigations:
 2. **Top-k/Top-p sampling**: each GPU keeps only top-k candidates before gather. `k=50` reduces transmission by `vocab_size/k` (e.g., 2560× for vocab=128K).
 3. vLLM limits `--max-logprobs` to bound logit transfer in practice.
 
+### TP Memory Model: Sharded Weights, Symmetric Activations
+
+**Weight allocation**: Each TP rank allocates only `1/tp_size` of each weight tensor at `__init__` time. No rank ever holds the full weight on GPU:
+
+```
+Example: ColumnParallelLinear(2048, 6656) with TP=2
+
+  Full weight:         [6656, 2048]
+  Rank 0 allocates:    [3328, 2048]   ← half the rows
+  Rank 1 allocates:    [3328, 2048]   ← other half
+  Total GPU memory:    same as one full copy (sharded, not replicated)
+```
+
+**Weight loading**: Each rank reads the full tensor from the checkpoint file (CPU memory, temporary), slices its shard via `weight_loader`, copies only the shard to GPU, then the full tensor is garbage collected:
+
+```
+Disk:   [6656, 2048]  full weight in safetensors
+          │
+   ┌──────┴──────┐
+Rank 0 CPU       Rank 1 CPU        ← both read same file (temporary)
+[6656, 2048]     [6656, 2048]
+   │                 │
+slice [0:3328]   slice [3328:6656]  ← weight_loader handles this automatically
+   │                 │
+Rank 0 GPU       Rank 1 GPU        ← permanent, only the shard
+[3328, 2048]     [3328, 2048]
+```
+
+The `weight_loader` method attached to each parameter (by `ColumnParallelLinear`, `RowParallelLinear`, `QKVParallelLinear`) handles the slicing. The model's `load_weights` function just calls it — no manual TP logic needed.
+
+**Activation symmetry**: `all_reduce` sums partial activations — every rank holds the same-sized result. No rank needs extra memory:
+
+```
+RowParallelLinear.forward() with TP=2:
+  Rank 0: [N, 1536] @ W_0.T → partial [N, 2048]
+  Rank 1: [N, 1536] @ W_1.T → partial [N, 2048]
+
+  all_reduce (sum in-place):
+  Rank 0: [N, 2048]  ← same size, correct result
+  Rank 1: [N, 2048]  ← same size, same result
+
+  Memory is SYMMETRIC — no rank holds more than any other.
+```
+
+Contrast with `gather` at the LM head (the ONE asymmetric operation):
+
+```
+ParallelLMHead with TP=2:
+  Rank 0: [N, 76800]  ← partial vocab logits
+  Rank 1: [N, 76800]  ← partial vocab logits
+
+  gather to rank 0:
+  Rank 0: [N, 153600]  ← 2x memory! (full vocab for sampling)
+  Rank 1: [N, 76800]   ← unchanged
+```
+
+This asymmetry is why gather is used only once (LM head at the end) — keeping it to the end minimizes the memory spike to one rank for one operation.
+
 ---
 
 ## 4. Pipeline Parallelism (PP)
@@ -610,4 +668,4 @@ PT-MoE is a case of **co-designing the model architecture with the hardware para
 - [[distributed-systems/chandy-lamport]]
 - [[ml-systems/llm-inference-engines]]
 - [[ml-systems/rotary-position-embedding]] — RoPE applied inside the QKV pipeline that tensor parallelism splits
-- [[ml-systems/vllm-model-integration]]
+- [[ml-systems/vllm-weight-loading]] — `weight_loader` convention for TP-aware checkpoint loading
