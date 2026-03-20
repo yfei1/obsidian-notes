@@ -77,6 +77,8 @@ Flink's barriers ARE the markers. The adaptation:
 **Aligned checkpoints** = classic Chandy-Lamport (block channels until all markers arrive).
 **Unaligned checkpoints** = modified version that records in-flight data instead of blocking.
 
+**Concrete numbers**: Flink checkpoints every 30s by default. A stateful streaming job with 10GB RocksDB state across 20 operators produces a ~10GB checkpoint snapshot taking ~8s (aligned). Unaligned checkpoints capture in-flight records — at 100K msg/s with 500ms barrier propagation latency, that's ~50MB of in-flight data added to the snapshot, but the checkpoint completes in ~1s instead of waiting for all barriers to align.
+
 ---
 
 ## Assumptions (and When They Break)

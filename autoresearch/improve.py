@@ -31,11 +31,8 @@ AUTORESEARCH_DIR = REPO_ROOT / "autoresearch"
 RESULTS_TSV = AUTORESEARCH_DIR / "results.tsv"
 SCORES_TSV = AUTORESEARCH_DIR / "scores.tsv"
 
-DIMENSIONS = [
-    "Clarity", "Knowledge Density", "Progressive Disclosure", "Concrete Examples",
-    "Cross-Linking", "Code Quality", "Interview Readiness", "Uniqueness",
-    "Naming & Structure", "Motivation", "Completeness", "Freshness", "Conciseness",
-]
+sys.path.insert(0, str(AUTORESEARCH_DIR))
+from score import DIMENSIONS
 
 CONVERGENCE_TARGET = 8.0  # 0-10 scale
 REGRESSION_THRESHOLD = 2  # Allow ±2 noise on 0-10 scale before flagging regression
@@ -64,23 +61,15 @@ def git_head_hash() -> str:
 
 
 def load_scores(concurrency: int = 1) -> dict[str, dict[str, dict]]:
-    """Score all notes by calling score_note directly."""
-    sys.path.insert(0, str(AUTORESEARCH_DIR))
-    from score import discover_notes, score_note, relative_path
+    """Score all notes using batched calls (one Claude call per dimension)."""
+    from score import discover_notes, score_all_notes_batched
 
     all_notes = discover_notes()
-    all_scores = {}
-    for note in all_notes:
-        note_rel = relative_path(note)
-        print(f"  Scoring {note_rel}...")
-        all_scores[note_rel] = score_note(note, all_notes, rule_only=False, concurrency=concurrency)
-
-    return all_scores
+    return score_all_notes_batched(all_notes, concurrency=concurrency)
 
 
 def score_single_note(note_path: str, concurrency: int = 1) -> dict[str, dict]:
     """Score a single note on all dimensions."""
-    sys.path.insert(0, str(AUTORESEARCH_DIR))
     from score import discover_notes, score_note, relative_path
 
     all_notes = discover_notes()
