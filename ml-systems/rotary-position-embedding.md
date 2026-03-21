@@ -266,16 +266,17 @@ Increasing `base` slows down all frequencies, expanding the range over which pos
 
 ## Interview Talking Points
 
-1. **Why does RoPE give relative position awareness?** Because `⟨R(m)q, R(n)k⟩ = qᵀR(n−m)k`. Absolute positions `m` and `n` cancel in the dot product, leaving only the relative distance `(n−m)`.
+1. **Why use RoPE over alternatives?** Zero extra parameters (unlike Shaw RPE / T5 bias which store learned embeddings per distance), zero extra memory, and no hard inductive bias (unlike ALiBi's fixed linear penalty). The Q/K matrices learn relative attention patterns from data; RoPE only provides the positional coordinate system.
 
-2. **Why 2D dimension pairs?** In 2D, rotation is uniquely parameterised by a single scalar angle. In 3D+, rotation needs multiple parameters and loses commutativity, breaking the relative-position property.
+2. **Rotation intuition**: multiplying a vector by `e^(imθ)` rotates it by angle `mθ` in the complex plane. Rotation preserves vector length and composes cleanly — `e^(imθ)·e^(inθ) = e^(i(m+n)θ)` — making it a natural, parameter-free way to tag each token with its position.
 
-3. **Why multiple frequencies?** A single frequency is periodic and cannot uniquely represent all positions. `d/2` incommensurate frequencies create a unique "fingerprint" for every relative distance within practical context lengths — like combining second/minute/hour/day clock hands.
+3. **Why does RoPE give relative position awareness?** Because `⟨R(m)q, R(n)k⟩ = qᵀR(n−m)k`. Absolute positions `m` and `n` cancel in the dot product, leaving only the relative distance `(n−m)`.
 
-4. **Why is V not rotated?** Position only needs to affect attention weights (who attends to whom), not the content transmitted. Rotating V would inject position bias into the output values unnecessarily.
+4. **Why multiple frequencies?** A single frequency is periodic and cannot uniquely represent all positions. `d/2` incommensurate frequencies create a unique "fingerprint" for every relative distance within practical context lengths — like combining second/minute/hour/day clock hands.
 
-5. **How does RoPE extend to long contexts?** Increase `base` (slows all frequencies, extends unique-position range), or use YaRN / LongRoPE to rescale frequencies non-uniformly at inference time without retraining.
+5. **Why is V not rotated?** Position only needs to affect attention weights (who attends to whom), not the content transmitted. Rotating V would inject position bias into the output values unnecessarily.
 
+6. **How does RoPE extend to long contexts?** Increase `base` (slows all frequencies, extends unique-position range), or use YaRN / LongRoPE to rescale frequencies non-uniformly at inference time without retraining.
 ---
 
 ## See Also

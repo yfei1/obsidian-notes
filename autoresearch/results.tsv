@@ -13,3 +13,5 @@ none	data-processing/lance-vs-parquet.md	Code Quality	3	3	failed	Edit generation
 none	data-processing/lance-vs-parquet.md	Code Quality	3	3	discarded	no improvement (3->3); regressions: Motivation: 7->4
 none	ml-systems/prefix-caching.md	Interview Readiness	2	3	discarded	regressions: Motivation: 6->2
 none	ml-systems/rotary-position-embedding.md	Interview Readiness	2	2	failed	Edit generation returned no usable output
+9da6532	ml-systems/pt-moe-vllm-implementation.md	Interview Readiness	2	4	kept	autoresearch: improve ml-systems/pt-moe-vllm-implementation.md on Interview Readiness (2->4/10)
+none	data-processing/lance-vs-parquet.md	Code Quality	3	3	discarded	no improvement (3->3)
