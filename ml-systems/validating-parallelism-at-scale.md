@@ -159,3 +159,11 @@ This adds 1 all_reduce per MoE layer when TP > 1. At the V9 paper config (TP=1/t
 - [[ml-systems/pt-moe-architecture]]
 - [[ml-systems/mixture-of-experts]]
 - [[ml-systems/parallelism-strategies]]
+
+## Interview Talking Points
+
+**Synthetic model technique** — "We validated the communication pattern of a 150B-parameter model on a laptop using a 343K-parameter synthetic model. The key insight: op types, group names, and call counts are determined by architecture, not weight values. `hidden=64` fires the exact same collectives as `hidden=2048`."
+
+**GroupCoordinator patching** — "vLLM funnels every collective through `GroupCoordinator` at `parallel_state.py:487`. Patching four methods (`all_reduce`, `all_gather`, `reduce_scatter`, `broadcast`) at the class level gives you a universal tracer. The `unique_name` field (`'tp:0'`, `'pt:0'`) lets you distinguish tensor-parallel from track-parallel traffic; `world_size > 1` guards against recording short-circuited no-ops."
+
+**FusedMoE `reduce_results` bug** — "We found a silent data corruption bug: `FusedMoE(reduce_results=False)` is correct at TP=1-per-track but silently wrong at TP>1. Each rank holds only half the correct expert output — the shape is right, no error is thrown, the model generates tokens, just wrong ones. The tracer caught it because the expected `all_reduce` after the MoE layer was absent in the op log. Fix: `reduce_results=True`, which vLLM short-circuits back to a no-op when world_size==1."

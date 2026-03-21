@@ -31,3 +31,5 @@ none	ml-systems/kv-cache-internals.md	Cross-Linking	3	3	failed	Edit generation r
 none	ml-systems/kv-cache-internals.md	Cross-Linking	3	4	discarded	regressions: total regression 7 > 4
 none	ml-systems/vllm-distributed-groups.md	Motivation	3	8	discarded	regressions: total regression 5 > 4
 6b9c866	data-processing/lance-vs-parquet.md	Interview Readiness	1	7	kept	autoresearch: improve data-processing/lance-vs-parquet.md on Interview Readiness (1->7/10)
+a30abfc	distributed-systems/chandy-lamport.md	Interview Readiness	1	7	kept	autoresearch: improve distributed-systems/chandy-lamport.md on Interview Readiness (1->7/10)
+none	ml-systems/validating-parallelism-at-scale.md	Interview Readiness	1	1	discarded	no improvement (1->1); regressions: Conciseness: 8->5, total regression 6 > 4
