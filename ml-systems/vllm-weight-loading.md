@@ -6,6 +6,17 @@
 
 vLLM loads model weights via a `load_weights()` method on each model class. The method iterates checkpoint tensors, **remaps names** from the checkpoint's naming convention to the model's PyTorch parameter names, then delegates actual data copying to each parameter's `weight_loader` method. The `weight_loader` is a vLLM convention (not PyTorch) that handles tensor parallelism sharding transparently — the same `load_weights()` code works for TP=1 and TP=8 without changes.
 
+## Interview Talking Points
+
+1. **What is weight loading?** Moving trained parameters from checkpoint files on disk into the live PyTorch model in GPU memory. vLLM's `load_weights()` is the entry point: it iterates `(name, tensor)` pairs from safetensors shards and populates every `nn.Parameter` in the model.
+
+2. **Why name remapping?** Checkpoint authors (JAX/Flax/custom trainers) use their own naming conventions; vLLM models use PyTorch module-hierarchy names. The same tensor is `transformer.tamm_model.layers.segment_0.layer_0.attention.qkv_transform.fused_linear.weight` in the checkpoint and `model.layers.0.self_attn.qkv_proj.weight` in the model. `load_weights()` bridges this gap via regex + suffix-map translation before any data is copied.
+
+3. **How does `weight_loader` work?** It is a vLLM-specific callable monkey-patched onto each `nn.Parameter` during `__init__`. Instead of `param.data.copy_(tensor)`, you call `weight_loader(param, tensor)`. Each parallel layer type attaches its own implementation (`QKVParallelLinear._load_fused_qkv`, etc.). Parameters without a custom loader fall through to `default_weight_loader`, which is just `param.data.copy_()`. This indirection means `load_weights()` never contains any TP-aware logic itself.
+
+4. **TP sharding: how it works end-to-end.** When TP=8, each rank holds only 1/8 of each parallel weight. The `weight_loader` on each rank receives the *full* checkpoint tensor and slices out its own shard: `ColumnParallelLinear` slices output-dim rows, `RowParallelLinear` slices input-dim columns, `QKVParallelLinear` splits Q/K/V then shards each. Because sharding is inside `weight_loader`, the outer `load_weights()` loop is identical for TP=1 and TP=8 — no conditional logic needed.
+
+---
 ---
 
 ## The Problem: Two Naming Worlds
