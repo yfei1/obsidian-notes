@@ -107,6 +107,17 @@ Leis et al., "Morsel-Driven Parallelism: A NUMA-Aware Query Evaluation Framework
 
 ---
 
+## Interview Talking Points
+
+1. **Morsel size trade-off**: Morsels are typically ~10K–100K rows. Too small → dispatcher overhead dominates. Too large → stragglers reappear. The sweet spot lets fast threads grab many morsels while keeping dispatch cost negligible.
+2. **Work stealing vs. morsel leasing**: Morsel-driven is *pull-based* (idle thread asks dispatcher for work). Work stealing is the alternative (*push*: idle thread steals from a busy thread's local queue). Morsel leasing is simpler to reason about and avoids cache thrashing from stealing partially-processed data.
+3. **Pipeline boundaries are synchronization barriers**: A pipeline breaker (hash build, sort, aggregate) forces all threads to finish their morsels before the next pipeline starts. Within a pipeline, no synchronization — each morsel is independent.
+4. **DuckDB in practice**: DuckDB splits each table scan into morsels and uses a global task queue. Its `PhysicalOperator::GetLocalSinkState()` gives each thread thread-local state so morsels never share mutable data — enables lock-free execution within a pipeline.
+5. **Daft in practice**: Daft represents each morsel as a Ray task or a partition. The scheduler is Ray's distributed task queue. Pipeline breakers become Ray `get()` barriers before the next stage launches.
+6. **vs. Spark**: Spark assigns one task per partition *statically* at job submission. Morsel-driven assigns work *dynamically* at runtime — this is why DuckDB handles skewed data far better than Spark without manual repartitioning.
+
+---
+
 ## See Also
 
 - [[data-processing/checkpointing]]

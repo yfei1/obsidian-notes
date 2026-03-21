@@ -15,3 +15,10 @@ none	ml-systems/prefix-caching.md	Interview Readiness	2	3	discarded	regressions:
 none	ml-systems/rotary-position-embedding.md	Interview Readiness	2	2	failed	Edit generation returned no usable output
 9da6532	ml-systems/pt-moe-vllm-implementation.md	Interview Readiness	2	4	kept	autoresearch: improve ml-systems/pt-moe-vllm-implementation.md on Interview Readiness (2->4/10)
 none	data-processing/lance-vs-parquet.md	Code Quality	3	3	discarded	no improvement (3->3)
+263fa6b	ml-systems/rotary-position-embedding.md	Interview Readiness	2	3	kept	autoresearch: improve ml-systems/rotary-position-embedding.md on Interview Readiness (2->3/10)
+none	data-processing/morsel-driven-parallelism.md	Code Quality	3	3	discarded	no improvement (3->3); regressions: Motivation: 8->5
+none	data-processing/morsel-driven-parallelism.md	Code Quality	3	3	discarded	no improvement (3->3)
+none	distributed-systems/chandy-lamport.md	Code Quality	3	3	discarded	no improvement (3->3)
+none	distributed-systems/chandy-lamport.md	Code Quality	3	3	discarded	no improvement (3->3)
+none	data-processing/lance-vs-parquet.md	Interview Readiness	1	8	discarded	regressions: total regression 5 > 4
+none	data-processing/lance-vs-parquet.md	Interview Readiness	1	8	discarded	regressions: total regression 5 > 4
