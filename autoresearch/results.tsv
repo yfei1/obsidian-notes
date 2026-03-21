@@ -30,3 +30,4 @@ none	ml-systems/vllm-weight-loading.md	Interview Readiness	0	8	discarded	regress
 none	ml-systems/kv-cache-internals.md	Cross-Linking	3	3	failed	Edit generation returned no usable output
 none	ml-systems/kv-cache-internals.md	Cross-Linking	3	4	discarded	regressions: total regression 7 > 4
 none	ml-systems/vllm-distributed-groups.md	Motivation	3	8	discarded	regressions: total regression 5 > 4
+6b9c866	data-processing/lance-vs-parquet.md	Interview Readiness	1	7	kept	autoresearch: improve data-processing/lance-vs-parquet.md on Interview Readiness (1->7/10)

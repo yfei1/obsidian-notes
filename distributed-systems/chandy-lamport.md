@@ -89,6 +89,15 @@ Flink's barriers ARE the markers. The adaptation:
 
 ---
 
+## Interview Talking Points
+
+1. **Marker injection**: The initiator records its local state then floods markers on all outgoing channels — this is the snapshot trigger. Every other process records state on *first* marker receipt, then forwards markers.
+2. **Channel state capture**: After recording local state, a process records all messages arriving on channels where the marker hasn't yet appeared. When the marker arrives on that channel, recording stops — those buffered messages are the channel's in-flight state.
+3. **Consistency guarantee**: The marker acts as a logical cut. No message can appear received-but-not-sent in the snapshot because FIFO ordering ensures any message sent before the marker is either captured in the sender's pre-marker state or recorded in the channel buffer before the marker overtakes it.
+4. **Flink usage**: Flink replaces markers with *checkpoint barriers* injected by the JobManager. Aligned mode blocks operator inputs until all barriers arrive (classic Chandy-Lamport); unaligned mode snapshots in-flight records immediately and lets data pass, trading snapshot size for lower latency.
+
+---
+
 ## See Also
 
 - [[data-processing/checkpointing]]
