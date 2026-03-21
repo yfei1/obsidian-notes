@@ -96,6 +96,14 @@ In theory: store each column as a separate Parquet file, manage joins in the cat
 4. No engine natively does this — you'd build it yourself
 
 ---
+## Interview Talking Points
+
+1. **Both are columnar** — data is stored column-by-column, so analytics that touch 2 of 50 columns only read those 2 columns. Parquet compresses well and scans fast; Lance inherits this.
+2. **Add-column cost** — Parquet stores all columns in one monolithic file, so adding a column rewrites the entire file: O(table). Lance adds a new fragment and updates the manifest: O(new_column). At PB scale this is the difference between hours and seconds.
+3. **Random access** — Parquet must scan row groups sequentially to find a row by ID (designed for batch scans). Lance maintains an index so individual row lookup is O(1) — critical for ML training loops that sample random mini-batches.
+4. **ML vs analytics** — Parquet wins on ecosystem maturity (Spark, Trino, DuckDB all speak it natively). Lance wins on mutability: ML datasets evolve (new features, corrections, deletions); Lance handles this without full rewrites. Choose Parquet for stable, query-heavy analytics; choose Lance for evolving ML feature tables or multi-stage pipelines.
+
+---
 
 ## See Also
 
