@@ -247,6 +247,51 @@ Each module with "8 ×" above has a `nn.ModuleList` of 8 components and a Python
 
 ---
 
+## Norm Structure: Hybridnorm v2
+
+Both 3B and 150B use ajax's `"v2"` structure (NOT the old `"hybridnorm"` v1). The key difference:
+
+| | v1 "hybridnorm" (legacy) | v2 (production) |
+|---|---|---|
+| Pre-op norm | YES (prenorm before attn/FFN) | **NO** |
+| Post-op norm | YES (postnorm after compute) | YES (`res_norm`) |
+| Post-add norm | NO | YES (`out_norm`) |
+| Formula | `x + postnorm(fn(prenorm(x)))` | `out_norm(x + res_norm(fn(x)))` |
+
+v2 per-layer flow:
+
+```
+        ┌──────────────────────────────────────┐
+        │              (residual skip)         │
+        │                                      ▼
+x ──────┴──▶ Attn ──▶ res_norm ──────────────(+)──▶ out_norm ──▶
+                      (Norm₁)                        (Norm₂)
+        no prenorm!
+```
+
+Same pattern for FFN. 4 norms total per layer (2 per sub-block).
+
+### Why no prenorm?
+
+`res_norm` is initialized **near-zero** (3B: 1e-4, 150B: 1e-3). At training start:
+
+```
+out_norm(x + res_norm(fn(x))) ≈ out_norm(x + 0) ≈ x
+```
+
+Every layer starts as an identity function. Branches gradually "fade in" as `res_norm` weights grow. Prenorm would be wasted work — the near-zero `res_norm` already ensures the branch contributes nothing at init.
+
+### Name mapping
+
+| Ajax name | Checkpoint name | vLLM name |
+|-----------|----------------|-----------|
+| `res_norm` | `residual_connection.pre_residual_norm` | `*_pre_residual_norm` |
+| `out_norm` | `residual_connection.post_norm` | `*_post_norm` |
+
+Source: `ajax/vendor/axlearn/axlearn/common/attention.py` lines 3016-3022 (v2 attention), lines 3362-3374 (v2 FFN). Config: `ajax/experiments/ajax_gpt/v9_sparse_pretrain.py` lines 160-216 (150B), `v9_pretrain.py` lines 309-330 (3B).
+
+---
+
 ## See Also
 
 - [[ml-systems/pt-moe-vllm-implementation]] — Implementation design decisions, process groups, EP composition

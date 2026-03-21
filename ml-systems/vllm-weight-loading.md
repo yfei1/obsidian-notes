@@ -173,8 +173,162 @@ The TAMM model has a unique challenge: its 56 layers span two segments. Segment 
 
 ---
 
+## PT-MoE 150B: Track-Parallel Weight Loading
+
+The 150B PT-MoE checkpoint stores all 8 tracks' weights in a single tensor with `num_tracks` as dimension 0. The `load_weights()` method must slice out the current track's weights before handing them to the standard vLLM `weight_loader` machinery.
+
+### Checkpoint Shape Convention
+
+Per-track weights always have `num_tracks` (8 for V9) as dim 0. Shared weights (embedding, final norm) have no track dimension:
+
+```
+Per-track linear:     [8, in_dim, out_dim]     e.g. gate_proj [8, 2048, 5888]
+Per-track norm:       [8, dim]                  e.g. post_norm [8, 2048]
+Per-track expert:     [8, num_experts, d1, d2]  e.g. expert gate [8, 300, 2048, 768]
+Shared (no track):    [vocab, hidden]           e.g. embedding [153600, 2048]
+```
+
+How to distinguish: `tensor.shape[0] == num_tracks` means per-track. Otherwise shared.
+
+### The Extra Step: Slice, Then Delegate
+
+The 150B `load_weights` does everything the 3B version does (remap names, look up params, call `weight_loader`), plus one upstream step — extract this track's slice and fix the storage convention:
+
+```python
+track_idx = get_track_idx()  # _PT.rank_in_group — which track am I?
+
+for ckpt_name, tensor in weights:
+    name = self._remap_name(ckpt_name)
+    param = params_dict[name]
+
+    if tensor.shape[0] == num_tracks:
+        tensor = tensor[track_idx]  # slice out this track: [8, ...] → [...]
+
+    if needs_transpose(name):
+        tensor = tensor.t()  # ajax [in, out] → PyTorch [out, in]
+
+    weight_loader = getattr(param, "weight_loader", default_weight_loader)
+    weight_loader(param, tensor)
+```
+
+After slicing, the tensor looks identical to what a single-track model would produce. The standard `weight_loader` handles TP sharding from there.
+
+### Why Transpose? (150B only — 3B does NOT transpose)
+
+The 3B checkpoint stores linear weights in PyTorch convention `[out_dim, in_dim]` — no transpose needed. The 3B `load_weights` calls `weight_loader(param, tensor)` directly.
+
+The 150B checkpoint packs all tracks along dim 0, but the per-track slices come out as `[in_dim, out_dim]` — the opposite convention:
+
+```
+3B gate_proj:   [6656, 2048]  = [out, in]  ← PyTorch ready, no transpose
+150B gate_proj: [8, 2048, 5888] → slice → [2048, 5888] = [in, out] ← needs .t()
+```
+
+This is NOT because "JAX stores [in, out]" — the 3B checkpoint (also from JAX/ajax) is already `[out, in]`. The transpose need is specific to how the 150B HuggingFace export stacks per-track weights along dim 0. The inner dimensions end up in `[in, out]` order after the track-stacking.
+
+Every 2D per-track weight needs `.t()` after slicing. Norms (1D) don't. Experts (3D) are loaded per-expert via `FusedMoE.weight_loader` which handles its own layout.
+
+### Determining What Needs Transpose
+
+Only 2D linear weights need transpose. Norms and expert weights don't:
+
+```python
+def needs_transpose(name: str) -> bool:
+    # Norms are 1D — no transpose
+    # Expert weights go through FusedMoE.weight_loader — no transpose
+    # Everything else (qkv, o_proj, gate, up, down, router) is 2D linear
+    return "norm" not in name and "experts" not in name
+```
+
+### Expert Weight Loading (FusedMoE)
+
+Expert weights are 3D after track slicing: `[300, 2048, 768]`. They must be loaded per-expert via `FusedMoE.weight_loader`:
+
+```python
+# After track slice: [300, 2048, 768]
+for expert_id in range(num_experts):
+    expert_tensor = tensor[expert_id]  # [2048, 768]
+    weight_loader(param, expert_tensor, name,
+                  shard_id=shard_id,    # "w1"=gate, "w3"=up, "w2"=down
+                  expert_id=expert_id)
+```
+
+`FusedMoE` internally packs all experts into fused weight matrices (`w13` for gate+up, `w2` for down). The `weight_loader` handles the packing — you just feed it one expert at a time with the correct `shard_id` and `expert_id`.
+
+### Verified Checkpoint Shapes (from safetensor headers)
+
+Source: `weights/afm-text-150b-instruct-20250915/tensor_shapes.txt`
+
+| Weight | Shape | Category |
+|--------|-------|----------|
+| embedding | `[153600, 2048]` | Shared |
+| output_norm | `[2048]` | Shared |
+| qkv_transform | `[8, 2048, 768]` | Per-track linear |
+| output_transform | `[8, 512, 2048]` | Per-track linear |
+| gate_proj (linear_0) | `[8, 2048, 5888]` | Per-track linear |
+| up_proj (linear_1) | `[8, 2048, 5888]` | Per-track linear |
+| down_proj (output_transform) | `[8, 5888, 2048]` | Per-track linear |
+| router | `[8, 2048, 300]` | Per-track linear |
+| q_norm / k_norm | `[8, 128]` | Per-track norm |
+| pre_residual_norm / post_norm | `[8, 2048]` | Per-track norm |
+| expert gate (linear_0) | `[8, 300, 2048, 768]` | Per-track expert |
+| expert up (linear_1) | `[8, 300, 2048, 768]` | Per-track expert |
+| expert down | `[8, 300, 768, 2048]` | Per-track expert |
+
+### Global NoPE in Checkpoint
+
+Global NoPE layers use a different checkpoint name for QKV: `qkv_transform_global_nope.fused_linear` instead of `qkv_transform.fused_linear`. Both map to `self_attn.qkv_proj` in the model (same parameter, different checkpoint source). The `_SUFFIX_MAP` handles both:
+
+```python
+("attention.qkv_transform.fused_linear.", "self_attn.qkv_proj."),
+("attention.qkv_transform_global_nope.fused_linear.", "self_attn.qkv_proj."),
+```
+
+Global NoPE appears at odd segments, layer 3 (segments 1, 3, 5, 7, 9, 11).
+
+---
+
+## Peeking at Shapes Without Downloading Weights
+
+Safetensors format stores a JSON header at the start of each file containing tensor names, shapes, dtypes, and byte offsets. You can read just the header (a few KB) without downloading the full weights.
+
+### Local file
+
+```python
+import json, struct
+
+with open("model-00001-of-00046.safetensors", "rb") as f:
+    header_size = struct.unpack("<Q", f.read(8))[0]  # first 8 bytes = header length
+    header = json.loads(f.read(header_size))
+
+for name, info in header.items():
+    if name != "__metadata__":
+        print(f"{name}: shape={info['shape']}, dtype={info['dtype']}")
+```
+
+### Remote S3 (range request — no full download)
+
+```python
+# Fetch only the header bytes
+resp = client.get_object(Bucket=bucket, Key=key, Range="bytes=0-7")
+header_size = struct.unpack("<Q", resp["Body"].read())[0]
+resp = client.get_object(Bucket=bucket, Key=key, Range=f"bytes=8-{8 + header_size - 1}")
+header = json.loads(resp["Body"].read())
+```
+
+### What the index JSON does NOT have
+
+`model.safetensors.index.json` maps tensor names → shard files but does **not** contain shapes. You must read the shard header for shapes.
+
+**Ground truth principle**: Checkpoint shapes are the source of truth for weight loading, not the code. When in doubt about dimensions, conventions, or track stacking — read the safetensor header. See `scripts/peek_safetensor_shapes.py` for a complete utility.
+
+---
+
 ## See Also
 
 - [[ml-systems/transformer-model-internals]] — the module hierarchy that `named_parameters()` walks
 - [[ml-systems/parallelism-strategies]] — tensor parallelism and why weight_loader exists
 - [[ml-systems/llm-inference-engines]] — where `load_weights()` fits in the engine initialization
+- [[ml-systems/vllm-distributed-groups]] — GroupCoordinator fields (`rank_in_group` used for track index)
+- [[ml-systems/pt-moe-vllm-implementation]] — the PT-MoE model that uses this loading pattern
+- [[ml-systems/mixture-of-experts]] — FusedMoE weight_loader shard_id mapping

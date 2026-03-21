@@ -163,3 +163,4 @@ Memory profiling and scheduling happen after model init, so they see correct sta
 - [[ml-systems/parallelism-strategies]] — TP, PP, EP fundamentals
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE process group setup that uses this rebuild pattern
 - [[ml-systems/vllm-model-integration]] — model registration and loading
+- [[ml-systems/vllm-weight-loading]] — weight loading uses `rank_in_group` for track slicing

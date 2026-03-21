@@ -1,18 +1,22 @@
-note	Clarity	Knowledge Density	Progressive Disclosure	Concrete Examples	Cross-Linking	Code Quality	Interview Readiness	Uniqueness	Naming & Structure	Motivation	Completeness	Freshness	average
-data-processing/checkpointing.md	0	0	0	0	10	4	0	10	7	0	0	0	7.8
-data-processing/lance-vs-parquet.md	0	0	0	0	8	3	0	10	10	0	0	0	7.8
-data-processing/morsel-driven-parallelism.md	0	0	0	0	8	3	0	10	10	0	0	0	7.8
-distributed-systems/chandy-lamport.md	0	0	0	0	8	3	0	10	10	0	0	0	7.8
-ml-systems/attention-mechanics.md	0	0	0	0	7	4	0	5	10	0	0	0	6.5
-ml-systems/gpu-memory-hierarchy.md	0	0	0	0	8	1	0	10	10	0	0	0	7.2
-ml-systems/llm-inference-engines.md	0	0	0	0	10	4	0	10	10	0	0	0	8.5
-ml-systems/mixture-of-experts.md	0	0	0	0	7	3	0	5	10	0	0	0	6.2
-ml-systems/norms-and-regularization.md	0	0	0	0	10	3	0	10	10	0	0	0	8.2
-ml-systems/parallelism-strategies.md	0	0	0	0	10	3	0	5	7	0	0	0	6.2
-ml-systems/prefix-caching.md	0	0	0	0	10	4	0	5	10	0	0	0	7.2
-ml-systems/pt-moe-architecture.md	0	0	0	0	7	3	0	10	10	0	0	0	7.5
-ml-systems/pt-moe-vllm-implementation.md	0	0	0	0	4	4	0	10	10	0	0	0	7.0
-ml-systems/pytorch-module-hooks.md	0	0	0	0	8	4	0	5	10	0	0	0	6.8
-ml-systems/rotary-position-embedding.md	0	0	0	0	10	4	0	10	10	0	0	0	8.5
-ml-systems/transformer-model-internals.md	0	0	0	0	10	4	0	10	10	0	0	0	8.5
-ml-systems/vllm-weight-loading.md	0	0	0	0	10	3	0	10	10	0	0	0	8.2
+note	Clarity	Knowledge Density	Progressive Disclosure	Concrete Examples	Cross-Linking	Code Quality	Interview Readiness	Uniqueness	Naming & Structure	Motivation	Completeness	Freshness	Conciseness	average
+data-processing/checkpointing.md	0	0	0	0	10	4	0	10	7	0	0	0	0	7.8
+data-processing/lance-vs-parquet.md	0	0	0	0	8	3	0	10	10	0	0	0	0	7.8
+data-processing/morsel-driven-parallelism.md	0	0	0	0	8	3	0	10	10	0	0	0	0	7.8
+distributed-systems/chandy-lamport.md	0	0	0	0	8	3	0	10	10	0	0	0	0	7.8
+ml-systems/attention-mechanics.md	0	0	0	0	7	4	0	5	10	0	0	0	0	6.5
+ml-systems/gpu-memory-hierarchy.md	0	0	0	0	8	7	0	10	10	0	0	0	0	8.8
+ml-systems/kv-cache-internals.md	0	0	0	0	3	4	0	5	10	0	0	0	0	5.5
+ml-systems/llm-inference-engines.md	0	0	0	0	10	4	0	10	10	0	0	0	0	8.5
+ml-systems/mixture-of-experts.md	0	0	0	0	7	3	0	5	10	0	0	0	0	6.2
+ml-systems/norms-and-regularization.md	0	0	0	0	10	3	0	10	10	0	0	0	0	8.2
+ml-systems/parallel-track-architecture.md	0	0	0	0	4	3	0	5	10	0	0	0	0	5.5
+ml-systems/parallelism-strategies.md	0	0	0	0	10	3	0	5	7	0	0	0	0	6.2
+ml-systems/prefix-caching.md	0	0	0	0	10	4	0	5	10	0	0	0	0	7.2
+ml-systems/pt-moe-architecture.md	0	0	0	0	7	3	0	10	10	0	0	0	0	7.5
+ml-systems/pt-moe-vllm-implementation.md	0	0	0	0	7	4	0	5	10	0	0	0	0	6.5
+ml-systems/pytorch-module-hooks.md	0	0	0	0	8	4	0	5	10	0	0	0	0	6.8
+ml-systems/rotary-position-embedding.md	0	0	0	0	10	4	0	10	10	0	0	0	0	8.5
+ml-systems/transformer-model-internals.md	0	0	0	0	10	4	0	10	10	0	0	0	0	8.5
+ml-systems/vllm-distributed-groups.md	0	0	0	0	7	4	0	10	10	0	0	0	0	7.8
+ml-systems/vllm-model-integration.md	0	0	0	0	4	4	0	10	10	0	0	0	0	7.0
+ml-systems/vllm-weight-loading.md	0	0	0	0	10	4	0	5	10	0	0	0	0	7.2

@@ -10,3 +10,6 @@ ff0f321	distributed-systems/chandy-lamport.md	Concrete Examples	2	7	kept	autores
 2e2c92f	ml-systems/mixture-of-experts.md	Uniqueness	2	5	kept	autoresearch: improve ml-systems/mixture-of-experts.md on Uniqueness (2->5/10)
 4c58041	ml-systems/parallelism-strategies.md	Interview Readiness	2	3	kept	autoresearch: improve ml-systems/parallelism-strategies.md on Interview Readiness (2->3/10)
 none	data-processing/lance-vs-parquet.md	Code Quality	3	3	failed	Edit generation returned no usable output
+none	data-processing/lance-vs-parquet.md	Code Quality	3	3	discarded	no improvement (3->3); regressions: Motivation: 7->4
+none	ml-systems/prefix-caching.md	Interview Readiness	2	3	discarded	regressions: Motivation: 6->2
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	2	2	failed	Edit generation returned no usable output

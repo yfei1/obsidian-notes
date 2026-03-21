@@ -191,8 +191,9 @@ The PT paper's Algorithm 1 notation shows `h = all-reduce(h_0, ..., h_{N-1})` �
 1. **Three orthogonal parallelism dimensions**: PT (track parallelism) sits *above* TP and EP. PT splits the model into independent tracks that run divergent paths and sync every N layers. TP shards weights within a track. EP distributes experts within a track. They compose multiplicatively: PT=8, TP=4, EP=2 on 64 GPUs.
 2. **Why PT beats standard TP for MoE**: Standard TP=8 does 96 all-reduces for a 48-layer model. PT=8, TP=1 does only 12 — an 8x reduction. The key: tracks diverge for 4 layers, then merge with a mean all-reduce. Communication is amortized over the segment.
 3. **EP=1 is not a sacrifice**: With PT=8 each GPU holds all 300 experts locally. Zero all-to-all dispatch. EP is only needed for *memory* (experts don't fit on one GPU), not for compute parallelism — PT already provides the parallelism.
-4. **One implementation trick**: Override vLLM's global `_TP` process group with the intra-track group so all existing vLLM layers (attention, FFN, MoE) automatically scope to the correct TP without any code changes.
-5. **Critical perf pitfall**: `FusedMoE.forward()` dispatches to Triton/CUDA kernels. `forward_native()` is a Python fallback — 3-5x slower. Always call `forward()`, never `forward_native()` directly.
+4. **PTSegment is the only custom module**: All attention, FFN, and MoE layers reuse standard vLLM components unchanged. PTSegment wraps D decoder layers and adds exactly one line of custom logic at the end: `hidden_states = _PT.all_reduce(hidden_states) / num_tracks`. Everything else is wiring.
+5. **One implementation trick**: Override vLLM's global `_TP` process group with the intra-track group so all existing vLLM layers (attention, FFN, MoE) automatically scope to the correct TP without any code changes.
+6. **Critical perf pitfall**: `FusedMoE.forward()` dispatches to Triton/CUDA kernels. `forward_native()` is a Python fallback — 3-5x slower. Always call `forward()`, never `forward_native()` directly. This was the #1 cause of the original 10x slowdown.
 
 ---
 

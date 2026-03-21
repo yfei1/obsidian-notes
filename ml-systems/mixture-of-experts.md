@@ -188,6 +188,56 @@ Common confusion: the router projects `[N, hidden_size] → [N, num_experts]` (3
 
 ---
 
+## FusedMoE Weight Loading (vLLM)
+
+FusedMoE stores experts in two fused weight matrices — `w13_weight` (gate + up packed) and `w2_weight` (down). Loading per-expert weights requires calling `weight_loader` once per expert with the correct `shard_id`.
+
+### shard_id Mapping (Mixtral Convention)
+
+| shard_id | Expert component | Internal param | Checkpoint suffix |
+|----------|-----------------|----------------|-------------------|
+| `"w1"` | gate projection | `w13_weight` (first half) | `hidden_transform.linear_0` |
+| `"w3"` | up projection | `w13_weight` (second half) | `hidden_transform.linear_1` |
+| `"w2"` | down projection | `w2_weight` | `output_transform` |
+
+**Why w2 = down (not up)?** Mixtral's original 2-layer FFN had `w1` (up) + `w2` (down). When SwiGLU added the gate, it became `w3` — tacked on last. So `w2` stayed as "down" from the original naming. Unintuitive but hardcoded throughout vLLM (`fused_moe/layer.py:856-964`).
+
+### Per-Expert Loading Loop
+
+```python
+# Checkpoint: [num_experts, in_dim, out_dim] (after track slice)
+sliced = tensor[track_idx]  # [300, 2048, 768]
+
+# Determine shard_id from checkpoint name
+if "linear_0" in ckpt_name:    shard_id = "w1"   # gate
+elif "output_transform" in ckpt_name: shard_id = "w2"  # down
+else:                           shard_id = "w3"   # up
+
+# Determine which internal param to target
+param = moe.w13_weight if shard_id != "w2" else moe.w2_weight
+weight_loader = getattr(param, "weight_loader", default_weight_loader)
+
+# Load each expert into the correct slot
+for expert_id in range(num_experts):
+    weight_loader(param, sliced[expert_id], shard_id, shard_id, expert_id)
+```
+
+`FusedMoE.weight_loader` internally maps `(shard_id, expert_id)` to the correct offset within the fused buffer. You never index into `w13_weight` or `w2_weight` directly.
+
+### The weight_loader Convention
+
+vLLM monkey-patches a `weight_loader` method onto each Parameter during `__init__`:
+
+```python
+# Inside FusedMoE.__init__():
+self.w13_weight = Parameter(torch.empty(...))
+self.w13_weight.weight_loader = self.weight_loader  # attached to the param
+```
+
+Access it via `getattr(param, "weight_loader", default_weight_loader)`. The same pattern is used by all vLLM parallel layers (QKVParallelLinear, ColumnParallelLinear, etc.) — see [[ml-systems/vllm-weight-loading]] for the full convention.
+
+---
+
 ## See Also
 
 - [[ml-systems/transformer-model-internals]] — dense FFN (SwiGLU) that MoE replaces
@@ -195,3 +245,4 @@ Common confusion: the router projects `[N, hidden_size] → [N, num_experts]` (3
 - [[ml-systems/parallelism-strategies]] — expert parallelism vs tensor parallelism
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE vLLM implementation using FusedMoE + ReplicatedLinear
 - [[ml-systems/attention-mechanics]] — attention is unchanged by MoE
+- [[ml-systems/vllm-weight-loading]] — weight_loader convention, checkpoint name remapping
