@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Hidden files
+.*
+!.gitignore
+!.obsidian/
+
+# Logs
+*.log
+
+# Environment
+.env
+.venv/
+venv/
