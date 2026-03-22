@@ -8,19 +8,19 @@
 |---|-----------|-----------------|----------------|--------|------------|-------------------|
 | 1 | **Clarity** | 3-second rule compliance | Claude (subjective) | 2.0 | Multiple re-reads needed to follow | Every sentence lands immediately |
 | 2 | **Knowledge Density** | Insight-per-line ratio | Claude (subjective) | 2.0 | Filler, repetition, obvious statements | Every line teaches something non-obvious |
-| 3 | **Structure & Flow** | Motivation + progressive disclosure | Claude (subjective) | 1.5 | Jumps into details, no motivation | TL;DR → why → overview → details → edge cases |
+| 3 | **Structure & Flow** | Progressive conceptual build-up | Claude (subjective) | 1.5 | Jumps into details, no motivation | Summary → why → mechanism → trade-offs → connections |
 | 4 | **Concrete Examples** | Numbers, shapes, real hardware specs | Claude (subjective) | 1.5 | Abstract descriptions only | Actual values (H100 specs, tensor shapes, frequencies) |
 | 5 | **Cross-Linking** | Wikilink quality and bidirectionality | Rule-based | 1.0 | No links or broken links | Bidirectional links with one-line context summaries |
 | 6 | **Code Quality** | Code examples paired with output | Rule-based | 1.0 | No code, or code without output | Code + output + stack traces where relevant |
-| 7 | **Interview Readiness** | Can you explain this verbally in 60s? | Claude (subjective) | 3.0 | No talking points | Clear numbered points with explain + decide questions |
+| 7 | **Systematic Coherence** | Vault integration: scope, prerequisites, connections | Claude (subjective) | 1.5 | No scope declaration, no prerequisites, isolated | Clear scope, explicit prerequisites, well-connected |
 | 8 | **Uniqueness** | No overlapping content across files | Rule-based | 1.5 | Same concept explained in 3 places | Each concept has exactly ONE canonical home |
-| 9 | **Conciseness** | Could this be said in fewer words? | Claude (subjective) | 2.0 | Verbose, redundant, could be half the length | Every sentence earns its place, no tighter version exists |
+| 9 | **Conciseness** | Could this be said in fewer words? | Claude (subjective) | 1.5 | Verbose, redundant, could be half the length | Every sentence earns its place, no tighter version exists |
 
 ## Prerequisite Gates (pass/fail)
 
 | Gate | What it checks | Pass threshold |
 |------|---------------|----------------|
-| **Naming & Structure** | Kebab-case names, required sections (TL;DR, See Also), tags on line 3 | Score >= 7 |
+| **Naming & Structure** | Kebab-case names, required sections (TL;DR + See Also OR Core Intuition + Connections OR Role in System + Related Concepts), tags on line 3 | Score >= 7 |
 | **Length Budget** | Note line count: 10 at <=300, 7 at 350, 5 at 400, 2 at 450, 0 at >450 | Score >= 5 (under 400 lines) |
 
 Gates must pass before scored dimensions are evaluated. A note failing a gate gets flagged for structural fixes first.
@@ -31,6 +31,7 @@ Gates must pass before scored dimensions are evaluated. A note failing a gate ge
 - **Dropped**: Completeness (conflicts with Conciseness), Freshness (unactionable by LLM)
 - **Demoted to gate**: Naming & Structure (already averages 9.7/10, adds noise as a scored dim)
 - **Added gate**: Length Budget (rule-based line count enforcement)
+- **Replaced**: Interview Readiness → **Systematic Coherence** (constitution shifted from interview prep to mental model building)
 
 ### Conciseness vs Knowledge Density vs Uniqueness
 
@@ -47,9 +48,9 @@ These three dimensions are related but measure different things:
 - **Gates** (Naming & Structure, Length Budget) are rule-based pass/fail checks.
 - All scores use a 0-10 scale for finer granularity and less noise.
 - Final score per note = unweighted average of all 9 scored dimensions.
-- Convergence target: all notes average ≥ 8.0, with Interview Readiness >= 7 and Clarity >= 7.
+- Convergence target: all notes average >= 8.0, with Clarity >= 7 and Knowledge Density >= 7.
 - Weights are used only for targeting priority (which dimension to improve first), not for scoring.
-- Regression threshold: >2 points drop on any dimension flags a regression (tolerates LLM scoring noise of ±1).
+- Regression threshold: >2 points drop on any dimension flags a regression (tolerates LLM scoring noise of +/-1).
 
 ## Rule-Based Scoring Details
 
@@ -73,7 +74,10 @@ These three dimensions are related but measure different things:
 
 ### Naming & Structure (Gate)
 - Check file name is kebab-case
-- Check required sections present: TL;DR, See Also
+- Check required sections present (accepts old or new format):
+  - Old: TL;DR + See Also
+  - New concept: Core Intuition + Connections
+  - New implementation: Role in System + Related Concepts
 - Check tags on line 3
 - Score: deduct 2 points per violation from 10
 - Gate passes at score >= 7
