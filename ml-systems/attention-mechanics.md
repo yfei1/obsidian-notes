@@ -18,35 +18,14 @@ Unlike a fixed convolution window, each token dynamically chooses what to attend
 
 ## The Math (Single Head)
 
-### Step 1: Compute Attention Scores
+### Steps 1–2: Compute & Scale Attention Scores
 
 ```
 score(i, j) = dot(Q_i, K_j) / √d_k
 ```
 
-- `Q_i`: token i's query vector — "what am I looking for?"
-- `K_j`: token j's key vector — "what do I contain?"
-- `d_k`: head dimension (64 for Qwen3-0.6B)
-
-**Geometric intuition**: `dot(Q, K) = |Q| × |K| × cos(θ)`. Training teaches Q and K projections to align semantically related tokens in the same direction. The score measures directional alignment in a 64-dimensional space.
-
-### Step 2: Scale by √d_k
-
-Q and K each have 64 dimensions with components roughly in `[-1, 1]`. Their dot product sums 64 terms, giving a result with variance ≈ `d_k = 64` and magnitude around ±64.
-
-Feeding raw ±64 values into softmax:
-
-```
-softmax([60, 2, -30]) ≈ [1.0000, 0.0000, 0.0000]   ← nearly one-hot, gradient ≈ 0
-```
-
-Dividing by `√64 = 8` pulls the range back to ±8:
-
-```
-softmax([7.5, 0.25, -3.75]) ≈ [0.999, 0.001, 0.000]  ← still peaked but trainable
-```
-
-**Purpose**: prevent softmax saturation so gradients can flow during training.
+- `Q_i`: "what am I looking for?"; `K_j`: "what do I contain?"; `d_k=64` for Qwen3-0.6B
+- **Why √d_k?** 64-dim dot products have variance ≈ d_k; raw ±64 values push softmax to near-one-hot (gradient ≈ 0). Dividing by `√64=8` restores variance to ~1, keeping gradients alive.
 
 ### Step 3: Causal Mask
 
@@ -72,32 +51,18 @@ After causal mask (upper triangle → -∞):
   tok3  [  1.2,    0.5,    1.8,    2.0 ]   ← sees all
 ```
 
-### Step 4: Softmax (Row-wise Normalization)
-
-Softmax converts each row into a probability distribution (non-negative, sums to 1):
-
-```
-softmax(x_i) = e^(x_i) / Σ_j e^(x_j)
-```
-
-Applied to the masked scores:
+### Step 4: Softmax → Step 5: Weighted Sum
 
 ```
 tok0: softmax([2.1, -∞, -∞, -∞]) = [1.00, 0.00, 0.00, 0.00]
 tok1: softmax([0.8, 1.7, -∞, -∞]) = [0.29, 0.71, 0.00, 0.00]
 tok2: softmax([-0.1, 2.3, 1.1, -∞]) = [0.07, 0.76, 0.17, 0.00]
 tok3: softmax([1.2, 0.5, 1.8, 2.0]) = [0.17, 0.08, 0.31, 0.38]
+
+output_i = Σ_j  α(i,j) × V_j
 ```
 
-`-∞` positions become exactly 0 because `e^(-∞) = 0`. The mask doesn't "delete" future tokens — it makes their contribution mathematically vanish.
-
-### Step 5: Weighted Sum of Values
-
-```
-output_i = Σ_j  α(i, j) × V_j
-```
-
-Each token's output is a blend of all visible V vectors, weighted by the attention distribution.
+`-∞` → `e^(-∞)=0`, so future tokens contribute exactly zero.
 
 ### Matrix Form (All Tokens at Once)
 
@@ -321,7 +286,7 @@ if context.is_prefill:
         softmax_scale=1/sqrt(64), causal=True)
 ```
 
-All N tokens' Q, K, V are available (just computed). Computation scales as O(N² × d_k), so GPU SMs are busy with matmuls — **compute is the bottleneck**, not memory bandwidth. The `varlen` suffix means this kernel supports variable-length sequences packed into one flat tensor (multiple prompts concatenated end-to-end). This packing is what enables continuous batching: the engine can add or remove sequences from the batch without padding waste.
+All N tokens' Q,K,V available; compute scales O(N²·d_k) → **compute-bound**. The `varlen` suffix supports variable-length sequences packed into one flat tensor (no padding), enabling continuous batching.
 
 ### Decode — Generate One Token at a Time (Memory-Bound)
 
@@ -336,9 +301,7 @@ else:
         softmax_scale=1/sqrt(64), causal=True)
 ```
 
-Q is only 1 token, but must read all N cached K, V from HBM. Computation = O(N × d_k) — tiny. But memory read = `N × 8 × 64 × 2 × 2 bytes / layer`. For N=4096 across 28 layers → ~224MB per generated token. **Memory bandwidth is the bottleneck**; GPU compute largely idles.
-
-This is why decode optimizations (PagedAttention, speculative decoding, KV compression) all target reducing memory reads. See [[ml-systems/llm-inference-engines]] for the full engine-level prefill/decode lifecycle.
+Q is only 1 token but must read all N cached K,V from HBM. Compute = O(N·d_k) — tiny; N=4096 across 28 layers → ~224MB read per token. **Memory-bandwidth-bound**; GPU compute largely idles. See [[ml-systems/llm-inference-engines]] for the full lifecycle.
 
 ---
 
@@ -356,7 +319,7 @@ def store_kvcache_kernel(key_ptr, ..., slot_mapping_ptr, D):
     tl.store(v_cache_ptr + slot * D, value)
 ```
 
-`slot_mapping` is pre-computed by the CPU scheduler. The GPU does zero address arithmetic — just `cache[slot] = kv`. This is the execution end of PagedAttention's virtual memory system (see [[ml-systems/llm-inference-engines]] for the full paged allocation mechanism and [[ml-systems/gpu-memory-hierarchy]] for why CPU pre-computes addresses).
+`slot_mapping` is pre-computed by the CPU scheduler; the GPU does zero address arithmetic — just `cache[slot] = kv`. See [[ml-systems/llm-inference-engines]] for paged allocation and [[ml-systems/gpu-memory-hierarchy]] for why addresses are CPU-side.
 
 ---
 
