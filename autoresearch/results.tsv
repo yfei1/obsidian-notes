@@ -61,3 +61,4 @@ none	ml-systems/parallelism-strategies.md	Interview Readiness	6	6	failed	Edits c
 none	ml-systems/vllm-weight-loading.md	Conciseness	4	4	failed	Edits could not be applied
 none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
 none	ml-systems/parallelism-strategies.md	Interview Readiness	6	6	failed	Edits could not be applied
+d3c19ed	ml-systems/transformer-model-internals.md	Interview Readiness	4	6	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Interview Readiness (4->6/10)
