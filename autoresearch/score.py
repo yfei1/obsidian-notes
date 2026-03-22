@@ -20,15 +20,15 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
 
 from shared import (
     REPO_ROOT, AUTORESEARCH_DIR, NOTE_DIRS, REQUIRED_SECTIONS,
-    MAX_NOTE_LINES, extract_json_object,
+    MAX_NOTE_LINES, extract_json_object, find_paragraph_overlaps,
+    discover_notes, relative_path, read_note, extract_wikilinks,
 )
+from llm import call_claude as _call_claude
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -206,7 +206,7 @@ def _prepare_content(notes: dict[str, str], dimension: str,
 # Shared helpers (used by score.py and calibrate.py)
 # ---------------------------------------------------------------------------
 
-def _build_scale_text(dimension: str, info: dict) -> str:
+def build_scale_text(dimension: str, info: dict) -> str:
     """Build the common scale preamble for scoring prompts."""
     return (
         f"You are scoring an Obsidian note on the dimension: {dimension}.\n\n"
@@ -218,50 +218,6 @@ def _build_scale_text(dimension: str, info: dict) -> str:
         f"7-8 = Good, minor issues only\n"
         f"9-10 = {info['excellent']}"
     )
-
-
-# Try apple_llm (direct API via floodgate, fast, Apple billing)
-from shared import setup_apple_llm_path
-setup_apple_llm_path()
-try:
-    from apple_llm import claude as _apple_llm_call
-    _USE_APPLE_LLM = True
-except ImportError:
-    _USE_APPLE_LLM = False
-
-
-def _run_claude(prompt: str, timeout: int = 300) -> str | None:
-    """Call Claude. Uses apple_llm (floodgate API) if available, falls back to CLI."""
-    if _USE_APPLE_LLM:
-        try:
-            result = _apple_llm_call(prompt, model="sonnet", timeout=timeout)
-            return result if result else None
-        except Exception as e:
-            print(f"  Warning: apple_llm error: {e}", file=sys.stderr)
-            return None
-
-    # CLI fallback
-    try:
-        result = subprocess.run(
-            ["claude", "--model", "sonnet", "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=timeout,
-            cwd=str(REPO_ROOT),
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            print(f"  Warning: Claude CLI exited {result.returncode}: {stderr or result.stdout.strip()[:200]}", file=sys.stderr)
-            return None
-        output = result.stdout.strip()
-        return output if output else None
-    except subprocess.TimeoutExpired:
-        print("  Warning: Claude CLI timed out", file=sys.stderr)
-        return None
-    except FileNotFoundError:
-        print("  Error: 'claude' CLI not found.", file=sys.stderr)
-        return None
-    except Exception as e:
-        print(f"  Warning: Claude CLI error: {e}", file=sys.stderr)
-        return None
 
 
 
@@ -282,42 +238,8 @@ def _error_result(reason: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
-
-def discover_notes(specific: Optional[str] = None) -> list[Path]:
-    """Find all .md note files in topic directories."""
-    if specific:
-        p = REPO_ROOT / specific
-        if p.exists():
-            return [p]
-        print(f"Warning: {specific} not found", file=sys.stderr)
-        return []
-    notes = []
-    for d in NOTE_DIRS:
-        topic_dir = REPO_ROOT / d
-        if topic_dir.is_dir():
-            notes.extend(sorted(topic_dir.glob("*.md")))
-    return notes
-
-
-def relative_path(note: Path) -> str:
-    """Get path relative to repo root."""
-    return str(note.relative_to(REPO_ROOT))
-
-
-def read_note(note: Path) -> str:
-    """Read note content."""
-    return note.read_text(encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
 # Rule-based scoring (0-10 scale)
 # ---------------------------------------------------------------------------
-
-def extract_wikilinks(content: str) -> list[str]:
-    """Extract all [[wikilink]] targets from content."""
-    return re.findall(r'\[\[([^\]]+)\]\]', content)
 
 
 def score_cross_linking(note: Path, content: str, all_notes: list[Path],
@@ -466,8 +388,6 @@ def score_code_quality(content: str) -> dict:
 def score_uniqueness(note: Path, content: str, all_notes: list[Path],
                      content_cache: dict[str, str] | None = None) -> dict:
     """Score dimension 8: Uniqueness (0-10)."""
-    from shared import find_paragraph_overlaps
-
     # Build target contents (all notes except self)
     target_contents = {}
     for other_note in all_notes:
@@ -554,7 +474,7 @@ def score_with_claude(note_path: str, content: str, dimension: str) -> dict:
 def _score_batch_chunk(notes: dict[str, str], dimension: str) -> dict[str, dict]:
     """Score a chunk of notes on a single dimension in one Claude CLI call."""
     info = SUBJECTIVE_PROMPTS[dimension]
-    preamble = _build_scale_text(dimension, info)
+    preamble = build_scale_text(dimension, info)
 
     note_blocks = []
     for i, (path, content) in enumerate(notes.items(), 1):
@@ -574,7 +494,7 @@ The keys must be the exact note paths shown above:
 {paths_list}
 }}"""
 
-    output = _run_claude(prompt, timeout=600)
+    output = _call_claude(prompt, timeout=600)
     if output is None:
         return {p: _error_result(f"Claude call failed for {dimension}") for p in notes}
 

@@ -14,12 +14,10 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Optional
 
-from shared import extract_json_object, setup_apple_llm_path
+from shared import extract_json_object
+from llm import call_claude
 
 from engine.delta import Op, EditOp
-
-setup_apple_llm_path()
-from apple_llm import claude as apple_llm_call
 
 
 # ---------------------------------------------------------------------------
@@ -359,7 +357,7 @@ def generate_delta(target_path: str, content: str, strategy: Strategy,
     max_tokens = 16384 if strategy.name in ("split", "dedup", "cross_link") else 8192
 
     try:
-        output = apple_llm_call(prompt, model="sonnet", max_tokens=max_tokens, temperature=0.7)
+        output = call_claude(prompt, model="sonnet", max_tokens=max_tokens, temperature=0.7)
     except Exception as e:
         print(f"  LLM call failed for strategy '{strategy.name}': {e}", file=sys.stderr)
         return None

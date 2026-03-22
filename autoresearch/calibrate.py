@@ -16,7 +16,6 @@ Usage:
 """
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -28,7 +27,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from shared import REPO_ROOT, AUTORESEARCH_DIR, extract_json_object
+from shared import REPO_ROOT, AUTORESEARCH_DIR, extract_json_object, discover_notes, relative_path, read_note
+from llm import call_claude
 
 SCORE_PY = AUTORESEARCH_DIR / "score.py"
 
@@ -39,7 +39,6 @@ NUM_SAMPLES = 2  # Score each note this many times
 
 def pick_calibration_notes() -> list[str]:
     """Pick 3 diverse notes for calibration — one from each topic dir if possible."""
-    from score import discover_notes, relative_path
     notes = discover_notes()
     # One per directory, pick middle-length ones
     by_dir: dict[str, list] = {}
@@ -61,13 +60,12 @@ def score_note_on_dim(note_path: str, dimension: str, prompts: dict) -> int:
 
     Returns score (0-10) or ERROR_SCORE (-1) on failure.
     """
-    from score import (read_note, _build_scale_text, _run_claude,
-                       CONTENT_TRUNCATE, ERROR_SCORE)
+    from score import build_scale_text, CONTENT_TRUNCATE, ERROR_SCORE
 
     note_file = REPO_ROOT / note_path
     content = read_note(note_file)
     info = prompts[dimension]
-    preamble = _build_scale_text(dimension, info)
+    preamble = build_scale_text(dimension, info)
 
     prompt = f"""{preamble}
 
@@ -81,7 +79,7 @@ Note content:
 Respond with ONLY valid JSON (no markdown fences, no extra text):
 {{"score": <0-10 integer>, "reason": "<one sentence justification>"}}"""
 
-    output = _run_claude(prompt)
+    output = call_claude(prompt)
     if output is None:
         return ERROR_SCORE
 
@@ -128,8 +126,7 @@ Rewrite ONLY the description to be more precise. Rules:
 
 Respond with ONLY the new description string (no quotes, no JSON, no explanation):"""
 
-    from score import _run_claude
-    output = _run_claude(prompt, timeout=300)
+    output = call_claude(prompt, timeout=300)
     if output is None:
         return None
 
@@ -168,6 +165,90 @@ def update_score_py(dimension: str, new_description: str):
 
 
 # ---------------------------------------------------------------------------
+# Core calibration (shared by main() and improve.py:run_calibration)
+# ---------------------------------------------------------------------------
+
+
+def calibrate_dimension(dim: str, prompts: dict, calibration_notes: list[str]) -> str:
+    """Calibrate a single dimension by measuring variance and rewriting if needed.
+
+    Args:
+        dim: dimension name (must be a key in prompts).
+        prompts: mutable dict of {dim: {description, poor, excellent}}.
+            Updated in-place if the rubric is rewritten.
+        calibration_notes: list of note relative paths to use for testing.
+
+    Returns:
+        "stable" if variance is within threshold,
+        "updated" if rubric was rewritten and score.py was updated,
+        "unchanged" if rewrite was attempted but didn't help.
+    """
+    worst_note = None
+    worst_variance = 0
+    worst_scores = []
+
+    for note_path in calibration_notes:
+        raw_scores = []
+        for i in range(NUM_SAMPLES):
+            s = score_note_on_dim(note_path, dim, prompts)
+            raw_scores.append(s)
+            print(f"    {note_path} run {i+1}: {s}/10")
+
+        scores = [s for s in raw_scores if s >= 0]
+        if len(scores) < 2:
+            continue
+
+        variance = max(scores) - min(scores)
+        if variance > worst_variance:
+            worst_variance = variance
+            worst_note = note_path
+            worst_scores = scores
+
+    if worst_variance <= VARIANCE_THRESHOLD:
+        print(f"  {dim} is stable (spread <= {VARIANCE_THRESHOLD})")
+        return "stable"
+
+    print(f"  {dim} spread={worst_variance} on {worst_note}, rewriting rubric...")
+    time.sleep(RATE_LIMIT_SECONDS)
+
+    note_content = read_note(REPO_ROOT / worst_note)
+    new_desc = rewrite_rubric_description(dim, prompts, worst_note, note_content, worst_scores)
+
+    if new_desc is None:
+        print(f"  Rewrite failed, keeping original")
+        return "unchanged"
+
+    print(f"  Old: {prompts[dim]['description'][:100]}...")
+    print(f"  New: {new_desc[:100]}...")
+
+    # Validate: re-score with new description
+    test_prompts = {k: dict(v) for k, v in prompts.items()}
+    test_prompts[dim]["description"] = new_desc
+
+    print(f"  Validating on {worst_note}...")
+    raw_val_scores = []
+    for i in range(NUM_SAMPLES):
+        s = score_note_on_dim(worst_note, dim, test_prompts)
+        raw_val_scores.append(s)
+        print(f"    Validation run {i+1}: {s}/10")
+
+    val_scores = [s for s in raw_val_scores if s >= 0]
+    if len(val_scores) < 2:
+        print(f"  Validation failed (not enough valid scores)")
+        return "unchanged"
+
+    new_variance = max(val_scores) - min(val_scores)
+    if new_variance < worst_variance:
+        print(f"  Variance improved ({worst_variance} -> {new_variance}), updating score.py")
+        prompts[dim]["description"] = new_desc
+        update_score_py(dim, new_desc)
+        return "updated"
+    else:
+        print(f"  No improvement ({worst_variance} -> {new_variance}), keeping original")
+        return "unchanged"
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -179,7 +260,7 @@ def main():
 
     os.chdir(REPO_ROOT)
 
-    from score import SUBJECTIVE_PROMPTS, SUBJECTIVE_DIMS, read_note
+    from score import SUBJECTIVE_PROMPTS, SUBJECTIVE_DIMS
 
     calibration_notes = pick_calibration_notes()
     dims_to_calibrate = [args.dim] if args.dim else sorted(SUBJECTIVE_DIMS)
@@ -192,7 +273,6 @@ def main():
     print(f"Dimensions: {len(dims_to_calibrate)}")
     print("=" * 60)
 
-    # Track current prompts (mutable copy)
     prompts = {k: dict(v) for k, v in SUBJECTIVE_PROMPTS.items()}
     updated = []
     stable = []
@@ -206,92 +286,30 @@ def main():
         print(f"Calibrating: {dim}")
         print(f"{'='*60}")
 
-        # Score each calibration note NUM_SAMPLES times
-        all_variances = []
-        worst_note = None
-        worst_variance = 0
-        worst_scores = []
-
-        for note_path in calibration_notes:
-            raw_scores = []
-            for i in range(NUM_SAMPLES):
-                s = score_note_on_dim(note_path, dim, prompts)
-                raw_scores.append(s)
-                print(f"  {note_path} run {i+1}: {s}/10")
-
-            scores = [s for s in raw_scores if s >= 0]
-            if len(scores) < 2:
-                print(f"  → skipping (not enough valid scores: {raw_scores})")
-                continue
-
-            variance = max(scores) - min(scores)
-            all_variances.append(variance)
-            print(f"  → spread: {variance} (scores: {scores})")
-
-            if variance > worst_variance:
-                worst_variance = variance
-                worst_note = note_path
-                worst_scores = scores
-
-        if not all_variances:
-            print(f"\n  Skipping {dim} (no valid calibration scores)")
-            continue
-        max_variance = max(all_variances)
-        avg_variance = sum(all_variances) / len(all_variances)
-        print(f"\n  Max spread: {max_variance}, Avg spread: {avg_variance:.1f}")
-
-        if max_variance <= VARIANCE_THRESHOLD:
-            print(f"  ✓ {dim} is stable (max spread ≤ {VARIANCE_THRESHOLD})")
-            stable.append(dim)
-            continue
-
         if args.dry_run:
-            print(f"  ✗ {dim} needs calibration (max spread {max_variance} > {VARIANCE_THRESHOLD})")
-            continue
-
-        # Rewrite the rubric description
-        print(f"\n  Rewriting rubric for {dim} (worst note: {worst_note}, scores: {worst_scores})...")
-        time.sleep(RATE_LIMIT_SECONDS)
-
-        note_content = read_note(REPO_ROOT / worst_note)
-        new_desc = rewrite_rubric_description(dim, prompts, worst_note, note_content, worst_scores)
-
-        if new_desc is None:
-            print(f"  ✗ Rewrite failed, keeping original")
-            continue
-
-        print(f"\n  Old: {prompts[dim]['description'][:100]}...")
-        print(f"  New: {new_desc[:100]}...")
-
-        # Validate: re-score with new description
-        test_prompts = {k: dict(v) for k, v in prompts.items()}
-        test_prompts[dim]["description"] = new_desc
-
-        print(f"\n  Validating new rubric on {worst_note}...")
-        raw_val_scores = []
-        for i in range(NUM_SAMPLES):
-            s = score_note_on_dim(worst_note, dim, test_prompts)
-            raw_val_scores.append(s)
-            print(f"    Validation run {i+1}: {s}/10")
-
-        val_scores = [s for s in raw_val_scores if s >= 0]
-        if len(val_scores) < 2:
-            print(f"  ✗ Validation failed (not enough valid scores: {raw_val_scores})")
-            continue
-
-        new_variance = max(val_scores) - min(val_scores)
-        print(f"  Old spread: {worst_variance}, New spread: {new_variance}")
-
-        if new_variance < worst_variance:
-            # Accept the rewrite
-            print(f"  ✓ Variance improved ({worst_variance} → {new_variance}), updating score.py")
-            prompts[dim]["description"] = new_desc
-            if update_score_py(dim, new_desc):
-                updated.append(dim)
+            # Measure variance without rewriting
+            worst_var = 0
+            for note_path in calibration_notes:
+                raw_scores = []
+                for i in range(NUM_SAMPLES):
+                    s = score_note_on_dim(note_path, dim, prompts)
+                    raw_scores.append(s)
+                    print(f"  {note_path} run {i+1}: {s}/10")
+                scores = [s for s in raw_scores if s >= 0]
+                if len(scores) >= 2:
+                    worst_var = max(worst_var, max(scores) - min(scores))
+            if worst_var <= VARIANCE_THRESHOLD:
+                print(f"  ✓ {dim} is stable (spread ≤ {VARIANCE_THRESHOLD})")
+                stable.append(dim)
             else:
-                print(f"  ✗ Failed to update score.py")
+                print(f"  ✗ {dim} needs calibration (spread {worst_var} > {VARIANCE_THRESHOLD})")
+            continue
+
+        result = calibrate_dimension(dim, prompts, calibration_notes)
+        if result == "updated":
+            updated.append(dim)
         else:
-            print(f"  ✗ Variance did not improve ({worst_variance} → {new_variance}), keeping original")
+            stable.append(dim)
 
     # Summary
     print(f"\n{'='*60}")

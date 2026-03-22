@@ -30,10 +30,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shared import (
     REPO_ROOT, AUTORESEARCH_DIR,
+    NET_ZERO_THRESHOLD, MAX_NOTE_LINES, SHRINKAGE_THRESHOLD,
     git_commit, git_push, git_head_hash,
     fix_bidirectional_links,
+    discover_notes, read_note, relative_path, extract_wikilinks,
+    extract_json_array,
 )
-from score import DIMENSIONS, ERROR_SCORE, _run_claude, DIMENSION_WEIGHTS
+from llm import call_claude
+from score import DIMENSIONS, ERROR_SCORE, DIMENSION_WEIGHTS
 
 RESULTS_TSV = AUTORESEARCH_DIR / "results.tsv"
 SCORES_TSV = AUTORESEARCH_DIR / "scores.tsv"
@@ -54,15 +58,13 @@ DIMENSION_MINIMUMS = {
 
 def load_scores(concurrency: int = 1) -> dict[str, dict[str, dict]]:
     """Score all notes using batched calls (one Claude call per dimension)."""
-    from score import discover_notes, score_all_notes_batched
-
-    all_notes = discover_notes()
-    return score_all_notes_batched(all_notes, concurrency=concurrency)
+    from score import score_all_notes_batched
+    return score_all_notes_batched(discover_notes(), concurrency=concurrency)
 
 
 def score_single_note(note_path: str, concurrency: int = 1) -> dict[str, dict]:
     """Score a single note on all dimensions using full-batch context."""
-    from score import discover_notes, score_all_notes_batched, clear_score_cache
+    from score import score_all_notes_batched, clear_score_cache
 
     all_notes = discover_notes()
     note = REPO_ROOT / note_path
@@ -208,12 +210,12 @@ def improve_note_search_replace(note_path: str, dimension: str, score: int,
     content = note_file.read_text(encoding="utf-8")
     line_count = len(content.split('\n'))
 
-    # Build length budget instruction
+    # Build length budget instruction (check hard cap first, then net-zero)
     length_instruction = ""
-    if line_count > NET_ZERO_THRESHOLD:
-        length_instruction = f"\nIMPORTANT: This note is {line_count} lines (>{NET_ZERO_THRESHOLD}). Your edits MUST NOT increase the line count. Remove at least as many lines as you add."
-    elif line_count > MAX_NOTE_LINES:
+    if line_count > MAX_NOTE_LINES:
         length_instruction = f"\nIMPORTANT: This note is {line_count} lines (>{MAX_NOTE_LINES} hard cap). Your edits MUST reduce the line count significantly."
+    elif line_count > NET_ZERO_THRESHOLD:
+        length_instruction = f"\nIMPORTANT: This note is {line_count} lines (>{NET_ZERO_THRESHOLD}). Your edits MUST NOT increase the line count. Remove at least as many lines as you add."
 
     # Build criteria block for rule-based dimensions
     criteria_block = ""
@@ -223,13 +225,12 @@ def improve_note_search_replace(note_path: str, dimension: str, score: int,
 
     # For Conciseness: give editor the same cross-note context the scorer sees
     if dimension == "Conciseness":
-        from score import extract_wikilinks, discover_notes, read_note as _read_note
         links = extract_wikilinks(content)
         related_tldrs = []
         for link in links[:5]:
             target_path = REPO_ROOT / (link + ".md")
             if target_path.exists():
-                target_content = _read_note(target_path)
+                target_content = read_note(target_path)
                 tldr_match = re.search(r'## TL;DR\n(.*?)(?=\n## |\n---)', target_content, re.DOTALL)
                 if tldr_match:
                     related_tldrs.append(f"  [{link}]: {tldr_match.group(1).strip()[:200]}")
@@ -267,21 +268,15 @@ Respond with ONLY the JSON array (no markdown fences, no explanation):
 [{{"old_text": "...", "new_text": "..."}}, ...]"""
 
     try:
-        output = _run_claude(prompt, timeout=300)
+        output = call_claude(prompt, timeout=300)
 
         if not output or len(output) < 10:
             print("  Warning: Claude returned empty/short output", file=sys.stderr)
             return None
 
-        # Extract JSON array from output
-        json_match = re.search(r'\[.*\]', output, re.DOTALL)
-        if not json_match:
-            print(f"  Warning: No JSON array found in output: {output[:300]}", file=sys.stderr)
-            return None
-
-        edits = json.loads(json_match.group())
-        if not isinstance(edits, list) or len(edits) == 0:
-            print("  Warning: Empty or invalid edit list", file=sys.stderr)
+        edits = extract_json_array(output)
+        if not edits:
+            print(f"  Warning: No valid JSON array in output: {output[:300]}", file=sys.stderr)
             return None
 
         # Validate edit structure
@@ -339,7 +334,6 @@ def apply_search_replace_edits(note_path: str, edits: list[dict]) -> str | None:
         return None
 
     # Validate via unified gate system
-    from score import discover_notes, relative_path
     all_note_paths = [relative_path(n) for n in discover_notes()]
     gate_result = check_all_gates(original_content, content, note_path, all_note_paths)
     if not gate_result.passed:
@@ -365,8 +359,13 @@ def log_result(commit: str, note: str, dimension: str, before: int, after: int, 
 
 
 def check_regression(old_scores: dict[str, dict], new_scores: dict[str, dict], target_dim: str) -> list[str]:
-    """Check if any dimension regressed beyond threshold."""
+    """Check if any dimension regressed beyond threshold.
+
+    Also checks total regression budget (MAX_TOTAL_REGRESSION).
+    Returns list of regression descriptions (empty = no regressions).
+    """
     regressed = []
+    total_regression = 0
     for dim in DIMENSIONS:
         if dim == target_dim:
             continue
@@ -375,8 +374,13 @@ def check_regression(old_scores: dict[str, dict], new_scores: dict[str, dict], t
         if new_s < 0:
             regressed.append(f"{dim}: {old_s}->ERROR")
             continue
-        if old_s >= 0 and new_s >= 0 and (old_s - new_s) > REGRESSION_THRESHOLD:
-            regressed.append(f"{dim}: {old_s}->{new_s}")
+        if old_s >= 0 and new_s >= 0:
+            if (old_s - new_s) > REGRESSION_THRESHOLD:
+                regressed.append(f"{dim}: {old_s}->{new_s}")
+            if old_s > new_s:
+                total_regression += (old_s - new_s)
+    if total_regression > MAX_TOTAL_REGRESSION:
+        regressed.append(f"total regression {total_regression} > {MAX_TOTAL_REGRESSION}")
     return regressed
 
 
@@ -386,7 +390,7 @@ def check_regression(old_scores: dict[str, dict], new_scores: dict[str, dict], t
 
 def find_noisiest_dims(discard_log: list[dict], top_n: int = 2) -> list[str]:
     """Find dimensions that caused the most discards due to regression."""
-    from score import SUBJECTIVE_DIMS
+    from score import SUBJECTIVE_DIMS  # set of dim names, stays in score
 
     dim_discard_count: dict[str, int] = {}
     for entry in discard_log:
@@ -403,89 +407,35 @@ def find_noisiest_dims(discard_log: list[dict], top_n: int = 2) -> list[str]:
     return [dim for dim, _ in ranked[:top_n]]
 
 
-def run_calibration(discard_log: list[dict]):
-    """Run rubric calibration on the noisiest dimensions."""
+def run_calibration(discard_log: list[dict]) -> bool:
+    """Run rubric calibration on the noisiest dimensions.
+
+    Delegates to calibrate.calibrate_dimension() for the actual work.
+    Returns True if any dimension was updated (caller should reload score module).
+    """
     noisy_dims = find_noisiest_dims(discard_log, top_n=2)
     if not noisy_dims:
         print("\n  [Calibrate] No noisy dimensions found, skipping calibration")
-        return
+        return False
 
     print(f"\n{'='*60}")
     print(f"[Calibrate] Running rubric calibration on: {noisy_dims}")
     print(f"{'='*60}")
 
-    from calibrate import (
-        pick_calibration_notes, score_note_on_dim, rewrite_rubric_description,
-        update_score_py, VARIANCE_THRESHOLD, NUM_SAMPLES
-    )
-    from score import SUBJECTIVE_PROMPTS, read_note
+    from calibrate import calibrate_dimension, pick_calibration_notes
+    from score import SUBJECTIVE_PROMPTS
 
     calibration_notes = pick_calibration_notes()
     prompts = {k: dict(v) for k, v in SUBJECTIVE_PROMPTS.items()}
 
+    any_updated = False
     for dim in noisy_dims:
         if dim not in prompts:
             continue
-
         print(f"\n  Calibrating: {dim}")
-
-        worst_note = None
-        worst_variance = 0
-        worst_scores = []
-
-        for note_path in calibration_notes:
-            raw_scores = []
-            for i in range(NUM_SAMPLES):
-                s = score_note_on_dim(note_path, dim, prompts)
-                raw_scores.append(s)
-                print(f"    {note_path} run {i+1}: {s}/10")
-
-            scores = [s for s in raw_scores if s >= 0]
-            if len(scores) < 2:
-                print(f"    Skipping (not enough valid scores: {raw_scores})")
-                continue
-
-            variance = max(scores) - min(scores)
-            if variance > worst_variance:
-                worst_variance = variance
-                worst_note = note_path
-                worst_scores = scores
-
-        if worst_variance <= VARIANCE_THRESHOLD:
-            print(f"  {dim} is stable (spread <= {VARIANCE_THRESHOLD})")
-            continue
-
-        print(f"  {dim} spread={worst_variance} on {worst_note}, rewriting rubric...")
-
-        note_content = read_note(REPO_ROOT / worst_note)
-        new_desc = rewrite_rubric_description(dim, prompts, worst_note, note_content, worst_scores)
-
-        if new_desc is None:
-            print(f"  Rewrite failed, keeping original")
-            continue
-
-        # Validate
-        test_prompts = {k: dict(v) for k, v in prompts.items()}
-        test_prompts[dim]["description"] = new_desc
-
-        raw_val_scores = []
-        for i in range(NUM_SAMPLES):
-            s = score_note_on_dim(worst_note, dim, test_prompts)
-            raw_val_scores.append(s)
-            print(f"    Validation run {i+1}: {s}/10")
-
-        val_scores = [s for s in raw_val_scores if s >= 0]
-        if len(val_scores) < 2:
-            print(f"  Validation failed (not enough valid scores: {raw_val_scores})")
-            continue
-
-        new_variance = max(val_scores) - min(val_scores)
-        if new_variance < worst_variance:
-            print(f"  Variance improved ({worst_variance} -> {new_variance}), updating score.py")
-            prompts[dim]["description"] = new_desc
-            update_score_py(dim, new_desc)
-        else:
-            print(f"  No improvement ({worst_variance} -> {new_variance}), keeping original")
+        if calibrate_dimension(dim, prompts, calibration_notes) == "updated":
+            any_updated = True
+    return any_updated
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +459,6 @@ def main():
     # --- Bidirectional link fixer pre-pass ---
     print("=" * 60)
     print("[Pre-pass] Fixing bidirectional links...")
-    from score import discover_notes
     all_notes = discover_notes()
     link_fixes = fix_bidirectional_links(all_notes)
     if link_fixes > 0:
@@ -558,12 +507,16 @@ def main():
 
         # Periodic calibration: every CALIBRATE_EVERY iterations (after the first)
         if iteration > 1 and (iteration - 1) % CALIBRATE_EVERY == 0 and not args.dry_run:
-            run_calibration(discard_log)
-            # Reload score module to pick up rubric changes and clear score cache
-            if "score" in sys.modules:
-                del sys.modules["score"]
-            global DIMENSIONS, ERROR_SCORE, _run_claude, DIMENSION_WEIGHTS
-            from score import DIMENSIONS, ERROR_SCORE, _run_claude, DIMENSION_WEIGHTS
+            updated = run_calibration(discard_log)
+            if updated:
+                # Reload score module to pick up rubric changes written to disk
+                import importlib
+                import score as _score_mod
+                importlib.reload(_score_mod)
+                from score import clear_score_cache
+                clear_score_cache()
+                global DIMENSIONS, ERROR_SCORE, DIMENSION_WEIGHTS
+                from score import DIMENSIONS, ERROR_SCORE, DIMENSION_WEIGHTS
 
         # Step 1: Score all notes
         print("\n[Step 1] Scoring all notes...")
@@ -654,7 +607,7 @@ def main():
 
         # Step 6: ONE re-score for all applied edits (all on disk, different files)
         print(f"\n[Step 4] Re-scoring {len(applied)} target(s) in one batch...")
-        from score import discover_notes, score_all_notes_batched, clear_score_cache
+        from score import score_all_notes_batched, clear_score_cache
         clear_score_cache()
         all_new_scores = score_all_notes_batched(discover_notes(), concurrency=args.concurrency)
 
@@ -668,18 +621,6 @@ def main():
             dim_attempts[dimension] = dim_attempts.get(dimension, 0) + 1
 
             regressed = check_regression(old_note_scores, new_scores, dimension)
-
-            total_regression = 0
-            for dim in DIMENSIONS:
-                if dim == dimension:
-                    continue
-                old_s = old_note_scores.get(dim, {}).get("score", ERROR_SCORE)
-                new_s = new_scores.get(dim, {}).get("score", ERROR_SCORE)
-                if old_s >= 0 and new_s >= 0 and old_s > new_s:
-                    total_regression += (old_s - new_s)
-
-            if total_regression > MAX_TOTAL_REGRESSION:
-                regressed.append(f"total regression {total_regression} > {MAX_TOTAL_REGRESSION}")
 
             if score_after > score_before and not regressed:
                 commit_msg = f"autoresearch: improve {t_note} on {dimension} ({score_before}->{score_after}/10)"
@@ -728,17 +669,6 @@ def main():
                             retry_scores = retry_all_scores.get(t_note, {})
                             retry_score_after = retry_scores.get(dimension, {}).get("score", 0)
                             retry_regressed = check_regression(old_note_scores, retry_scores, dimension)
-
-                            retry_total_reg = 0
-                            for dim in DIMENSIONS:
-                                if dim == dimension:
-                                    continue
-                                old_s = old_note_scores.get(dim, {}).get("score", ERROR_SCORE)
-                                new_s = retry_scores.get(dim, {}).get("score", ERROR_SCORE)
-                                if old_s >= 0 and new_s >= 0 and old_s > new_s:
-                                    retry_total_reg += (old_s - new_s)
-                            if retry_total_reg > MAX_TOTAL_REGRESSION:
-                                retry_regressed.append(f"total regression {retry_total_reg} > {MAX_TOTAL_REGRESSION}")
 
                             if retry_score_after > score_before and not retry_regressed:
                                 commit_msg = f"autoresearch: improve {t_note} on {dimension} ({score_before}->{retry_score_after}/10, retry)"

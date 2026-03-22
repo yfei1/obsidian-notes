@@ -8,23 +8,28 @@ The loop never knows what kind of change was made — it just executes Ops.
 
 import argparse
 import os
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 
-from shared import REPO_ROOT, AUTORESEARCH_DIR, git_commit, git_push, git_head_hash, fix_bidirectional_links
+from shared import (
+    REPO_ROOT, AUTORESEARCH_DIR, git_commit, git_push, git_head_hash,
+    fix_bidirectional_links, discover_notes, read_note, relative_path,
+)
 from engine.delta import Delta, Op
 from engine.grpo import grpo_rank, IDENTITY_ID
 from engine.strategies import (
     NOTE_STRATEGIES, SPLIT_STRATEGY, DEDUP_STRATEGY,
     SPLIT_LINE_THRESHOLD, select_strategies, generate_delta,
 )
-from engine.overlap import detect_overlaps, Overlap
+from shared import detect_overlaps, Overlap
 from engine.gates import check_all_gates
 from engine.health import check_health
 from engine.state import (
     AttemptRecord, append_history, load_history, save_generation_metadata,
 )
 from judges.ensemble import default_ensemble
-from score import discover_notes, read_note, relative_path, score_rule_based
+from score import score_rule_based
 
 # ---------------------------------------------------------------------------
 # Configuration

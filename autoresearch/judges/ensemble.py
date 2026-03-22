@@ -1,9 +1,7 @@
+import sys
 from dataclasses import dataclass
 
-from shared import setup_apple_llm_path
-
-setup_apple_llm_path()
-from apple_llm import claude as claude_call, gemini as gemini_call
+from llm import call_claude, call_gemini
 
 
 @dataclass
@@ -15,18 +13,17 @@ class Judge:
     description: str = ""
 
     def rank_call(self, prompt: str) -> str | None:
-        """Execute ranking via apple_llm (supports both Claude and Gemini)."""
+        """Execute ranking via centralized LLM layer (supports Claude and Gemini)."""
         full_prompt = prompt
         if self.persona:
             full_prompt = f"You are a {self.persona}.\n\n{prompt}"
         try:
             if self.provider == "gemini":
-                result = gemini_call(full_prompt, model=self.model, timeout=300)
+                return call_gemini(full_prompt, model=self.model, timeout=300)
             else:
-                result = claude_call(full_prompt, model=self.model, timeout=300)
-            return result if result else None
+                return call_claude(full_prompt, model=self.model, timeout=300)
         except Exception as e:
-            print(f"  Warning: Judge {self.id} failed: {e}")
+            print(f"  Warning: Judge {self.id} failed: {e}", file=sys.stderr)
             return None
 
 

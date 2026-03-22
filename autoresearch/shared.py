@@ -1,14 +1,15 @@
 """
-autoresearch.shared — Single source of truth for paths, thresholds, git, and cross-file helpers.
+autoresearch.shared — Single source of truth for paths, thresholds, note I/O, git, and cross-file helpers.
 
-Eliminates duplication of REPO_ROOT (5 files), git utilities (3 copies),
-fix_bidirectional_links (2 copies), and JSON extraction (3 copies).
+Centralizes: paths, quality thresholds, note discovery/reading, git utilities,
+bidirectional link fixing, JSON extraction, and overlap detection.
 """
 
 import json
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -29,6 +30,45 @@ BULLET_LOSS_THRESHOLD = 0.70     # Must retain >= 70% of bullet/list items
 MAX_NOTE_LINES = 450             # Hard line limit
 NET_ZERO_THRESHOLD = 300         # Notes above this must be net-zero or shrink
 REQUIRED_SECTIONS = ["TL;DR", "See Also"]  # Base names; consumers add "## " prefix
+
+# ---------------------------------------------------------------------------
+# Note I/O (used by all modules — lives here to avoid circular deps)
+# ---------------------------------------------------------------------------
+
+
+def discover_notes(specific: str | None = None) -> list[Path]:
+    """Find all .md note files in topic directories."""
+    if specific:
+        p = REPO_ROOT / specific
+        if p.exists():
+            return [p]
+        print(f"Warning: {specific} not found", file=sys.stderr)
+        return []
+    notes = []
+    for d in NOTE_DIRS:
+        topic_dir = REPO_ROOT / d
+        if topic_dir.is_dir():
+            notes.extend(sorted(topic_dir.glob("*.md")))
+    return notes
+
+
+def relative_path(note: Path) -> str:
+    """Get path relative to repo root."""
+    return str(note.relative_to(REPO_ROOT))
+
+
+def read_note(note: Path) -> str:
+    """Read note content."""
+    return note.read_text(encoding="utf-8")
+
+
+def extract_wikilinks(content: str) -> list[str]:
+    """Extract all [[wikilink]] targets from content.
+
+    Handles piped syntax: [[target|display text]] returns just 'target'.
+    """
+    return re.findall(r'\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]', content)
+
 
 # ---------------------------------------------------------------------------
 # Git utilities
@@ -95,21 +135,25 @@ def extract_json_object(output: str) -> dict | None:
         return None
 
 
+def extract_json_array(output: str) -> list | None:
+    """Extract the outermost JSON array from LLM output.
+
+    Handles markdown fences and surrounding text.
+    """
+    cleaned = strip_markdown_fences(output)
+    first = cleaned.find('[')
+    last = cleaned.rfind(']')
+    if first == -1 or last == -1 or last <= first:
+        return None
+    try:
+        result = json.loads(cleaned[first:last + 1])
+        return result if isinstance(result, list) else None
+    except json.JSONDecodeError:
+        return None
+
+
 # ---------------------------------------------------------------------------
-# apple_llm import helper
-# ---------------------------------------------------------------------------
-
-_APPLE_LLM_PATH = str(REPO_ROOT.parent)
-
-
-def setup_apple_llm_path():
-    """Add apple_llm parent directory to sys.path (idempotent)."""
-    if _APPLE_LLM_PATH not in sys.path:
-        sys.path.insert(0, _APPLE_LLM_PATH)
-
-
-# ---------------------------------------------------------------------------
-# Overlap detection (shared between score.py and engine/overlap.py)
+# Overlap detection
 # ---------------------------------------------------------------------------
 
 
@@ -169,6 +213,48 @@ def find_paragraph_overlaps(
     return overlaps
 
 
+@dataclass
+class Overlap:
+    """A detected content overlap between two notes."""
+    source_path: str           # note with the duplicate content
+    canonical_path: str        # note that should be the canonical home
+    source_preview: str        # preview of the overlapping paragraph in source
+    canonical_preview: str     # preview of the matching content in canonical
+    overlap_ratio: float       # 0-1, how much overlap
+
+
+def detect_overlaps(
+    file_contents: dict[str, str],
+    threshold: float = 0.7,
+    min_paragraph_len: int = 100,
+) -> list[Overlap]:
+    """Detect paragraph-level content overlaps across all notes.
+
+    Pairwise comparison using find_paragraph_overlaps, returning typed Overlap objects
+    sorted by overlap ratio descending.
+    """
+    overlaps = []
+    paths = sorted(file_contents.keys())
+
+    for i, source_path in enumerate(paths):
+        target_contents = {p: file_contents[p] for p in paths[i + 1:]}
+        raw = find_paragraph_overlaps(
+            file_contents[source_path], target_contents,
+            threshold=threshold, min_paragraph_len=min_paragraph_len,
+        )
+        for target_path, ratio, src_preview, tgt_preview in raw:
+            overlaps.append(Overlap(
+                source_path=source_path,
+                canonical_path=target_path,
+                source_preview=src_preview,
+                canonical_preview=tgt_preview,
+                overlap_ratio=ratio,
+            ))
+
+    overlaps.sort(key=lambda o: o.overlap_ratio, reverse=True)
+    return overlaps
+
+
 # ---------------------------------------------------------------------------
 # Bidirectional link fixer
 # ---------------------------------------------------------------------------
@@ -180,9 +266,6 @@ def fix_bidirectional_links(all_notes: list[Path]) -> int:
     For each [[target]] in note A, ensure target has [[A]] in its See Also.
     Returns number of fixes applied.
     """
-    # Lazy import to avoid circular dependency (score.py imports from shared)
-    from score import extract_wikilinks, relative_path, read_note
-
     fixes = 0
     note_contents: dict[str, str] = {}
     note_paths: dict[str, Path] = {}

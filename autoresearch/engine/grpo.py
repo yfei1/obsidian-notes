@@ -7,13 +7,11 @@ produces a final ranking and per-delta advantage scores.
 """
 
 import random
+import sys
 from dataclasses import dataclass, field
 from typing import Optional
 
-from shared import extract_json_object, setup_apple_llm_path
-
-setup_apple_llm_path()
-from apple_llm import claude as apple_llm_call
+from shared import extract_json_object
 
 from engine.delta import Delta
 
