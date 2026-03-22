@@ -4,17 +4,12 @@
 
 ## TL;DR
 
-vLLM loads model weights via a `load_weights()` method on each model class. The method iterates checkpoint tensors, **remaps names** from the checkpoint's naming convention to the model's PyTorch parameter names, then delegates actual data copying to each parameter's `weight_loader` method. The `weight_loader` is a vLLM convention (not PyTorch) that handles tensor parallelism sharding transparently — the same `load_weights()` code works for TP=1 and TP=8 without changes.
+vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pairs → **remap names** (checkpoint convention → PyTorch module hierarchy) → call each parameter's `weight_loader` (vLLM convention, not PyTorch) which handles TP sharding transparently. Same code works for TP=1 and TP=8.
 
-## Interview Talking Points
-
-1. **What is weight loading?** Moving trained parameters from checkpoint files on disk into the live PyTorch model in GPU memory. vLLM's `load_weights()` is the entry point: it iterates `(name, tensor)` pairs from safetensors shards and populates every `nn.Parameter` in the model.
-
-2. **Why name remapping?** Checkpoint authors (JAX/Flax/custom trainers) use their own naming conventions; vLLM models use PyTorch module-hierarchy names. The same tensor is `transformer.tamm_model.layers.segment_0.layer_0.attention.qkv_transform.fused_linear.weight` in the checkpoint and `model.layers.0.self_attn.qkv_proj.weight` in the model. `load_weights()` bridges this gap via regex + suffix-map translation before any data is copied.
-
-3. **How does `weight_loader` work?** It is a vLLM-specific callable monkey-patched onto each `nn.Parameter` during `__init__`. Instead of `param.data.copy_(tensor)`, you call `weight_loader(param, tensor)`. Each parallel layer type attaches its own implementation (`QKVParallelLinear._load_fused_qkv`, etc.). Parameters without a custom loader fall through to `default_weight_loader`, which is just `param.data.copy_()`. This indirection means `load_weights()` never contains any TP-aware logic itself.
-
-4. **TP sharding: how it works end-to-end.** When TP=8, each rank holds only 1/8 of each parallel weight. The `weight_loader` on each rank receives the *full* checkpoint tensor and slices out its own shard: `ColumnParallelLinear` slices output-dim rows, `RowParallelLinear` slices input-dim columns, `QKVParallelLinear` splits Q/K/V then shards each. Because sharding is inside `weight_loader`, the outer `load_weights()` loop is identical for TP=1 and TP=8 — no conditional logic needed.
+**Interview talking points:**
+- **Name remapping**: checkpoint authors use their own conventions; `load_weights()` bridges via regex + suffix-map (e.g. `transformer.tamm_model.layers.segment_0.layer_0.attention.qkv_transform.fused_linear.weight` → `model.layers.0.self_attn.qkv_proj.weight`).
+- **`weight_loader`**: monkey-patched onto each `nn.Parameter` during `__init__`; `QKVParallelLinear`, `ColumnParallelLinear`, `RowParallelLinear` each attach their own shard logic; non-parallel params fall through to `default_weight_loader` (`param.data.copy_()`).
+- **TP sharding**: each rank's `weight_loader` receives the full tensor and slices its shard — outer loop has zero TP-aware logic.
 
 ---
 ---
@@ -55,7 +50,7 @@ params_dict = dict(self.named_parameters())
 # {"model.layers.0.self_attn.qkv_proj.weight": Parameter([2304, 2048]), ...}
 ```
 
-`named_parameters()` is a built-in PyTorch method on `nn.Module`. It recursively walks the module tree and yields `(name, Parameter)` pairs. The names are dot-separated paths reflecting the module hierarchy: `self.model.layers[0].self_attn.qkv_proj.weight` becomes `"model.layers.0.self_attn.qkv_proj.weight"`.
+`named_parameters()` recursively walks the module tree; dot-separated paths reflect the hierarchy.
 
 ### Step 2: Remap Each Checkpoint Name
 
@@ -101,15 +96,7 @@ weight_loader = getattr(param, "weight_loader", default_weight_loader)
 weight_loader(param, tensor)
 ```
 
-This is the critical part. `weight_loader` is **not** a PyTorch concept — it's a vLLM convention. During `__init__`, vLLM's parallel linear layers monkey-patch a custom `weight_loader` method onto their parameter tensors:
-
-```python
-# Inside QKVParallelLinear.__init__():
-self.weight = Parameter(torch.empty(q_size + 2*kv_size, hidden_size))
-self.weight.weight_loader = self._load_fused_qkv  # vLLM attaches this
-```
-
-Each layer type's `weight_loader` knows how to handle tensor parallelism:
+`weight_loader` is a vLLM convention (not PyTorch) — monkey-patched onto each `nn.Parameter` during `__init__`. Each layer type's implementation handles TP sharding:
 
 | Layer Type | What weight_loader Does |
 |---|---|
@@ -119,9 +106,7 @@ Each layer type's `weight_loader` knows how to handle tensor parallelism:
 | `VocabParallelEmbedding` | Slice vocab dimension by TP rank |
 | `RMSNorm` | No sharding — just copy (falls through to `default_weight_loader`) |
 
-`default_weight_loader` is the fallback — it does `param.data.copy_(tensor)` with no sharding. Parameters without a custom `weight_loader` (like norm weights) use this path.
-
-**Key insight**: `load_weights()` doesn't need to know about tensor parallelism at all. The sharding logic is encapsulated in each parameter's `weight_loader`. The same code works identically for TP=1 and TP=8.
+`default_weight_loader` (fallback) does `param.data.copy_(tensor)` — used by norms and other non-parallel params. The outer `load_weights()` loop is TP-agnostic.
 
 ---
 

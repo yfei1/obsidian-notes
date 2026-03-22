@@ -381,25 +381,25 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 
 ---
 
-## Interview Talking Points
+## Interview Questions
 
-1. **"Walk me through a decoder layer."** — Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+1. **Walk me through a decoder layer.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
 
-2. **"What is GQA?"** — Fewer KV heads than Q heads (8 vs 16). Multiple Q heads share one KV head. Cuts KV cache memory proportionally with minimal quality loss.
+2. **Explain GQA and its memory benefit.** Fewer KV heads than Q heads (8 vs 16 here). Multiple Q heads share one KV head. KV cache reduction factor = `num_kv_heads / num_q_heads` (0.5× here, 8× for Llama 3 70B with 8 KV heads / 64 Q heads). Minimal quality loss empirically.
 
-3. **"What is RoPE?"** — Rotary Position Embedding. Rotates Q/K by position-dependent angles. Each dimension pair rotates at a different frequency. After rotation, dot products depend only on relative position (m-n). V is not rotated.
+3. **RMSNorm vs LayerNorm trade-offs.** RMSNorm drops mean subtraction and the β parameter — ablations show re-centering is unnecessary for Transformers. Result: ~10–15% faster, same quality. LayerNorm has γ+β; RMSNorm has γ only.
 
-4. **"Why multiple RoPE frequencies?"** — Like clock hands: fast frequencies distinguish nearby tokens, slow frequencies distinguish far-apart tokens. The base (1M) controls the spectrum.
+4. **Why does Qwen3 add Q/K norm but not V norm?** Q and K participate in `QKᵀ / √d_k` — large magnitudes explode attention scores, saturating softmax and killing gradients. V is only weighted-summed; its magnitude doesn't affect score sharpness. Normalizing V would erase useful semantic magnitude for free.
 
-5. **"What is SwiGLU?"** — Gated MLP: `W_down(SiLU(W_gate(x)) * W_up(x))`. Gate learns to filter, up learns to represent. SiLU is smooth (unlike ReLU's hard cutoff), preventing dying neurons.
+5. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each dimension pair rotates at a different base frequency `θᵢ = base^(−2i/d)`. Like clock hands: fast frequencies distinguish nearby tokens, slow frequencies distinguish far-apart tokens. Zero extra parameters. V is not rotated.
 
-6. **"Why fuse QKV / gate+up?"** — One large matmul is more efficient than multiple small ones on a GPU (better Tensor Core utilization, fewer kernel launches).
+6. **What is SwiGLU and why does it outperform ReLU MLP?** `W_down(SiLU(W_gate(x)) * W_up(x))`. Gate learns to filter, up learns to represent — decoupled projections. SiLU has non-zero gradient everywhere (minimum ≈ −0.28 at x≈−1.28), preventing dying neurons that plague ReLU at scale. Parameter count stays equal by using `intermediate = 8d/3 ≈ 2.67d` instead of 4d.
 
-7. **"How does weight tying work?"** — Embedding and LM head share the same weight. During training, gradients from both ends accumulate into one gradient tensor. Saves parameters and enforces geometric consistency: the vector that *represents* token T as input is the same vector used to *detect* token T as output — the model cannot learn different geometries for embedding vs prediction.
+7. **Why fuse QKV / gate+up into one matmul?** One large matmul is more efficient than two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation.
 
-8. **"What's the residual pattern?"** — Fused add+norm: RMSNorm first adds previous output to running residual, saves un-normalized sum, then normalizes. Compiles to single kernel, preserves clean gradient path.
+8. **Explain the TP communication pattern per decoder layer.** Megatron Column→Row pattern: ColumnParallel (QKV, gate+up) needs zero communication — each GPU independently computes its output slice. RowParallel (o_proj, down_proj) needs one all_reduce to sum partial results. Total: **2 all_reduces per layer**.
 
-9. **"Embedding and LM head share weights — why different implementations?"** — They do opposite operations: embedding is a row lookup (`weight[token_id]`), LM head is a matmul (`hidden @ weight.T`). On multi-GPU: embedding uses `all_reduce` (sum) because only one GPU has the real embedding, others contribute zeros. LM head uses `gather + concat` because each GPU computes logits for a different vocabulary slice — summing them would mix scores for unrelated tokens.
+9. **Embedding and LM head share weights — why different collective ops on multi-GPU?** Embedding uses `all_reduce` (sum) because only one GPU has the real embedding row, others contribute zeros. LM head uses `gather + concat` because each GPU computes logits for a different vocabulary slice — summing would mix scores for unrelated tokens.
 
 ---
 

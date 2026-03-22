@@ -56,3 +56,8 @@ none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded
 none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	failed	Edits could not be applied
 none	ml-systems/parallelism-strategies.md	Conciseness	5	5	failed	Edits could not be applied
 none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+39faed4	ml-systems/vllm-model-integration.md	Interview Readiness	7	8	kept	autoresearch: improve ml-systems/vllm-model-integration.md on Interview Readiness (7->8/10, retry)
+none	ml-systems/parallelism-strategies.md	Interview Readiness	6	6	failed	Edits could not be applied
+none	ml-systems/vllm-weight-loading.md	Conciseness	4	4	failed	Edits could not be applied
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/parallelism-strategies.md	Interview Readiness	6	6	failed	Edits could not be applied
