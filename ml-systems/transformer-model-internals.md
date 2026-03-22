@@ -381,17 +381,25 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 
 ---
 
-## Interview Talking Points
+## Interview Questions
 
-1. **Explain how you'd decide between GQA, MQA, and MHA for a new model.** KV cache memory scales as `2 × num_kv_heads × head_dim × layers × seq_len × bytes`. MQA (1 KV head) gives maximum memory savings but risks attention quality collapse — all Q heads compete for one KV representation. GQA is the practical middle ground: Qwen3 uses 8 KV / 16 Q (0.5× KV cache vs MHA); Llama 3 70B uses 8 KV / 64 Q (8× reduction). Choose based on memory budget vs quality ablations; MHA is only justified when memory is not a bottleneck.
+1. **Walk me through a decoder layer.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
 
-2. **Why did Qwen3 add per-head Q/K RMSNorm, and what problem does it solve?** QKV projection produces heads with heterogeneous L2 norms. One high-magnitude head can dominate `QKᵀ / √d_k` scores, saturating softmax and collapsing gradients (attention collapse). Per-head norm pins each head to unit scale before RoPE, ensuring all heads compete fairly. V is not normalized because it is weighted-summed, not dot-producted — its magnitude affects semantic richness, not score sharpness.
+2. **GQA vs MHA — trade-offs.** MHA: `num_q_heads == num_kv_heads` (16/16 here if full). GQA: fewer KV heads (8 here), multiple Q heads share one KV head. KV cache shrinks by `num_kv_heads / num_q_heads` — 0.5× here, 8× for Llama 3 70B. Quality loss is minimal: KV heads still carry full `head_dim=64` information. MQA (1 KV head) is the extreme; GQA is the generalisation. Decode throughput improves because KV cache memory bandwidth is the bottleneck.
 
-3. **Walk through the decision to use SwiGLU over ReLU FFN, including the parameter count trade-off.** SwiGLU uses 3 weight matrices (gate, up, down) vs ReLU's 2. To match original 4× parameter count: `3 × d × I = 2 × d × 4d` → `I = 8d/3 ≈ 2.67d`. SiLU has non-zero gradient everywhere (minimum ≈ −0.28), eliminating dying neurons. Decoupled gate/content paths let the model independently learn *whether* and *what* to activate — empirically improves perplexity at scale.
+3. **RMSNorm vs LayerNorm — trade-offs and why RMSNorm won.** RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary — residual stream has near-zero mean at init. Result: ~10–15% faster, same quality. LayerNorm has γ+β (2× hidden_dim params); RMSNorm has γ only. Pre-Norm placement keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
 
-4. **Explain the Column→Row tensor parallelism pattern and why it needs exactly 2 all_reduces per layer.** ColumnParallel (QKV, gate+up) shards the output dimension — each GPU computes its slice independently, zero communication. RowParallel (o_proj, down_proj) shards the input dimension — each GPU produces a partial sum, requiring one `all_reduce` to reconstruct the full output. Attention contributes 1 all_reduce (o_proj), MLP contributes 1 (down_proj) = **2 total per layer**. ColumnParallel requires no sync because `Y_i = X @ W_i` produces a correct partial output slice without needing other GPUs' results.
+4. **Why Q/K norm but not V norm in Qwen3?** Q and K participate in `QKᵀ / √d_k` — large L2 norm explodes scores, saturates softmax, zeros gradients (attention collapse). V is only weighted-summed; its magnitude doesn't affect score sharpness. Normalizing V destroys semantic magnitude for no benefit.
 
-5. **Why do embedding and LM head use different collective operations despite sharing the same weight matrix?** Embedding uses `all_reduce` (sum): for a given token ID, only one GPU holds the real embedding row — others contribute zeros, so summing reconstructs the correct vector. LM head uses `gather + concat`: each GPU computes logits for a different vocabulary slice — summing would add scores for *different* tokens together, corrupting the distribution. Same weight, opposite communication pattern because the operation direction is transposed (lookup vs projection).
+5. **SwiGLU mechanics and why it outperforms ReLU FFN.** `output = W_down( SiLU(W_gate(x)) × W_up(x) )`. Gate learns *whether* a feature fires, up learns *what* it is. SiLU has non-zero gradient everywhere (min ≈ −0.28), eliminating dying neurons. To match original 4× FFN parameter count (2 matrices), SwiGLU uses 3 matrices at `intermediate = 8d/3 ≈ 2.67d`; Qwen3 rounds to 3×. SiLU and element-wise multiply are per-element, so TP sharding is trivially correct.
+
+6. **Explain the TP Column→Row pattern and communication cost.** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication. RowParallel (o_proj, down_proj): partial sums recombined via one `all_reduce`. Total: **2 all_reduces per decoder layer**.
+
+7. **Why fuse QKV / gate+up into one matmul?** One large matmul beats two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation. `SiluAndMul` fuses chunk + SiLU + multiply into a single compiled kernel.
+
+8. **Embedding vs LM head: same weights, different collective ops — why?** Embedding uses `all_reduce` (sum): only one GPU has the real embedding per token, others contribute zeros. LM head uses `gather + concat`: each GPU computes logits for its vocab slice — summing would mix scores for *different* tokens.
+
+9. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each `d/2` pair rotates at `θᵢ = base^(−2i/d)`. Fast frequencies distinguish nearby tokens; slow frequencies distinguish distant ones. Zero extra parameters; V is not rotated.
 
 ---
 

@@ -70,3 +70,9 @@ f0c7a08	ml-systems/transformer-model-internals.md	Interview Readiness	6	7	kept	a
 none	ml-systems/parallelism-strategies.md	Conciseness	5	5	failed	Edits could not be applied
 none	ml-systems/vllm-weight-loading.md	Interview Readiness	7	7	failed	Edits could not be applied
 878169b	ml-systems/attention-mechanics.md	Interview Readiness	4	6	kept	autoresearch: improve ml-systems/attention-mechanics.md on Interview Readiness (4->6/10)
+8500e59	ml-systems/vllm-weight-loading.md	Conciseness	5	6	kept	autoresearch: improve ml-systems/vllm-weight-loading.md on Conciseness (5->6/10)
+none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	retry: no improvement (6->6)
+none	ml-systems/vllm-weight-loading.md	Interview Readiness	7	7	failed	Edit generation returned no usable output
+none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	discarded	no improvement (6->6)
