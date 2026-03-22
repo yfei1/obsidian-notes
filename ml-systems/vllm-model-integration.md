@@ -220,7 +220,9 @@ for name, module in model.named_modules():
 
 3. **"Why not just call lm_head(hidden_states)?"** — `VocabParallelEmbedding.forward()` does token lookup (wrong direction). `LogitsProcessor` routes through `quant_method.apply()` which does the reverse matmul, handles quantization formats (FP8/int4), and performs TP gather.
 
-4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking.
+4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
+
+7. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
 
 5. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
 
