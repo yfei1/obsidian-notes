@@ -167,15 +167,14 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE):
         # ── LOAD ALL FILE CONTENTS (for multi-file ops) ──
         file_contents = {relative_path(n): read_note(n) for n in all_notes}
 
-        # ── SELECT STRATEGIES (context-aware) ──
-        # Base: select from single-file strategies
-        n_base = group_size - 1
+        # ── SELECT STRATEGIES (context-aware, hard-capped to group_size - 1) ──
+        # Conditionals get priority (context-triggered), base strategies fill remaining slots.
+        n_candidates = group_size - 1  # total strategy slots (excl. identity)
         conditional_strategies: list[tuple] = []  # (strategy, extra_vars)
 
         # Split: for notes above line threshold
         if target_lines > SPLIT_LINE_THRESHOLD:
             conditional_strategies.append((SPLIT_STRATEGY, {}))
-            n_base -= 1
 
         # Dedup: if overlap detected for this note (check both directions)
         overlaps = detect_overlaps(file_contents, threshold=0.7)
@@ -199,14 +198,18 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE):
                 "canonical_note": target_overlap.canonical_path,
                 "overlap_preview": target_overlap.source_preview,
             }))
-            n_base -= 1
 
         # Systematize: always available (needs note_list, provided via extra_vars)
         conditional_strategies.append((SYSTEMATIZE_STRATEGY, {}))
-        n_base -= 1
 
-        base_strategies = select_strategies(NOTE_STRATEGIES, n=max(n_base, 1), history=history)
-        strategies_to_run = [(s, {}) for s in base_strategies] + conditional_strategies
+        # Hard cap: conditionals first, base strategies fill remaining slots
+        n_base = max(n_candidates - len(conditional_strategies), 0)
+        if n_base > 0:
+            base_strategies = select_strategies(NOTE_STRATEGIES, n=n_base, history=history)
+            strategies_to_run = [(s, {}) for s in base_strategies] + conditional_strategies
+        else:
+            # All slots taken by conditionals — truncate to fit
+            strategies_to_run = conditional_strategies[:n_candidates]
 
         all_note_list = "\n".join(f"- {relative_path(n).replace('.md', '')}" for n in all_notes)
 
