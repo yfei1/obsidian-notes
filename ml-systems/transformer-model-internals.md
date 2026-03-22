@@ -415,3 +415,6 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/norms-and-regularization]] — L1/L2 norm theory, Ridge vs Lasso, why RMS beats mean(|x|)
 - [[ml-systems/mixture-of-experts]] — MoE replaces the dense FFN with router + expert FFNs
 - [[ml-systems/pt-moe-architecture]] — PT-MoE 150B model: parallel tracks of decoder layers
+- [[ml-systems/kv-cache-internals]]
+- [[ml-systems/parallel-track-architecture]]
+- [[ml-systems/vllm-model-integration]]

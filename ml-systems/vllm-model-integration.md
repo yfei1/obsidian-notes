@@ -235,3 +235,4 @@ for name, module in model.named_modules():
 - [[ml-systems/parallelism-strategies]] — TP column/row pattern, all_reduce
 - [[ml-systems/llm-inference-engines]] — engine architecture, weight loading, CUDA graphs
 - [[ml-systems/prefix-caching]] — KV cache sharing mechanism
+- [[ml-systems/vllm-distributed-groups]]

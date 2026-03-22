@@ -246,3 +246,4 @@ Access it via `getattr(param, "weight_loader", default_weight_loader)`. The same
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE vLLM implementation using FusedMoE + ReplicatedLinear
 - [[ml-systems/attention-mechanics]] — attention is unchanged by MoE
 - [[ml-systems/vllm-weight-loading]] — weight_loader convention, checkpoint name remapping
+- [[ml-systems/validating-parallelism-at-scale]]

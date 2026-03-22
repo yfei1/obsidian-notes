@@ -163,3 +163,5 @@ Similarly, `context_lens` tells the GPU exactly how many tokens to read per sequ
 - [[ml-systems/prefix-caching]]
 - [[ml-systems/parallelism-strategies]]
 - [[ml-systems/pytorch-module-hooks]]
+- [[ml-systems/attention-mechanics]]
+- [[ml-systems/kv-cache-internals]]

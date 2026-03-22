@@ -423,3 +423,6 @@ all_reduce(sum) → [N, 1024] correct output on both GPUs
 - [[ml-systems/gpu-memory-hierarchy]] — why decode is memory-bound, tiling strategies
 - [[ml-systems/norms-and-regularization]] — L2 norm theory behind RMSNorm
 - [[ml-systems/pt-moe-architecture]] — sliding window + global NoPE attention patterns in Apple's 150B model
+- [[ml-systems/kv-cache-internals]]
+- [[ml-systems/mixture-of-experts]]
+- [[ml-systems/vllm-model-integration]]

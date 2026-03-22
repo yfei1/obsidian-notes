@@ -265,3 +265,5 @@ Neither approach cleans up entries whose hashes are never queried again. In prac
 - [[ml-systems/llm-inference-engines]]
 - [[ml-systems/gpu-memory-hierarchy]]
 - [[ml-systems/transformer-model-internals]]
+- [[ml-systems/kv-cache-internals]]
+- [[ml-systems/vllm-model-integration]]

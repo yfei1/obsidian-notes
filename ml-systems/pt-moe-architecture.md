@@ -300,3 +300,4 @@ Source: `ajax/vendor/axlearn/axlearn/common/attention.py` lines 3016-3022 (v2 at
 - [[ml-systems/attention-mechanics]] — standard attention math (QKV, causal mask, GQA)
 - [[ml-systems/transformer-model-internals]] — dense decoder layer that each track is built from
 - [[ml-systems/rotary-position-embedding]] — RoPE used in local attention layers
+- [[ml-systems/validating-parallelism-at-scale]]

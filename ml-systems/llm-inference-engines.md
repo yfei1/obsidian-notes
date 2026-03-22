@@ -440,3 +440,6 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 - [[ml-systems/vllm-weight-loading]] — `load_weights()` name remapping and `weight_loader` convention
 - [[ml-systems/gpu-memory-hierarchy]] — memory wall, tiling vs split-K, quantization as compression
 - [[ml-systems/pytorch-module-hooks]]
+- [[ml-systems/kv-cache-internals]]
+- [[ml-systems/parallel-track-architecture]]
+- [[ml-systems/vllm-model-integration]]

@@ -284,3 +284,4 @@ Increasing `base` slows down all frequencies, expanding the range over which pos
 - [[ml-systems/transformer-model-internals]] — full decoder layer; how RoPE fits into the QKV pipeline
 - [[ml-systems/attention-mechanics]] — causal masking, multi-head attention, GQA
 - [[ml-systems/parallelism-strategies]] — tensor parallelism for QKV and o_proj
+- [[ml-systems/pt-moe-architecture]]
