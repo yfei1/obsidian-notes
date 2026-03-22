@@ -77,3 +77,5 @@ none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded
 none	ml-systems/vllm-weight-loading.md	Interview Readiness	7	7	failed	Edit generation returned no usable output
 none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	discarded	no improvement (6->6)
 82c8f1a	ml-systems/transformer-model-internals.md	Interview Readiness	3	6	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Interview Readiness (3->6/10)
+c15350d	ml-systems/validating-parallelism-at-scale.md	Interview Readiness	7	8	kept	autoresearch: improve ml-systems/validating-parallelism-at-scale.md on Interview Readiness (7->8/10)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
