@@ -383,19 +383,15 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 
 ## Interview Talking Points
 
-1. **Explain GQA.** GQA uses fewer KV heads than Q heads — here 8 KV vs 16 Q, so two Q heads share one KV head. KV cache shrinks by `num_kv_heads/num_q_heads` (0.5× here, 8× for Llama 3 70B). Quality loss is minimal; MQA (1 KV head) is the extreme case.
+1. **Walk me through a decoder layer.** "Each token's hidden state passes through RMSNorm, then a fused QKV projection — Q gets 16 heads, K and V share 8 heads each (GQA). Per-head RMSNorm on Q and K prevents attention collapse, then RoPE encodes position. FlashAttention reads from the KV cache, o_proj recombines heads, a residual is added, then RMSNorm feeds the SwiGLU MLP — gate_up fused matmul, SiluAndMul, down_proj, final residual."
 
-2. **RMSNorm vs LayerNorm trade-offs.** RMSNorm drops mean subtraction and β. Ablations show re-centering is unnecessary — ~10–15% faster, same quality. Pre-Norm placement keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
+2. **Why GQA and what does it save?** "8 KV heads vs 16 Q heads means two Q heads share one KV pair. KV cache memory scales with `num_kv_heads`, not `num_q_heads` — a 0.5× reduction here, 8× for Llama 3 70B. Quality is nearly identical to full MHA because attention patterns generalize across Q heads sharing a KV."
 
-3. **Why Q/K norm but not V norm?** Q and K drive `QKᵀ/√d_k` — high L2 norm explodes scores, saturates softmax, kills gradients (attention collapse). V is only weighted-summed; normalizing it destroys semantic magnitude for no benefit.
+3. **RMSNorm vs LayerNorm — why switch?** "RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary for Transformers — roughly 10–15% faster with equivalent quality. Pre-Norm placement means the residual stream is never normalized, so gradients flow cleanly back to the embedding without the vanishing-gradient pathology of Post-Norm."
 
-4. **SwiGLU mechanics.** `W_down(SiLU(W_gate(x)) × W_up(x))`. Gate learns *whether* a feature fires; up learns *what* it is. SiLU has non-zero gradient everywhere (no dying neurons). Three matrices at `8d/3` match 2-matrix 4× FFN param count.
+4. **Explain SwiGLU and why not ReLU.** "SwiGLU computes `W_down(SiLU(W_gate(x)) × W_up(x))` — gate and content are decoupled learnable projections. SiLU has non-zero gradient everywhere; ReLU's zero gradient for x < 0 causes dying neurons that never recover. Three matrices at 8d/3 ≈ 2.67d keeps total params equal to a 2-matrix 4× FFN."
 
-5. **TP Column→Row pattern.** ColumnParallel (QKV, gate+up): each GPU computes its output slice independently — zero communication. RowParallel (o_proj, down_proj): one `all_reduce` to sum partials. Total: **2 all_reduces per decoder layer**.
-
-6. **Why fuse QKV / gate+up?** One large matmul beats three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip. `SiluAndMul` further fuses chunk+SiLU+multiply into one compiled kernel.
-
-7. **Walk me through a decoder layer.** `hidden → RMSNorm → QKV (fused) → per-head Q/K norm → RoPE → flash_attn (KV cache) → o_proj + residual → RMSNorm → gate_up (fused) → SiluAndMul → down_proj + residual → output.`
+5. **Describe the Tensor Parallelism pattern per layer.** "ColumnParallel (QKV, gate+up): each GPU computes its output slice with no communication — the output dimension is partitioned. RowParallel (o_proj, down_proj): each GPU holds a column slice of the weight, computes a partial sum, then one `all_reduce` sums across GPUs. Total cost: exactly 2 all_reduces per decoder layer, one after attention and one after MLP."
 
 ---
 
