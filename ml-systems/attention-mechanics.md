@@ -396,21 +396,19 @@ all_reduce(sum) → [N, 1024] correct output on both GPUs
 
 ## Interview Talking Points
 
-1. **"Walk me through attention math."** — Q·K^T gives raw relevance scores. Divide by √d_k to prevent softmax saturation. Apply causal mask (-∞ for future tokens). Softmax normalizes each row to a probability distribution. Multiply by V to get a weighted blend of value vectors.
+1. **"Explain attention end-to-end."** — Project hidden states into Q, K, V. Compute scores = Q·K^T / √d_k (scaling prevents softmax saturation from high-variance dot products). Apply causal mask: set upper-triangle to -∞ so e^(-∞)=0 gives future tokens exactly zero weight. Softmax normalizes each row to a probability distribution. Output = weighted sum of V vectors. Concat all heads, project through o_proj.
 
-2. **"Why scale by √d_k?"** — Dot product of d_k-dimensional vectors has variance ≈ d_k. Without scaling, large scores push softmax to near-one-hot, killing gradients. Dividing by √d_k normalizes variance back to ~1.
+2. **"Why scale by √d_k?"** — d_k-dim dot products have variance ≈ d_k; raw ±64 scores push softmax to near-one-hot, killing gradients. Dividing by √d_k restores variance to ~1, keeping softmax in a trainable regime.
 
-3. **"How does the causal mask work?"** — Set upper-triangle scores to -∞ before softmax. Since e^(-∞)=0, future tokens get exactly zero attention weight. Not a deletion — a mathematical zeroing via the softmax function.
+3. **"Why GQA over MHA?"** — KV cache is the memory bottleneck at decode time. GQA (16Q/8KV for Qwen3-0.6B) halves KV cache vs MHA (16Q/16KV): 2048 vs 4096 bytes/token/layer. Q heads need diversity (each is a different search strategy); KV heads can be shared because different Q heads querying the same KV head still produce different attention distributions. MQA (1 KV head) saves 16× but degrades quality — GQA is the empirical sweet spot.
 
-4. **"Why Q, K, V instead of just one matrix?"** — K determines *why* a token is attended to (identity). V determines *what* information it transmits (payload). Decoupling these gives the model more expressiveness than K=V.
+4. **"Why separate K and V?"** — K is a token's identity broadcast (why it gets selected); V is its information payload (what gets transmitted). Decoupling means a token can be found for one reason (syntactic role via K) while transmitting entirely different content (semantics via V). K=V locks these together, limiting expressiveness.
 
-5. **"Why Q/K norm but not V?"** — Q·K produces scores that go into softmax. Unstable magnitudes → attention collapse. V is only weighted-summed — its magnitude IS the signal strength. Plus V flows into residual → LayerNorm anyway.
+5. **"Prefill vs decode: different kernels, why?"** — Prefill has all N tokens' Q,K,V available; compute scales O(N²·d_k) → compute-bound → `flash_attn_varlen_func` (packed variable-length sequences for continuous batching). Decode generates 1 token; Q is [1, d_k] but must read all N cached K,V from HBM → memory-bound → `flash_attn_with_kvcache` (paged block_table addressing). Same math, opposite bottleneck, different kernel optimizations.
 
-6. **"GQA tradeoff?"** — 16 Q heads (diverse questioning) share 8 KV heads (passive information). Halves KV cache with minimal quality loss. MQA (1 KV head) saves more but degrades quality — GQA is the sweet spot.
+6. **"Why Q/K norm but not V?"** — Q·K scores feed softmax; magnitude instability causes attention collapse. V is only weighted-summed — its magnitude carries signal strength. V also flows into the residual stream where LayerNorm follows.
 
-7. **"Prefill vs decode kernel?"** — Prefill: all tokens available, compute-bound, uses `flash_attn_varlen_func`. Decode: 1 new token reads entire KV cache, memory-bound, uses `flash_attn_with_kvcache`. Different bottlenecks → different kernels.
-
-8. **"How does attention parallelize?"** — Heads are independent → split across GPUs (ColumnParallel for QKV). Each GPU computes its heads locally. Only o_proj needs all_reduce (RowParallel). KV cache is also sharded — no duplication.
+7. **"How does attention shard across GPUs?"** — Heads are independent → QKV uses ColumnParallel (each GPU gets a head slice, no communication). Each GPU runs full attention on its heads locally. o_proj uses RowParallel + all_reduce to sum partial results. KV cache is sharded too: GPU 0 stores heads 0–3, GPU 1 stores heads 4–7. Only 1 all_reduce per attention block.
 
 ---
 
