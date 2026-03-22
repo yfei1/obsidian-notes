@@ -8,16 +8,9 @@ The loop never knows what kind of change was made — it just executes Ops.
 
 import argparse
 import os
-import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-AUTORESEARCH_DIR = REPO_ROOT / "autoresearch"
-
-sys.path.insert(0, str(AUTORESEARCH_DIR))
-sys.path.insert(0, str(REPO_ROOT.parent))  # for apple_llm
-
+from shared import REPO_ROOT, AUTORESEARCH_DIR, git_commit, git_push, git_head_hash, fix_bidirectional_links
 from engine.delta import Delta, Op
 from engine.grpo import grpo_rank, IDENTITY_ID
 from engine.strategies import (
@@ -32,7 +25,6 @@ from engine.state import (
 )
 from judges.ensemble import default_ensemble
 from score import discover_notes, read_note, relative_path, score_rule_based
-from legacy.improve import git_commit, git_push, git_head_hash
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -53,66 +45,6 @@ def _record_losers(deltas: list[Delta], winner_id: str, generation: int,
                 outcome="identity_won",
                 advantage=advantages.get(d.id, 0.0),
             ))
-
-
-# ---------------------------------------------------------------------------
-# Bidirectional link fixer (pre-pass, no LLM)
-# ---------------------------------------------------------------------------
-
-def fix_bidirectional_links(all_notes: list[Path]) -> int:
-    """Pre-pass: ensure all wikilinks are bidirectional. Returns fix count."""
-    import re
-
-    fixes = 0
-    note_contents: dict[str, str] = {}
-    note_paths: dict[str, Path] = {}
-
-    for note in all_notes:
-        rel = relative_path(note)
-        note_contents[rel] = read_note(note)
-        stem = rel.replace(".md", "")
-        note_paths[stem] = note
-
-    wikilink_re = re.compile(r'\[\[([^\]]+)\]\]')
-
-    for note in all_notes:
-        rel = relative_path(note)
-        stem = rel.replace(".md", "")
-        content = note_contents[rel]
-        links = wikilink_re.findall(content)
-
-        for link in links:
-            target_rel = link + ".md"
-            if target_rel not in note_contents:
-                continue
-            target_content = note_contents[target_rel]
-            if f"[[{stem}]]" in target_content:
-                continue
-
-            target_path = note_paths.get(link)
-            if target_path is None:
-                continue
-
-            if "## See Also" in target_content:
-                see_also_idx = target_content.index("## See Also")
-                rest = target_content[see_also_idx:]
-                next_header = rest.find("\n## ", 1)
-                if next_header == -1:
-                    new_content = target_content.rstrip('\n') + f"\n- [[{stem}]]\n"
-                else:
-                    insert_pos = see_also_idx + next_header
-                    new_content = (target_content[:insert_pos].rstrip('\n') +
-                                   f"\n- [[{stem}]]\n" +
-                                   target_content[insert_pos:])
-            else:
-                new_content = target_content.rstrip('\n') + f"\n\n## See Also\n- [[{stem}]]\n"
-
-            target_path.write_text(new_content, encoding="utf-8")
-            note_contents[target_rel] = new_content
-            fixes += 1
-            print(f"  Fixed: [[{stem}]] added to {target_rel}")
-
-    return fixes
 
 
 # ---------------------------------------------------------------------------

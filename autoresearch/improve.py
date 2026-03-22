@@ -19,7 +19,6 @@ import difflib
 import json
 import os
 import re
-import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -28,61 +27,29 @@ from pathlib import Path
 # Constants
 # ---------------------------------------------------------------------------
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-AUTORESEARCH_DIR = REPO_ROOT / "autoresearch"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from shared import (
+    REPO_ROOT, AUTORESEARCH_DIR,
+    git_commit, git_push, git_head_hash,
+    fix_bidirectional_links,
+)
+from score import DIMENSIONS, ERROR_SCORE, _run_claude, DIMENSION_WEIGHTS
+
 RESULTS_TSV = AUTORESEARCH_DIR / "results.tsv"
 SCORES_TSV = AUTORESEARCH_DIR / "scores.tsv"
 EDIT_DIFFS_LOG = AUTORESEARCH_DIR / "edit_diffs.log"
-
-sys.path.insert(0, str(AUTORESEARCH_DIR))
-from score import DIMENSIONS, ERROR_SCORE, _run_claude, DIMENSION_WEIGHTS
 
 CONVERGENCE_TARGET = 8.0  # 0-10 scale
 REGRESSION_THRESHOLD = 2  # Allow ±2 noise on 0-10 scale before flagging regression
 MAX_TOTAL_REGRESSION = 4  # Total regression budget across all non-target dimensions
 MAX_CONSECUTIVE_SKIPS = 2  # After N discards on same note×dim, move to next target
 CALIBRATE_EVERY = 2  # Run rubric calibration every N iterations
-SHRINKAGE_THRESHOLD = 0.85  # Max 15% content loss per edit
-MAX_NOTE_LINES = 450  # Hard cap — reject edits producing notes above this
-NET_ZERO_THRESHOLD = 300  # Notes above this must be net-zero or net-negative in line count
 
 # Per-dimension minimum scores for convergence
 DIMENSION_MINIMUMS = {
     "Interview Readiness": 7,
     "Clarity": 7,
 }
-
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
-
-def run_cmd(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
-    """Run a command and return result."""
-    return subprocess.run(cmd, capture_output=True, text=True, cwd=str(REPO_ROOT), **kwargs)
-
-
-def git_commit(message: str):
-    """Stage note changes and commit. Only stages known directories to avoid sweeping up unrelated changes."""
-    for d in ["ml-systems", "data-processing", "distributed-systems", "autoresearch/results.tsv", "autoresearch/scores.tsv"]:
-        run_cmd(["git", "add", d])
-    run_cmd(["git", "commit", "-m", message])
-
-
-def git_push():
-    """Push to remote. Fails silently if no remote is configured."""
-    result = run_cmd(["git", "push"])
-    if result.returncode == 0:
-        print("  Pushed to remote.")
-    else:
-        stderr = result.stderr.strip()
-        if stderr:
-            print(f"  Push failed: {stderr}", file=sys.stderr)
-
-
-def git_head_hash() -> str:
-    """Get current HEAD commit hash (short)."""
-    result = run_cmd(["git", "rev-parse", "--short", "HEAD"])
-    return result.stdout.strip() or "unknown"
 
 
 def load_scores(concurrency: int = 1) -> dict[str, dict[str, dict]]:
@@ -168,49 +135,6 @@ def check_convergence(all_scores: dict[str, dict[str, dict]]) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Information loss guards
-# ---------------------------------------------------------------------------
-
-def verify_sections(original: str, new_content: str) -> list[str]:
-    """Returns list of required sections that were removed."""
-    removed = []
-    for section in ["## TL;DR", "## See Also"]:
-        if section.lower() in original.lower() and section.lower() not in new_content.lower():
-            removed.append(section)
-    return removed
-
-
-def verify_factual_content(original: str, new_content: str) -> str | None:
-    """Returns error message if bullet/item count dropped >20%."""
-    bullet_re = re.compile(r'^\s*[-*]\s', re.MULTILINE)
-    numbered_re = re.compile(r'^\s*\d+\.\s', re.MULTILINE)
-
-    orig_bullets = len(bullet_re.findall(original))
-    orig_numbered = len(numbered_re.findall(original))
-    orig_total = orig_bullets + orig_numbered
-
-    new_bullets = len(bullet_re.findall(new_content))
-    new_numbered = len(numbered_re.findall(new_content))
-    new_total = new_bullets + new_numbered
-
-    if orig_total > 0 and new_total < orig_total * 0.8:
-        return f"Bullet/item count dropped from {orig_total} to {new_total} (>{20}% loss)"
-    return None
-
-
-def verify_causal_reasoning(original: str, new_content: str) -> str | None:
-    """Detect semantic information loss: causal connectors dropping suggests 'why' replaced by 'what'.
-
-    Counts because/since/therefore/so that/which means/this means. If count drops >30%, flag it.
-    """
-    causal_re = re.compile(r'\b(because|since|therefore|so that|which means|this means|the reason|due to)\b', re.IGNORECASE)
-    orig_count = len(causal_re.findall(original))
-    new_count = len(causal_re.findall(new_content))
-
-    if orig_count >= 3 and new_count < orig_count * 0.7:
-        return f"Causal reasoning connectors dropped from {orig_count} to {new_count} (>30% loss — 'why' may have been replaced by 'what')"
-    return None
 
 
 def log_content_diff(note_path: str, original: str, new_content: str):
@@ -383,27 +307,26 @@ def apply_search_replace_edits(note_path: str, edits: list[dict]) -> str | None:
     """Apply a list of search-replace edits to a note.
 
     Returns the new content, or None if edits can't be applied safely.
+    Uses engine.gates.check_all_gates for validation (single source of truth).
     """
+    from engine.gates import check_all_gates
+
     note_file = REPO_ROOT / note_path
     content = note_file.read_text(encoding="utf-8")
     original_content = content
-    original_lines = content.split('\n')
 
     for edit in edits:
         old_text = edit.get("old_text", "")
         new_text = edit.get("new_text", "")
 
-        # No-empty-replacement guard (prevents silent content deletion)
         if not new_text.strip():
             print(f"  Warning: new_text is empty (silent deletion not allowed), skipping edit", file=sys.stderr)
             continue
 
-        # Check old_text exists in content
         if old_text not in content:
             print(f"  Warning: old_text not found in note: {old_text[:80]!r}...", file=sys.stderr)
             continue
 
-        # Check old_text is unique
         count = content.count(old_text)
         if count > 1:
             print(f"  Warning: old_text appears {count} times (ambiguous), skipping: {old_text[:80]!r}...", file=sys.stderr)
@@ -411,121 +334,20 @@ def apply_search_replace_edits(note_path: str, edits: list[dict]) -> str | None:
 
         content = content.replace(old_text, new_text, 1)
 
-    # If nothing changed, return None
     if content == original_content:
         print("  Warning: No edits were applied (all skipped or no-op)", file=sys.stderr)
         return None
 
-    new_lines = content.split('\n')
-
-    # Shrinkage guard: max 15% content loss
-    original_len = len(original_content)
-    new_len = len(content)
-    if new_len < original_len * SHRINKAGE_THRESHOLD:
-        print(f"  Warning: Content shrank from {original_len} to {new_len} chars ({new_len/original_len:.0%}) — exceeds {SHRINKAGE_THRESHOLD:.0%} threshold", file=sys.stderr)
-        return None
-
-    # Section verification
-    removed_sections = verify_sections(original_content, content)
-    if removed_sections:
-        print(f"  Warning: Required sections removed: {removed_sections}", file=sys.stderr)
-        return None
-
-    # Factual content check
-    factual_error = verify_factual_content(original_content, content)
-    if factual_error:
-        print(f"  Warning: {factual_error}", file=sys.stderr)
-        return None
-
-    # Causal reasoning check (semantic information loss detection)
-    causal_error = verify_causal_reasoning(original_content, content)
-    if causal_error:
-        print(f"  Warning: {causal_error}", file=sys.stderr)
-        return None
-
-    # Length enforcement: hard cap
-    if len(new_lines) > MAX_NOTE_LINES:
-        print(f"  Warning: Result is {len(new_lines)} lines (>{MAX_NOTE_LINES} hard cap), rejecting", file=sys.stderr)
-        return None
-
-    # Length enforcement: net-zero for notes >300 lines
-    if len(original_lines) > NET_ZERO_THRESHOLD and len(new_lines) > len(original_lines):
-        print(f"  Warning: Note was {len(original_lines)} lines (>{NET_ZERO_THRESHOLD}), grew to {len(new_lines)} — must be net-zero or negative", file=sys.stderr)
+    # Validate via unified gate system
+    from score import discover_notes, relative_path
+    all_note_paths = [relative_path(n) for n in discover_notes()]
+    gate_result = check_all_gates(original_content, content, note_path, all_note_paths)
+    if not gate_result.passed:
+        for v in gate_result.violations:
+            print(f"  Warning: {v}", file=sys.stderr)
         return None
 
     return content
-
-
-# ---------------------------------------------------------------------------
-# Bidirectional link fixer
-# ---------------------------------------------------------------------------
-
-def fix_bidirectional_links(all_notes: list):
-    """Pre-pass: for each [[target]] in note A, ensure target has [[A]].
-
-    Appends missing reverse links to target's See Also section. No LLM needed.
-    Returns number of fixes applied.
-    """
-    from score import extract_wikilinks, relative_path, read_note
-
-    fixes = 0
-    # Build note content cache
-    note_contents: dict[str, str] = {}
-    note_paths: dict[str, Path] = {}  # stem (topic/subtopic) -> Path
-    for note in all_notes:
-        rel = relative_path(note)
-        note_contents[rel] = read_note(note)
-        # Map without .md extension for wikilink matching
-        stem = rel.replace(".md", "")
-        note_paths[stem] = note
-
-    # For each note, check outgoing links
-    for note in all_notes:
-        rel = relative_path(note)
-        stem = rel.replace(".md", "")
-        content = note_contents[rel]
-        links = extract_wikilinks(content)
-
-        for link in links:
-            target_rel = link + ".md"
-            if target_rel not in note_contents:
-                continue  # Target doesn't exist
-
-            target_content = note_contents[target_rel]
-            # Check if target links back
-            if f"[[{stem}]]" in target_content:
-                continue  # Already bidirectional
-
-            # Append reverse link to target's See Also
-            target_path = note_paths.get(link)
-            if target_path is None:
-                continue
-
-            if "## See Also" in target_content:
-                # Insert after the last existing link in See Also (before next ## or EOF)
-                see_also_idx = target_content.index("## See Also")
-                # Find the end of the See Also section (next ## header or EOF)
-                rest = target_content[see_also_idx:]
-                next_header = rest.find("\n## ", 1)
-                if next_header == -1:
-                    # See Also is the last section — append at end
-                    new_content = target_content.rstrip('\n') + f"\n- [[{stem}]]\n"
-                else:
-                    # Insert before the next header
-                    insert_pos = see_also_idx + next_header
-                    new_content = (target_content[:insert_pos].rstrip('\n') +
-                                   f"\n- [[{stem}]]\n" +
-                                   target_content[insert_pos:])
-            else:
-                # Add See Also section at end
-                new_content = target_content.rstrip('\n') + f"\n\n## See Also\n- [[{stem}]]\n"
-
-            target_path.write_text(new_content, encoding="utf-8")
-            note_contents[target_rel] = new_content
-            fixes += 1
-            print(f"  Fixed: [[{stem}]] added to {target_rel}")
-
-    return fixes
 
 
 # ---------------------------------------------------------------------------

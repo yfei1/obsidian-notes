@@ -27,19 +27,14 @@ from pathlib import Path
 # Constants
 # ---------------------------------------------------------------------------
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-AUTORESEARCH_DIR = REPO_ROOT / "autoresearch"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from shared import REPO_ROOT, AUTORESEARCH_DIR, extract_json_object
+
 SCORE_PY = AUTORESEARCH_DIR / "score.py"
 
 VARIANCE_THRESHOLD = 1  # If scores differ by more than this, rubric needs tightening
 RATE_LIMIT_SECONDS = 10
 NUM_SAMPLES = 2  # Score each note this many times
-
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
-
-sys.path.insert(0, str(AUTORESEARCH_DIR))
 
 
 def pick_calibration_notes() -> list[str]:
@@ -67,7 +62,7 @@ def score_note_on_dim(note_path: str, dimension: str, prompts: dict) -> int:
     Returns score (0-10) or ERROR_SCORE (-1) on failure.
     """
     from score import (read_note, _build_scale_text, _run_claude,
-                       _extract_json_object, CONTENT_TRUNCATE, ERROR_SCORE)
+                       CONTENT_TRUNCATE, ERROR_SCORE)
 
     note_file = REPO_ROOT / note_path
     content = read_note(note_file)
@@ -90,7 +85,7 @@ Respond with ONLY valid JSON (no markdown fences, no extra text):
     if output is None:
         return ERROR_SCORE
 
-    data = _extract_json_object(output)
+    data = extract_json_object(output)
     if data is None:
         print(f"    Warning: Could not parse score for {dimension}", file=sys.stderr)
         return ERROR_SCORE

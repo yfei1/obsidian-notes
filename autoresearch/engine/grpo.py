@@ -6,16 +6,13 @@ deltas (plus the identity/no-change baseline), then Borda count aggregation
 produces a final ranking and per-delta advantage scores.
 """
 
-import json
 import random
-import re
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
 
-# apple_llm import
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
+from shared import extract_json_object, setup_apple_llm_path
+
+setup_apple_llm_path()
 from apple_llm import claude as apple_llm_call
 
 from engine.delta import Delta
@@ -126,21 +123,8 @@ def parse_ranking(output: str, reverse_map: dict) -> Optional[dict]:
     Returns:
         {delta_id: rank} (1-based) or None on parse failure.
     """
-    # Try to extract JSON
-    cleaned = output.strip()
-    # Strip markdown fences
-    if cleaned.startswith("```"):
-        lines = cleaned.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        cleaned = "\n".join(lines).strip()
-
-    match = re.search(r'\{.*\}', cleaned, re.DOTALL)
-    if not match:
-        return None
-
-    try:
-        data = json.loads(match.group())
-    except json.JSONDecodeError:
+    data = extract_json_object(output)
+    if data is None:
         return None
 
     ranking_list = data.get("ranking")

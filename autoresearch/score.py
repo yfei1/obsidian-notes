@@ -22,21 +22,20 @@ import os
 import re
 import subprocess
 import sys
-from collections import defaultdict
 from pathlib import Path
 from typing import Optional
+
+from shared import (
+    REPO_ROOT, AUTORESEARCH_DIR, NOTE_DIRS, REQUIRED_SECTIONS,
+    MAX_NOTE_LINES, extract_json_object,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-AUTORESEARCH_DIR = REPO_ROOT / "autoresearch"
 SCORES_TSV = AUTORESEARCH_DIR / "scores.tsv"
 REPORT_MD = AUTORESEARCH_DIR / "report.md"
-
-NOTE_DIRS = ["ml-systems", "data-processing", "distributed-systems"]
-REQUIRED_SECTIONS = ["TL;DR", "See Also"]
 
 MAX_SCORE = 10
 ERROR_SCORE = -1  # Sentinel for scoring errors — distinct from a real score of 0
@@ -116,7 +115,8 @@ CONTENT_STRATEGIES: dict[str, str] = {
 # Score cache: (content_hash, dimension, strategy) -> score_dict
 # Automatically cleared on module reload (e.g., after calibration).
 _score_cache: dict[tuple[str, str, str], dict] = {}
-_score_cache_lock = __import__('threading').Lock()
+import threading
+_score_cache_lock = threading.Lock()
 
 
 def _content_hash(content: str) -> str:
@@ -164,75 +164,6 @@ def _prepare_skeleton(content: str) -> str:
     return '\n'.join(result)
 
 
-def _prepare_section_targeted(content: str) -> str:
-    """For Interview Readiness: TL;DR + Interview Talking Points + section header list."""
-    lines = content.split('\n')
-    headers = [l.lstrip('# ').strip() for l in lines if l.startswith('## ')]
-    result = [f"Section headers: {', '.join(headers)}", '']
-
-    in_target = False
-    targets = {'## TL;DR', '## Interview Talking Points'}
-    found_interview = False
-
-    for line in lines:
-        if line.startswith('# ') and not line.startswith('## '):
-            result.append(line)
-            continue
-        if any(line.startswith(t) for t in targets):
-            in_target = True
-            if 'Interview' in line:
-                found_interview = True
-            result.append(line)
-            continue
-        if in_target:
-            if line.startswith('## ') or line.strip() == '---':
-                in_target = False
-            else:
-                result.append(line)
-
-    if not found_interview:
-        result.append('\n## Interview Talking Points\nMISSING')
-
-    return '\n'.join(result)
-
-
-def _prepare_top_heavy(content: str) -> str:
-    """For Motivation: first ~2000 chars + section headers for the rest."""
-    lines = content.split('\n')
-    result = []
-    char_count = 0
-    past_limit = False
-
-    for line in lines:
-        if not past_limit:
-            result.append(line)
-            char_count += len(line) + 1
-            if char_count >= 2000:
-                past_limit = True
-                result.append('\n[... remaining content omitted ...]')
-                result.append('Remaining section headers:')
-        elif line.startswith('#'):
-            result.append(line)
-
-    return '\n'.join(result)
-
-
-def _prepare_metadata(content: str) -> str:
-    """For Freshness: section headers + lines with frameworks, versions, file refs."""
-    result = []
-    for line in content.split('\n'):
-        if line.startswith('#'):
-            result.append(line)
-        elif re.search(r'(vLLM|PyTorch|torch\.|CUDA|FlashAttention|Megatron|DeepSpeed|TensorRT|safetensors|transformers|huggingface)', line, re.IGNORECASE):
-            result.append(line)
-        elif re.search(r'\w+\.py:\d+', line):
-            result.append(line)
-        elif re.search(r'v\d+\.\d+', line):
-            result.append(line)
-
-    return '\n'.join(result) if result else content[:CONTENT_TRUNCATE]
-
-
 def _prepare_conciseness_context(content: str, note_path: str, all_contents: dict[str, str]) -> str:
     """For Conciseness: full content + TL;DRs from linked notes for cross-note context."""
     links = extract_wikilinks(content)
@@ -265,17 +196,10 @@ def _prepare_content(notes: dict[str, str], dimension: str,
                     for path, content in notes.items()}
         return notes  # fallback to full if no cross-note context
 
-    preparers = {
-        "skeleton": _prepare_skeleton,
-        "section": _prepare_section_targeted,
-        "top_heavy": _prepare_top_heavy,
-        "metadata": _prepare_metadata,
-    }
-    preparer = preparers.get(strategy)
-    if preparer is None:
-        return notes
+    if strategy == "skeleton":
+        return {path: _prepare_skeleton(content) for path, content in notes.items()}
 
-    return {path: preparer(content) for path, content in notes.items()}
+    return notes  # Unknown strategy falls back to full
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +221,8 @@ def _build_scale_text(dimension: str, info: dict) -> str:
 
 
 # Try apple_llm (direct API via floodgate, fast, Apple billing)
-sys.path.insert(0, str(REPO_ROOT.parent))
+from shared import setup_apple_llm_path
+setup_apple_llm_path()
 try:
     from apple_llm import claude as _apple_llm_call
     _USE_APPLE_LLM = True
@@ -339,16 +264,6 @@ def _run_claude(prompt: str, timeout: int = 300) -> str | None:
         return None
 
 
-def _extract_json_object(output: str) -> dict | None:
-    """Extract the outermost JSON object from Claude output."""
-    first = output.find('{')
-    last = output.rfind('}')
-    if first == -1 or last == -1 or last <= first:
-        return None
-    try:
-        return json.loads(output[first:last + 1])
-    except json.JSONDecodeError:
-        return None
 
 
 def _parse_score_entry(raw: dict) -> dict:
@@ -551,43 +466,27 @@ def score_code_quality(content: str) -> dict:
 def score_uniqueness(note: Path, content: str, all_notes: list[Path],
                      content_cache: dict[str, str] | None = None) -> dict:
     """Score dimension 8: Uniqueness (0-10)."""
-    paragraphs = re.split(r'\n\s*\n', content)
-    paragraphs = [p.strip() for p in paragraphs if len(p.strip()) > 100]
+    from shared import find_paragraph_overlaps
 
-    if not paragraphs:
-        return {"score": 10, "reason": "No substantial paragraphs to check", "suggestion": "Uniqueness check passed"}
-
-    overlaps = []
-    seen_notes = set()
+    # Build target contents (all notes except self)
+    target_contents = {}
     for other_note in all_notes:
         if other_note == note:
             continue
         other_rel = relative_path(other_note)
-        other_content = content_cache[other_rel] if content_cache and other_rel in content_cache else read_note(other_note)
-        for para in paragraphs:
-            if other_rel in seen_notes:
-                break
-            para_words = set(para.lower().split())
-            other_sentences = re.split(r'[.!?]\s+', other_content)
-            for i in range(len(other_sentences) - 2):
-                chunk = ' '.join(other_sentences[i:i+3])
-                chunk_words = set(chunk.lower().split())
-                if len(para_words) > 10 and len(chunk_words) > 10:
-                    overlap = len(para_words & chunk_words) / min(len(para_words), len(chunk_words))
-                    if overlap > 0.7:
-                        # Capture previews for actionable suggestions
-                        para_preview = para.replace('\n', ' ')[:120]
-                        chunk_preview = chunk.replace('\n', ' ')[:120]
-                        overlaps.append((other_rel, overlap, para_preview, chunk_preview))
-                        seen_notes.add(other_rel)
-                        break
+        target_contents[other_rel] = (
+            content_cache[other_rel] if content_cache and other_rel in content_cache
+            else read_note(other_note)
+        )
+
+    overlaps = find_paragraph_overlaps(content, target_contents)
 
     if not overlaps:
         return {"score": 10, "reason": "No content overlaps detected", "suggestion": "Content uniqueness is excellent"}
     elif len(overlaps) == 1:
-        o = overlaps[0]
-        return {"score": 5, "reason": f"Minor overlap with {o[0]}",
-                "suggestion": f"'{o[2]}...' overlaps with {o[0]}: '{o[3]}...' — consolidate to one canonical home"}
+        path, ratio, src_preview, tgt_preview = overlaps[0]
+        return {"score": 5, "reason": f"Minor overlap with {path}",
+                "suggestion": f"'{src_preview[:120]}...' overlaps with {path}: '{tgt_preview[:120]}...' — consolidate to one canonical home"}
     else:
         details = "; ".join(f"'{o[2][:60]}...' overlaps {o[0]}" for o in overlaps[:3])
         return {"score": 2, "reason": f"Overlaps found with {len(overlaps)} notes",
@@ -613,8 +512,8 @@ def score_naming_structure(note: Path, content: str) -> dict:
             issues.append("No tags on line 3 (expected #tag1 #tag2)")
 
     line_count = len(lines)
-    if line_count > 450:
-        issues.append(f"File is {line_count} lines (limit: ~450)")
+    if line_count > MAX_NOTE_LINES:
+        issues.append(f"File is {line_count} lines (limit: ~{MAX_NOTE_LINES})")
 
     if not lines or not lines[0].startswith('# '):
         issues.append("Missing title on line 1 (expected # Title)")
@@ -679,7 +578,7 @@ The keys must be the exact note paths shown above:
     if output is None:
         return {p: _error_result(f"Claude call failed for {dimension}") for p in notes}
 
-    data = _extract_json_object(output)
+    data = extract_json_object(output)
     if data is None:
         print(f"  Warning: No valid JSON in batch output for {dimension}: {output[:300]}", file=sys.stderr)
         return {p: _error_result(f"JSON parse failed for {dimension}") for p in notes}

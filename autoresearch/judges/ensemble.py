@@ -1,9 +1,8 @@
 from dataclasses import dataclass
-import sys
-from pathlib import Path
 
-# Import apple_llm (supports both Claude and Gemini via floodgate)
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
+from shared import setup_apple_llm_path
+
+setup_apple_llm_path()
 from apple_llm import claude as claude_call, gemini as gemini_call
 
 

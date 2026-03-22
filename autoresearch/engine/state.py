@@ -7,15 +7,15 @@ Stores per-attempt records in a JSONL file and per-generation metadata as JSON.
 import json
 import time
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
+
+from shared import AUTORESEARCH_DIR
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-HISTORY_FILE = REPO_ROOT / "autoresearch" / "state" / "history.jsonl"
-GENERATIONS_DIR = REPO_ROOT / "autoresearch" / "state" / "generations"
+HISTORY_FILE = AUTORESEARCH_DIR / "state" / "history.jsonl"
+GENERATIONS_DIR = AUTORESEARCH_DIR / "state" / "generations"
 
 
 # ---------------------------------------------------------------------------

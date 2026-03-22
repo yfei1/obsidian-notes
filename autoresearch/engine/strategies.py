@@ -7,20 +7,18 @@ Strategy selection uses UCB (Upper Confidence Bound) exploration to balance
 exploitation of known-good strategies with exploration of under-tried ones.
 """
 
-import json
 import math
 import random
-import re
 import sys
 from collections import Counter
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional
+
+from shared import extract_json_object, setup_apple_llm_path
 
 from engine.delta import Op, EditOp
 
-# apple_llm import
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent.parent))
+setup_apple_llm_path()
 from apple_llm import claude as apple_llm_call
 
 
@@ -374,22 +372,8 @@ def generate_delta(target_path: str, content: str, strategy: Strategy,
 
 def _parse_ops(output: str, default_path: str) -> Optional[list[Op]]:
     """Parse LLM output into a list of Op objects."""
-    # Strip markdown fences if present
-    cleaned = output.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        cleaned = "\n".join(lines).strip()
-
-    # Find the JSON object with "ops" key
-    first = cleaned.find('{')
-    last = cleaned.rfind('}')
-    if first == -1 or last == -1:
-        return None
-
-    try:
-        data = json.loads(cleaned[first:last + 1])
-    except json.JSONDecodeError:
+    data = extract_json_object(output)
+    if data is None:
         return None
 
     if not isinstance(data, dict) or "ops" not in data:

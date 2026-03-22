@@ -10,6 +10,14 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from shared import (
+    SHRINKAGE_THRESHOLD, CAUSAL_LOSS_THRESHOLD, BULLET_LOSS_THRESHOLD,
+    MAX_NOTE_LINES, NET_ZERO_THRESHOLD, REQUIRED_SECTIONS,
+)
+
+# Gates use "## " prefixed section headers
+_REQUIRED_SECTION_HEADERS = [f"## {s}" for s in REQUIRED_SECTIONS]
+
 
 # ---------------------------------------------------------------------------
 # GateResult
@@ -25,18 +33,6 @@ class GateResult:
         """Record a gate violation."""
         self.passed = False
         self.violations.append(reason)
-
-
-# ---------------------------------------------------------------------------
-# Gate constants
-# ---------------------------------------------------------------------------
-
-SHRINKAGE_THRESHOLD = 0.85       # Must retain >= 85% of original content
-CAUSAL_LOSS_THRESHOLD = 0.80     # Must retain >= 80% of causal connectors
-BULLET_LOSS_THRESHOLD = 0.70     # Must retain >= 70% of bullet/list items
-MAX_NOTE_LINES = 450             # Hard line limit
-NET_ZERO_THRESHOLD = 300         # Notes above this must be net-zero or shrink
-REQUIRED_SECTIONS = ["## TL;DR", "## See Also"]
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +54,7 @@ def _gate_shrinkage(original: str, new_content: str, result: GateResult) -> None
 def _gate_required_sections(new_content: str, result: GateResult) -> None:
     """Required sections must be present."""
     lower = new_content.lower()
-    for section in REQUIRED_SECTIONS:
+    for section in _REQUIRED_SECTION_HEADERS:
         if section.lower() not in lower:
             result.fail(f"Missing required section: {section}")
 
