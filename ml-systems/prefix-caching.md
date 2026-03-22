@@ -6,11 +6,16 @@
 
 Prefix caching lets the engine skip recomputing KV cache for token blocks it has already seen. A KV cache block is a fixed-size chunk of pre-allocated GPU memory that stores Key and Value vectors for a group of tokens (see [[ml-systems/gpu-memory-hierarchy]]). nano-vLLM uses **content-based hash chaining** — each block of tokens gets an xxhash that includes the previous block's hash, forming a chain. On allocation, the `BlockManager` looks up the hash; on a hit it reuses the existing KV cache block (zero GPU work for those tokens). A subtle consequence: `hash_to_block_id` never shrinks and accumulates stale entries as blocks get recycled with different content.
 
+**Running example** (used throughout): Llama-3-8B on one A100-80GB, `block_size=16` tokens, 32 layers, 8 KV heads, head-dim 128, dtype=float16.
+- One KV cache block = 2 (K+V) × 32 layers × 8 heads × 16 tokens × 128 dims × 2 bytes = **2 MB**
+- A100-80GB fits ≈ 3,500 blocks after model weights (~16 GB) and activations (~2 GB) are loaded
+- A 512-token system prompt occupies 32 blocks (512 / 16); reusing it saves **64 MB** of recomputation per request
+
 ---
 
-## How the Hash Chain Works
+## Why Chain Hashes Across Blocks?
 
-Each KV cache block covers `block_size` tokens (default 256). When a sequence is allocated, each full block gets a hash that **chains** with the previous block's hash:
+Each KV cache block covers `block_size` tokens (16 in our example). When a sequence is allocated, each full block gets a hash that **chains** with the previous block's hash:
 
 ```python
 # BlockManager.compute_hash():
@@ -25,15 +30,18 @@ def compute_hash(cls, token_ids, prefix=-1):
 
 Block 2's hash encodes blocks 0+1+2's entire content. Two sequences only match if their **entire prefix** is identical up to that block — not just a single block in isolation. Partial (last) blocks always get `h = -1` and are never cached.
 
+In our example, a 512-token system prompt produces 32 full blocks (blocks 0–31). Block 31's hash chains through all 32 blocks, so two requests only share those 32 cache hits if their first 512 tokens are byte-identical.
+
 ---
 
-## Step-by-Step: First Allocation (Cold Cache)
+## How Does a Cold Allocation Work?
 
-Suppose we send two prompts that share a system prompt prefix:
+Suppose we send two prompts that share a 512-token system prompt (32 blocks of 16 tokens each), followed by a unique 16-token user question (1 partial block, not cached):
 ```
-Prompt 1: "You are a helpful assistant. What is 2+2?"
-Prompt 2: "You are a helpful assistant. What is 3+3?"
+Prompt 1 (528 tokens): [system prompt: tokens 0–511] + "What is 2+2?"   # tokens 512–527
+Prompt 2 (528 tokens): [system prompt: tokens 0–511] + "What is 3+3?"   # tokens 512–527
 ```
+Prompt 1 arrives first — cold cache, all 32 full blocks are misses. Prompt 2 arrives after — 32 hits, only the 16-token suffix needs GPU work.
 
 ### Seq 1 enters `BlockManager.allocate()`
 
@@ -58,29 +66,29 @@ def allocate(self, seq):
         seq.block_table.append(block_id)
 ```
 
-**Result**: all blocks are fresh allocations. But each full block's hash is now stored in `hash_to_block_id`. The KV cache gets computed during prefill — all tokens are sent to the GPU.
+**Result**: all 32 full blocks are fresh allocations. Each block's hash is stored in `hash_to_block_id` (32 entries). The KV cache gets computed during prefill — all 512 tokens are sent to the GPU, consuming one A100 prefill pass (~8 ms at 512 tokens on Llama-3-8B).
 
 ### Seq 1 prefill — `ModelRunner.prepare_prefill()`
 
 Since `seq.num_cached_tokens == 0`, every token hits the GPU:
 
 ```python
-input_ids.extend(seq[seq.num_cached_tokens:])              # all tokens
-positions.extend(range(seq.num_cached_tokens, seqlen))     # all positions
+input_ids.extend(seq[seq.num_cached_tokens:])              # all 512 tokens → len 512
+positions.extend(range(seq.num_cached_tokens, seqlen))     # positions [0, 511]
 
-for i in range(seq.num_cached_blocks, seq.num_blocks):     # all blocks
+for i in range(seq.num_cached_blocks, seq.num_blocks):     # blocks 0–31 (all 32)
     # compute slot_mapping for every block
 ```
 
-No `block_tables` passed to the attention kernel (pure in-place prefill: `cu_seqlens_q == cu_seqlens_k`).
+No `block_tables` passed to the attention kernel (pure in-place prefill: `cu_seqlens_q == cu_seqlens_k == 512`). GPU computes 512 × 512 attention, writing 32 × 2 MB = 64 MB of KV data into the 32 allocated blocks.
 
 ---
 
-## Step-by-Step: Second Allocation (Cache Hit)
+## How Does a Cache Hit Skip Work?
 
 ### Seq 2 enters `BlockManager.allocate()`
 
-Seq 2 shares the same system prompt prefix. For each shared block:
+Seq 2 shares the same 512-token system prompt (32 blocks). For each shared block:
 
 ```python
 for i in range(seq.num_blocks):
@@ -99,30 +107,37 @@ for i in range(seq.num_blocks):
             block = self._allocate_block(block_id) # reclaim free-but-cached block
 ```
 
-**Result**: shared prefix blocks point to the **same physical KV cache blocks** as seq 1. `seq.num_cached_tokens` is incremented per cached block. Only the divergent suffix gets a fresh allocation.
+**Result**: all 32 prefix blocks point to the **same physical KV cache blocks** as seq 1 — no new GPU memory allocated for the prefix. `seq.num_cached_tokens = 512` (32 blocks × 16 tokens). Only the 16-token suffix ("What is 3+3?") gets a fresh block allocation.
 
 ### Seq 2 prefill — cached tokens are skipped
 
 ```python
-input_ids.extend(seq[seq.num_cached_tokens:])              # only non-cached tokens
-positions.extend(range(seq.num_cached_tokens, seqlen))     # positions start after cache
+input_ids.extend(seq[seq.num_cached_tokens:])              # 16 tokens (suffix only)
+positions.extend(range(seq.num_cached_tokens, seqlen))     # positions [512, 527]
 
-for i in range(seq.num_cached_blocks, seq.num_blocks):     # skip cached blocks
-    # only compute slot_mapping for non-cached blocks
+for i in range(seq.num_cached_blocks, seq.num_blocks):     # block 32 only (the suffix block)
+    # compute slot_mapping for non-cached blocks
 ```
 
-The attention layer detects prefix caching because `cu_seqlens_k > cu_seqlens_q` — the cached K/V spans more tokens than the new Q being computed, since the prefix was already processed and its KV lives in the cached blocks:
+The attention layer detects prefix caching because `cu_seqlens_k > cu_seqlens_q` — in our example `cu_seqlens_k[-1] = 528` (full context) but `cu_seqlens_q[-1] = 16` (suffix only). The cached K/V for tokens 0–511 already lives in the 32 shared blocks:
 
 ```python
 if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache detected
     block_tables = self.prepare_block_tables(seqs)
 ```
 
-This passes `block_tables` to the attention kernel so it can read the cached KV values from the shared blocks while only computing new Q/K/V for the uncached suffix tokens. This is the exception where prefill uses `block_tables` — normally prefill is purely in-place.
+This passes `block_tables` to the attention kernel so it can read the cached KV values from the 32 shared blocks while only computing new Q/K/V for the 16 uncached suffix tokens. GPU work drops from 512 tokens to 16 tokens — a **32× reduction** in prefill compute for this request. This is the exception where prefill uses `block_tables` — normally prefill is purely in-place.
+
+| | Prompt 1 (cold) | Prompt 2 (32 hits) |
+|---|---|---|
+| Tokens sent to GPU | 512 | 16 |
+| KV blocks allocated | 32 fresh | 1 fresh + 32 shared |
+| Prefill time (est.) | ~8 ms | ~0.3 ms |
+| KV memory written | 64 MB | 2 MB |
 
 ---
 
-## Deallocation and Ref Counting
+## How Does Deallocation Preserve Cached Blocks?
 
 When seq 1 finishes:
 
@@ -137,18 +152,20 @@ def deallocate(self, seq):
     seq.block_table.clear()
 ```
 
-Shared blocks (ref_count > 1) survive because seq 2 still holds a reference. When a block hits ref_count 0, it goes to `free_block_ids` but **keeps its hash, token_ids, and KV cache data** — a future sequence with the same prefix can reclaim it without recomputation.
+Shared blocks (ref_count > 1) survive because seq 2 still holds a reference. When a block hits ref_count 0, it goes to `free_block_ids` but **keeps its hash, token_ids, and KV cache data** — a future sequence with the same 512-token system prompt can reclaim all 32 blocks without recomputation, saving another ~8 ms prefill.
 
 ---
 
-## The Stale Entry Problem
+## Why Does `hash_to_block_id` Grow Without Bound?
 
 `hash_to_block_id` is never cleaned up. This causes dangling entries when blocks get recycled for different content.
 
 ### Minimal trace: 1 block, cycling through unique content
 
 ```
-Setup: block_size=4, 1 block (block 0), free_block_ids=[0], hash_to_block_id={}
+Setup: block_size=16, 1 block (block 0), free_block_ids=[0], hash_to_block_id={}
+# In production with 3,500 blocks, each unique prefix adds one entry; at 10k
+# requests/day with unique prefixes, the map grows by ~10k entries/day (~160 KB/day).
 ```
 
 **Seq 1**: tokens `[1, 2, 3, 4]`, hash = H1
@@ -244,7 +261,7 @@ if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
     cache_miss = True
 ```
 
-Neither approach cleans up entries whose hashes are never queried again. In practice, each entry is ~16 bytes (two ints), so the leak is negligible unless the server processes an enormous number of unique prefixes over a long lifetime.
+Neither approach cleans up entries whose hashes are never queried again. Each entry is ~16 bytes (two 64-bit ints: hash key + block_id value). On our A100 with 3,500 blocks, after 1 million requests with fully unique prefixes the map holds ~1 million entries = ~16 MB — negligible against the 80 GB GPU, but a real leak on long-running CPU-side processes.
 
 ---
 

@@ -8,15 +8,17 @@ The KV cache stores Key and Value vectors for all past tokens so they don't need
 
 ---
 
-## Why the KV Cache Exists
+## Why Does the KV Cache Exist?
 
-During autoregressive generation, each new token needs to attend to ALL previous tokens. Without caching, generating token 100 would require recomputing K and V for tokens 0-99 — O(N²) redundant work across all steps.
+Without caching, autoregressive generation (producing one token at a time, each conditioned on all prior tokens) is O(N²): generating token 100 requires recomputing K and V for tokens 0–99, then token 101 recomputes 0–100, and so on. Because each K and V vector depends only on its source token — not on later tokens — those vectors are identical on every pass, wasting ~99% of compute by token 100.
 
-The KV cache stores each token's K and V vectors the first time they're computed. Subsequent tokens read from the cache instead of recomputing. Cost: GPU memory. Benefit: generation goes from O(N²) to O(N) total compute.
+The KV cache stores each token's K and V vectors the first time they're computed. Since subsequent tokens need the same history, they read from the cache instead of recomputing. Cost: GPU memory proportional to sequence length. Benefit: generation drops from O(N²) to O(N) total compute.
 
 ---
 
-## The 6-D Tensor
+## What Does the 6-D Tensor Look Like?
+
+Because every layer needs its own K and V storage, and because fragmented per-layer allocations would cause memory overhead and slow down block management, nano-vLLM allocates one giant tensor upfront and hands each layer a view into it.
 
 ```python
 # model_runner.py:112
@@ -29,52 +31,82 @@ self.kv_cache = torch.empty(
     head_dim                        # dim 5: 64 dimensions per head
 )
 # Concrete shape: [2, 28, 500, 256, 8, 64]
-# One allocation. Never resized. ~3.4 GB at fp16.
+# One allocation. Never resized.
+#
+# Size check:
+#   elements = 2 * 28 * 500 * 256 * 8 * 64 = 3,670,016,000
+#   bytes    = 3,670,016,000 * 2  (fp16 = 2 bytes each)
+#            = 7,340,032,000 bytes ≈ 6.84 GiB
+#
+# >>> import torch
+# >>> t = torch.empty(2, 28, 500, 256, 8, 64, dtype=torch.float16)
+# >>> t.numel()
+# 3670016000
+# >>> t.numel() * 2 / 1024**3
+# 6.836175918579102
 ```
 
-The `block_size=256` is a memory management unit — it determines when the BlockManager allocates a new block (every 256 tokens) and when prefix caching hashes register (when a block fills). The constraint `block_size % 256 == 0` exists because FlashAttention's paged attention kernel requires aligned block table entries for coalesced GPU memory access.
+The `block_size=256` is the memory management granularity: the BlockManager allocates a new block every 256 tokens, and prefix-caching hashes commit only when a block is full. `block_size % 256 == 0` is required because FlashAttention's paged-attention kernel needs aligned block-table entries for coalesced GPU memory access; misalignment causes ~2× slower reads.
 
 ---
 
-## Profile-Based Sizing: Warmup → Measure → Allocate
+## How Does the Engine Size the Cache?
 
-The engine doesn't guess how many blocks to allocate. It measures:
+Allocating too few blocks starves long sequences; allocating too many causes out-of-memory crashes during the forward pass because temporary activations compete for the same VRAM. Since the engine cannot know at startup how much VRAM activations will consume, it measures rather than guesses:
 
 ```python
 # model_runner.py:85-118 (simplified)
 
 # Step 1: Load model weights → GPU memory used
 self.model = load_model(...)
+# Qwen3-0.6B weights: ~1.1 GiB at fp16
 
 # Step 2: Run dummy forward pass to trigger peak allocation
 self.warmup_model()
-#   Creates max-size dummy sequences, runs one forward pass
-#   Temporary activations spike GPU memory, then get freed
+#   Dummy batch: max_num_seqs=256 sequences × max_model_len=4096 tokens
+#   Temporary activations (Q, K, V, attention scores, FFN intermediates) spike VRAM
+#   then get freed — but peak is recorded by PyTorch's memory tracker
 #   k_cache.numel() == 0 during warmup → store_kvcache is skipped (safe)
 
 # Step 3: Measure and allocate
 free, total = torch.cuda.mem_get_info()
+# Example on A100-40GB: total=42,949,672,960 bytes (40 GiB)
 peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
+# Example: peak = 3,800,000,000  (weights + activation spike)
 current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+# Example: current = 1,180,000,000  (weights only, activations freed)
 
-block_bytes = 2 * num_layers * block_size * num_kv_heads * head_dim * dtype_size
+# Qwen3-0.6B, block_size=256, fp16:
+block_bytes = 2 * 28 * 256 * 8 * 64 * 2   # 2=K/V, last 2=bytes per fp16
+#           = 2 * 28 * 256 * 8 * 64 * 2
+#           = 14,680,064 bytes ≈ 14 MiB per block
+
 num_blocks = (total * utilization - used - peak + current) // block_bytes
 #             ↑ total VRAM    ↑ OS etc    ↑ peak - current = activation headroom
+#
+# Example: (40GiB * 0.90 - 0 - 3.8GiB + 1.18GiB) // 14MiB
+#        = (36GiB - 2.62GiB) // 14MiB
+#        = 33.38GiB // 14MiB
+#        ≈ 2441 blocks  → 2441 * 256 = 624,896 token slots total
 ```
 
 The `peak - current` term is the key insight: it's how much **extra** VRAM the forward pass temporarily needs beyond persistent model weights. That headroom must be reserved — the KV cache gets everything that's left.
 
 ```
-VRAM after each step:
-  Step 1: [████████░░░░░░░░░░░░]  model weights only
-  Step 2: [████████████░░░░░░░░]  peak during warmup (activations + weights)
-           (activations freed after warmup, but peak is recorded)
-  Step 3: [████████░░░░████████]  weights + KV cache fills remaining VRAM
+VRAM after each step (A100-40GiB, Qwen3-0.6B, utilization=0.90):
+
+  Step 1: [██░░░░░░░░░░░░░░░░░░]  ~1.1 GiB  model weights only
+  Step 2: [████░░░░░░░░░░░░░░░░]  ~3.8 GiB  peak during warmup
+           ↑ activations freed after warmup, but peak is recorded
+           ↑ headroom to reserve = peak - current = 3.8 - 1.1 = 2.62 GiB
+  Step 3: [██████████████████░░]  ~35 GiB   weights + KV cache (2441 blocks)
+           └── 1.1 GiB weights + 2441 × 14 MiB KV blocks = 35.3 GiB
+           └── remaining ~1.7 GiB = OS + CUDA context + fragmentation buffer
 ```
 
 ---
 
-## Per-Layer Injection via Module Scan
+## How Does Each Attention Layer Get Its Cache Slice?
 
 Each `Attention` module starts with an empty placeholder:
 
@@ -90,9 +122,16 @@ After the giant tensor is allocated, `model_runner` walks the model tree and ass
 layer_id = 0
 for module in self.model.modules():
     if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
-        module.k_cache = self.kv_cache[0, layer_id]   # shape [500, 256, 8, 64]
-        module.v_cache = self.kv_cache[1, layer_id]   # shape [500, 256, 8, 64]
+        module.k_cache = self.kv_cache[0, layer_id]   # shape [2441, 256, 8, 64]
+        module.v_cache = self.kv_cache[1, layer_id]   # shape [2441, 256, 8, 64]
         layer_id += 1
+# After loop: layer_id == 28  (one slice per Qwen3-0.6B layer)
+
+# Verify it's a view, not a copy:
+# >>> module.k_cache.data_ptr() == kv_cache.data_ptr() + kv_cache.stride(1) * layer_id * kv_cache.element_size()
+# True
+# >>> module.k_cache.storage().data_ptr() == kv_cache.storage().data_ptr()
+# True
 ```
 
 Writing into `module.k_cache` writes directly into the giant tensor — no copy, no extra memory. This is possible because indexing the two leftmost dimensions of a contiguous tensor produces a contiguous view.
@@ -105,13 +144,23 @@ Writing into `module.k_cache` writes directly into the giant tensor — no copy,
 # attention.py:62
 if k_cache.numel() and v_cache.numel():
     store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
+
+# During warmup:
+# >>> torch.tensor([]).numel()
+# 0   ← falsy, store_kvcache is skipped
+
+# After allocation (Qwen3-0.6B, 2441 blocks):
+# >>> module.k_cache.numel()   # shape [2441, 256, 8, 64]
+# 322,109,440   ← truthy, cache writes proceed
 ```
 
-`numel()` = number of elements. `torch.tensor([]).numel()` = 0 (falsy). During warmup, the cache hasn't been allocated yet — writing to an empty tensor would crash. After allocation, `numel()` returns millions (truthy) and cache writes proceed.
+`numel()` = number of elements. During warmup, the cache hasn't been allocated yet — writing to an empty tensor would crash. After allocation, `numel()` returns 322 million (truthy) and cache writes proceed.
 
 ---
 
 ## Triton Kernel: Flat 1D Addressing via slot_mapping
+
+GPU kernels pay ~20 cycles per integer division; with 512 floats × 28 layers per token, per-thread address arithmetic would dominate. Because the CPU scheduler already knows each token's physical location before kernel launch, it pre-computes a flat slot index — the kernel receives one integer per token and does zero address arithmetic.
 
 The Triton kernel `store_kvcache` writes one token's K and V vectors per CUDA thread. It treats the cache as a **flat 1D array** — no awareness of blocks, layers, or heads.
 
@@ -132,7 +181,9 @@ def store_kvcache_kernel(key_ptr, key_stride, value_ptr, value_stride,
     tl.store(v_cache_ptr + cache_offsets, value)
 ```
 
-Where `D = num_kv_heads * head_dim = 8 * 64 = 512` floats per token.
+Where `D = num_kv_heads * head_dim = 8 * 64 = 512` floats per token (1024 bytes at fp16).
+
+Each CUDA thread block handles one token: 512 floats read from `key_ptr`, 512 floats written to `k_cache_ptr`. At batch=256 decode sequences, the kernel launches 256 thread blocks — one write per new token across all 256 sequences simultaneously.
 
 ### How `cache_offsets` works
 
@@ -166,16 +217,21 @@ The CPU scheduler converts logical `(block_id, position_in_block)` into a flat s
 
 ```python
 # Prefill (model_runner.py:147-153) — multiple tokens:
+# Sequence: "Hello how are you today" → 5 tokens, assigned block 42
 for block_idx in range(num_cached_blocks, num_blocks):
-    start = seq.block_table[block_idx] * block_size    # e.g., 42 * 256 = 10752
-    end = start + tokens_in_this_block
-    slot_mapping.extend(range(start, end))              # [10752, 10753, ..., 10756]
+    start = seq.block_table[block_idx] * block_size    # 42 * 256 = 10752
+    end = start + tokens_in_this_block                 # 10752 + 5 = 10757
+    slot_mapping.extend(range(start, end))              # [10752, 10753, 10754, 10755, 10756]
+# slot_mapping passed to Triton kernel: 5 thread blocks, each writes 512 floats
 
-# Decode (model_runner.py:173) — one token:
+# Decode (model_runner.py:173) — one token (generating token 6):
 slot = seq.block_table[-1] * block_size + seq.last_block_num_tokens - 1
 #    = 42              * 256           + 6                          - 1
 #    = 10757
+# slot_mapping = [10757] → 1 thread block writes 512 floats
 ```
+
+The CPU does `block_id * block_size + offset` — one multiply and one add. The GPU receives the result as a plain integer and does zero arithmetic.
 
 The GPU never does division or modulo — it just writes to the flat address the CPU pre-computed.
 
@@ -188,6 +244,22 @@ The GPU never does division or modulo — it just writes to the flat address the
 ```python
 # attention.py:38
 assert k_cache.stride(1) == D    # stride along token dim == 512
+
+# Verify on a real slice (layer 3's K cache, shape [2441, 256, 8, 64]):
+# >>> k_cache = kv_cache[0, 3]   # fix K/V dim and layer dim
+# >>> k_cache.shape
+# torch.Size([2441, 256, 8, 64])
+# >>> k_cache.strides
+# (131072, 512, 64, 1)    ← stride(1) = 512 = D ✓
+# >>> k_cache.is_contiguous()
+# True
+#
+# Compare: a non-contiguous middle-dim slice:
+# >>> bad = kv_cache[0, :, 3]    # fix block dim (middle), NOT leftmost
+# >>> bad.strides
+# (33554432, 512, 64, 1)  ← stride(0) jumps 33M elements across layers
+# >>> bad.is_contiguous()
+# False   ← flat addressing would corrupt data
 ```
 
 `stride(1)` is the number of elements to skip when advancing one step along dimension 1 (the token dimension). If it equals `D` (512), then consecutive tokens are exactly 512 floats apart — flat 1D addressing is valid.
@@ -196,7 +268,7 @@ This works because `kv_cache[0, 3]` fixes the two **leftmost** dimensions of a r
 
 ---
 
-## Prefill vs Decode: Cache Write and Read Patterns
+## How Do Prefill and Decode Use the Cache Differently?
 
 ### Prefill — write N tokens, read from local tensors
 

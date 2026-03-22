@@ -85,3 +85,13 @@ none	ml-systems/rotary-position-embedding.md	Interview Readiness	7	7	discarded	r
 none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	no improvement (7->7)
 none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	retry: no improvement (7->7)
 469d057	ml-systems/transformer-model-internals.md	Interview Readiness	3	5	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Interview Readiness (3->5/10)
+7ebe12e	ml-systems/vllm-distributed-groups.md	Interview Readiness	7	8	kept	autoresearch: improve ml-systems/vllm-distributed-groups.md on Interview Readiness (7->8/10)
+none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	retry: no improvement (7->7)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	retry: no improvement (6->6)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	4	4	failed	Edits could not be applied
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	7	7	discarded	retry: no improvement (7->7)
+none	ml-systems/vllm-weight-loading.md	Conciseness	6	6	discarded	no improvement (6->6)
+none	ml-systems/vllm-weight-loading.md	Conciseness	6	5	discarded	retry: no improvement (6->5)

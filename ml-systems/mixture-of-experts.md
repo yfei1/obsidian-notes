@@ -99,7 +99,7 @@ This is the core MoE tradeoff:
 | Active params/token | ~72M | ~36M (2× less!) |
 | Model "knowledge" | Limited by one FFN | Spread across 300 specialists |
 
-A 150B-parameter MoE model might activate only ~15B parameters per token. It "knows" as much as a 150B model but runs closer to a 15B model's speed.
+Mixtral 8x7B has ~47B total parameters but activates ~13B per token (2 of 8 experts × 7B each, roughly). It matches a 47B dense model's knowledge while running at ~13B dense model speed — a 3.6× compute saving.
 
 ---
 
@@ -115,15 +115,16 @@ vLLM provides `FusedMoE` — a fused Triton/CUDA kernel that combines routing, e
 
 ```
 Naive MoE (5 kernel launches):
-  1. Router matmul    → logits
-  2. Top-k selection  → expert assignments
-  3. Scatter tokens to experts
-  4. Expert matmuls (per expert)
-  5. Gather + weighted sum
+  1. Router matmul    → logits        [128, 2048] × [2048, 300] → [128, 300]
+  2. Top-k selection  → expert assignments                      → [128, 8]
+  3. Scatter tokens to experts         ~1024 tokens land on each of 300 experts
+  4. Expert matmuls (per expert)       300 × SwiGLU([tokens, 2048] → [tokens, 736] → [tokens, 2048])
+  5. Gather + weighted sum             → [128, 2048]
+  Each launch: ~10–50 µs overhead on H100 → 50–250 µs wasted per MoE layer
 
 FusedMoE (1 kernel launch):
   All 5 steps fused into one Triton kernel
-  → Fewer kernel launches, better GPU utilization
+  → ~40 µs total vs ~200 µs naive on H100 at batch=128, seq=128
 ```
 
 Key `FusedMoE` parameter for TP: `reduce_results`. When `True`, FusedMoE does an internal all-reduce. When `False`, it returns partial results and the model handles reduction at a higher level (e.g., at segment boundaries in PT-MoE). See [[ml-systems/pt-moe-architecture]] for how this is used.

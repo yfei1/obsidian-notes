@@ -25,32 +25,101 @@ obsidian-notes/
 
 ## Note Structure
 
-Every note follows this template:
+Two templates based on note purpose. Pick the one that fits.
+
+### Type A: Concept Note (attention, KV cache, RoPE, parallelism)
 
 ```markdown
 # Title
+#tags #interview-prep
 
-#tag1 #tag2 #interview-prep
-
-## TL;DR
-High-level summary for quick review (2-4 sentences).
+## TL;DR (3-4 sentences, self-sufficient)
 
 ---
 
-## Sections
-Detailed step-by-step walkthroughs, diagrams, code blocks.
-Walk the reader through HOW things work, not just WHAT they are.
+## Core Intuition (10-30 lines)
+One-paragraph hook: what problem does this solve?
+Simplest possible example (toy numbers, 3-4 dims).
+The "aha" moment should land here.
 
 ---
 
-## Interview Talking Points (if applicable)
-Numbered list of key points to articulate in an interview.
+## How It Works (50-150 lines)
+Progressive build-up from intuition to real-scale.
+Math with concrete shapes. ASCII diagrams.
+Each subsection introduces ONE new concept.
+
+---
+
+## Key Trade-offs & Decisions (20-50 lines)
+When would you choose X over Y?
+What breaks if you change parameter Z?
+Concrete numbers for the trade-off.
+
+---
+
+## Interview Talking Points
+Numbered Q&A pairs. Mix "explain X" and "when would you choose X vs Y?"
 
 ---
 
 ## See Also
-Wikilinks to related notes: [[topic/subtopic]]
+Wikilinks with one-line context.
 ```
+
+### Type B: Implementation Walkthrough (vLLM weight loading, PT-MOE integration)
+
+```markdown
+# Title
+#tags #interview-prep
+
+## TL;DR (3-4 sentences)
+
+---
+
+## What This Component Does (10-20 lines)
+Role in the system, inputs, outputs.
+Link to concept note for underlying theory.
+
+---
+
+## Step-by-Step Walkthrough (80-150 lines)
+Code blocks with file:line references.
+Each step: what happens, why, concrete shapes.
+
+---
+
+## Edge Cases & Gotchas (20-40 lines)
+What breaks? Anti-patterns with alternatives.
+
+---
+
+## Interview Talking Points
+
+---
+
+## See Also
+```
+
+### Section Budgets
+
+| Section | Concept Note | Implementation Note |
+|---------|-------------|-------------------|
+| TL;DR | 5-8 lines | 5-8 lines |
+| Core Intuition / What It Does | 10-30 lines | 10-20 lines |
+| How It Works / Walkthrough | 50-150 lines | 80-150 lines |
+| Trade-offs / Edge Cases | 20-50 lines | 20-40 lines |
+| Interview Talking Points | 30-60 lines | 20-40 lines |
+| See Also | 5-15 lines | 5-10 lines |
+| **Target total** | **~250 lines** | **~200 lines** |
+
+### Checkpoint Callouts (Optional)
+
+Optionally add after major sections — useful for complex multi-step explanations but not required:
+```markdown
+> **Checkpoint**: After this section, you should be able to [specific testable claim].
+```
+Skip checkpoints for short sections or self-evident content. If a section needs a checkpoint to be understandable, consider whether the section itself needs rewriting instead.
 
 ## Code Examples
 
@@ -69,8 +138,15 @@ Wikilinks to related notes: [[topic/subtopic]]
 
 ## File Size Limits
 
-- If a note grows beyond **~450 lines**, consider splitting it into focused sub-notes.
-- When splitting, **every cross-reference and context link must be preserved**:
+```
+Target:     300 lines (most notes should fit here)
+Soft cap:   350 lines (acceptable for complex topics)
+Hard split: 400 lines (MUST split into sub-notes)
+```
+
+Notes over 300 lines cannot have lines added by the improvement loop without removing an equal or greater number. The Length Budget gate enforces this.
+
+When splitting:
   1. Each new sub-note must have a "See Also" section linking back to sibling notes.
   2. Any shared context (definitions, assumptions, notation) that both sub-notes depend on must be duplicated or linked — never assume the reader has the other file open.
   3. Verify: after splitting, grep for all `[[original-note-name]]` wikilinks across the repo and update them to point to the correct sub-note.
@@ -88,6 +164,48 @@ Wikilinks to related notes: [[topic/subtopic]]
 - Each sentence introduces **at most 1 new concept**. If you need to introduce 3 concepts, use 3 sentences.
 - **No jargon without inline definition** at first use. If a term is defined in another note, add a brief parenthetical + wikilink rather than leaving the reader to guess.
 - **Motivation before implementation**: always explain *why* before *how*. Start with the problem, then the solution.
+
+## Writing Guidelines
+
+1. **One example, used everywhere**: Pick one concrete instance (model, numbers). Use it throughout. Never switch mid-explanation.
+2. **Concrete verb > abstract adjective**: "The GPU idles 95%" not "the GPU is memory-bound"
+3. **Prose sections <= 20 lines**: If longer, split or convert to table/list
+4. **Every paragraph must have a "because"**: Facts without causation are trivia, not understanding
+5. **Define at first use**: Parenthetical or em-dash, then bare term thereafter. No glossary sections.
+6. **No redundant explanations**: One canonical location per concept. Others get one-liner + wikilink.
+7. **Tier your content**: Core (full explanation) / Supporting (concise) / Deep-dive (one sentence + link)
+8. **Compression test**: For every paragraph, try halving the words. If meaning survives, use the shorter version.
+9. **Headers as questions**: "Why X?" primes the reader to find the answer.
+10. **Code is proof**: Always show output alongside code. Code without output is a claim, not evidence.
+
+## Verbosity Detector
+
+**Filler phrases (remove on sight)**:
+- "It is worth noting that" / "It should be mentioned that" → delete
+- "Essentially" / "Basically" / "Fundamentally" → delete
+- "In order to" → "To"
+- "Due to the fact that" → "Because"
+
+**Section bloat thresholds**:
+- Any section > 50 lines without a sub-header → too long, split
+- Any bullet point > 3 lines → restructure or make its own section
+- More than 3 examples of the same pattern → cut to best 2-3
+
+**Redundancy check**:
+- If the same concept appears in 2+ sections within a note → consolidate to one location
+- If content overlaps with another note → one-liner + wikilink to canonical home
+
+## Reference vs Understanding
+
+Reference material (framework matrices, exhaustive comparisons, all-config tables) goes in collapsible callouts:
+```markdown
+> [!info]- Framework Support Matrix (reference)
+> | Framework | TP | PP | EP |
+> |-----------|----|----|-----|
+> | Megatron  | Yes| Yes| Yes |
+```
+
+If >100 lines of reference material, split into `concept.md` (understanding) and `concept-reference.md` (tables).
 
 ## Progressive Disclosure
 
@@ -110,11 +228,21 @@ Wikilinks to related notes: [[topic/subtopic]]
 - **One-sentence summary test**: Every section should be summarizable in one sentence a non-expert understands. If you can't summarize it, the section is doing too much — split it.
 - **Checkpoint-first verification**: When documenting model architectures or weight loading, ground truth is the checkpoint's actual tensor names/shapes (via `safetensors.metadata()` or weight index JSON), not the code. Code may be wrong; the checkpoint is the source of truth.
 
+## Interview Talking Points
+
+Mix two types of points in every note's Interview Talking Points section:
+- **Explain**: "What is X and why does it exist?"
+- **Decide**: "When would you choose X over Y? What are the trade-offs?"
+
+Decision-oriented points are more valuable in ML systems interviews. Always include at least one "when would you choose X vs Y?" question.
+
 ## AutoResearch Loop
 
 This repo includes an `autoresearch/` directory with automated note quality scoring and improvement:
 
-- `autoresearch/score.py` — Scores all notes on 12 dimensions (see `autoresearch/rubric.md`)
+- `autoresearch/score.py` — Scores on 9 dimensions + 2 prerequisite gates (see `autoresearch/rubric.md`)
+- Targeting priority: Interview Readiness (3x), Clarity/KD/Conciseness (2x), others (1-1.5x)
+- Gates: Naming & Structure (template compliance), Length Budget (<=400 lines)
 - `autoresearch/improve.py` — Autonomous loop: score → pick weakest → improve → re-score → keep/discard
 - `autoresearch/program.md` — Agent instructions for the improvement loop
 - **Modifiable files**: Only notes (`*.md` in topic dirs) and `CLAUDE.md` may be modified by the loop

@@ -1,0 +1,1359 @@
+
+============================================================
+Timestamp: 2026-03-21 19:13:39
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -383,23 +383,23 @@
+ 
+ ## Interview Talking Points
+ 
+-1. **"Walk me through a decoder layer."** — Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+-
+-2. **"What is GQA?"** — Fewer KV heads than Q heads (8 vs 16). Multiple Q heads share one KV head. Cuts KV cache memory proportionally with minimal quality loss.
+-
+-3. **"What is RoPE?"** — Rotary Position Embedding. Rotates Q/K by position-dependent angles. Each dimension pair rotates at a different frequency. After rotation, dot products depend only on relative position (m-n). V is not rotated.
+-
+-4. **"Why multiple RoPE frequencies?"** — Like clock hands: fast frequencies distinguish nearby tokens, slow frequencies distinguish far-apart tokens. The base (1M) controls the spectrum.
+-
+-5. **"What is SwiGLU?"** — Gated MLP: `W_down(SiLU(W_gate(x)) * W_up(x))`. Gate learns to filter, up learns to represent. SiLU is smooth (unlike ReLU's hard cutoff), preventing dying neurons.
+-
+-6. **"Why fuse QKV / gate+up?"** — One large matmul is more efficient than multiple small ones on a GPU (better Tensor Core utilization, fewer kernel launches).
+-
+-7. **"How does weight tying work?"** — Embedding and LM head share the same weight. During training, gradients from both ends accumulate into one gradient tensor. Saves parameters and enforces geometric consistency: the vector that *represents* token T as input is the same vector used to *detect* token T as output — the model cannot learn different geometries for embedding vs prediction.
+-
+-8. **"What's the residual pattern?"** — Fused add+norm: RMSNorm first adds previous output to running residual, saves un-normalized sum, then normalizes. Compiles to single kernel, preserves clean gradient path.
+-
+-9. **"Embedding and LM head share weights — why different implementations?"** — They do opposite operations: embedding is a row lookup (`weight[token_id]`), LM head is a matmul (`hidden @ weight.T`). On multi-GPU: embedding uses `all_reduce` (sum) because only one GPU has the real embedding, others contribute zeros. LM head uses `gather + concat` because each GPU computes logits for a different vocabulary slice — summing them would mix scores for unrelated tokens.
++**Decision-oriented questions** — practice choosing between alternatives and justifying the tradeoff:
++
++1. **"You're designing a new LLM and must choose between GQA, MQA, and full MHA — which do you pick and why?"** — GQA (8 KV heads, 16 Q heads here) balances KV cache savings against quality. MQA (1 KV head) saves more memory but degrades quality on long contexts. MHA maximizes expressiveness but makes KV cache the bottleneck at scale. Choose GQA for production; MQA only if memory is the hard constraint.
++
++2. **"Your model has attention collapse — one head dominates softmax. What's your fix?"** — Add per-head Q/K RMSNorm (Qwen3's approach). Alternatives: reduce learning rate, add attention entropy regularization, or use talking-heads attention. Per-head norm is cheapest and most surgical — it normalizes each head's scale without touching the attention mechanism.
++
++3. **"Would you use ReLU or SiLU in your MLP, and does it matter at scale?"** — SiLU at scale. ReLU's zero-gradient region kills neurons permanently; at billions of parameters, dead neurons compound and waste capacity. SiLU has non-zero gradient everywhere. The smooth negative dip (~-0.28) also provides a weak inhibition signal ReLU lacks.
++
++4. **"Should you tie embedding and LM head weights? What do you give up?"** — Yes for most models: saves ~293MB (fp16 at vocab=151936), enforces geometric consistency (same vector represents and detects each token), and often improves perplexity. You give up the ability to learn asymmetric input vs output representations — a real cost for tasks where input and output distributions differ sharply.
++
++5. **"When scaling to multi-GPU, where do all_reduce calls happen per layer, and can you reduce them?"** — Two per layer: after o_proj (attention) and after down_proj (MLP). You can reduce to one by fusing attention + MLP into a single column→row block, but this prevents inserting RMSNorm between them. The standard 2-all_reduce pattern is kept because the inter-block norm is not optional.
++
++**Quick-recall answers:**
++- *Walk me through a decoder layer:* RMSNorm → fused QKV → per-head norm → RoPE → flash attention → o_proj. RMSNorm → fused gate+up → SiLU gating → down_proj. Residual wraps both.
++- *What is RoPE?* Rotates Q/K by position-dependent angles; dot products depend only on relative distance (m−n). V is not rotated.
++- *Why fuse QKV / gate+up?* One large matmul beats two small ones: better Tensor Core utilization, fewer kernel launches.
++- *Residual pattern:* Fused add+norm saves un-normalized sum, provides clean gradient path, compiles to single kernel.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:15:54
+Note: ml-systems/vllm-model-integration.md
+============================================================
+--- a/ml-systems/vllm-model-integration.md
++++ b/ml-systems/vllm-model-integration.md
+@@ -159,10 +159,17 @@
+ - **No lm_head weight** → tied with `embed_tokens` (same parameter)
+ - **No K norm weight** → `RMSNorm(has_weight=False)` (stateless)
+ - **562 total weights** = 35 × 10 + 21 × 10 + 2
+-
+-### Why not AutoWeightsLoader?
+-
+-`AutoWeightsLoader` requires checkpoint tensor names to match vLLM module names exactly. TAMM uses a completely different naming scheme (`transformer.tamm_model.layers.segment_0.layer_N` vs `model.layers.N`), and the segment flattening requires arithmetic (not static string substitution). A custom `load_weights` with `_remap_tamm_name()` is simpler and more explicit.
++- **Cut-off point**: layers 0–34 are full QKV (segment 0); layers 35–55 are Q-only (segment 1). The cut-off at layer 34 is the highest-index layer that *writes* its own KV cache — it becomes the shared source for all 21 segment 1 layers. Layers beyond the cut-off have no `k_proj`/`v_proj` weights in the checkpoint at all.
++
++### AutoWeightsLoader vs custom `load_weights`
++
++| | `AutoWeightsLoader` | Custom `load_weights` + remap fn |
++|---|---|---|
++| **Use when** | Checkpoint names already match vLLM module names (e.g. a model ported directly from HF with identical layer naming) | Checkpoint uses a different naming scheme, requires arithmetic remapping, or has structural differences (fused vs split tensors) |
++| **How it works** | Iterates weights, matches by module path, calls `weight_loader` automatically | You write `_remap_name()`, iterate weights yourself, call `param.weight_loader(param, tensor)` explicitly |
++| **TAMM verdict** | ❌ Not usable — TAMM checkpoint uses `transformer.tamm_model.segment_0.layer_N` vs vLLM's `model.layers.N`; segment flattening requires arithmetic (35+M), not static string substitution | ✅ Used here — explicit remap function handles all cases transparently |
++
++Rule of thumb: if you can express the name mapping as a one-line `str.replace()` chain, `AutoWeightsLoader` works. If it needs `int(m.group(1)) + 35` or conditional logic per segment, write a custom `load_weights`.
+ 
+ ---
+ 
+@@ -221,6 +228,8 @@
+ 3. **"Why not just call lm_head(hidden_states)?"** — `VocabParallelEmbedding.forward()` does token lookup (wrong direction). `LogitsProcessor` routes through `quant_method.apply()` which does the reverse matmul, handles quantization formats (FP8/int4), and performs TP gather.
+ 
+ 4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking.
++
++4b. **"When do you use AutoWeightsLoader vs a custom load_weights?"** — `AutoWeightsLoader` when checkpoint names match vLLM module names (simple HF-port models). Custom `load_weights` when the checkpoint uses a different naming scheme or requires arithmetic to flatten segments (as in TAMM: `segment_0.layer_N` → `model.layers.N`, `segment_1.layer_M` → `model.layers.(35+M)`). If name mapping needs more than `str.replace()`, write a custom remap function.
+ 
+ 5. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:16:45
+Note: ml-systems/vllm-model-integration.md
+============================================================
+--- a/ml-systems/vllm-model-integration.md
++++ b/ml-systems/vllm-model-integration.md
+@@ -220,7 +220,9 @@
+ 
+ 3. **"Why not just call lm_head(hidden_states)?"** — `VocabParallelEmbedding.forward()` does token lookup (wrong direction). `LogitsProcessor` routes through `quant_method.apply()` which does the reverse matmul, handles quantization formats (FP8/int4), and performs TP gather.
+ 
+-4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking.
++4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
++
++7. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
+ 
+ 5. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:18:50
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -383,23 +383,23 @@
+ 
+ ## Interview Talking Points
+ 
+-1. **"Walk me through a decoder layer."** — Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+-
+-2. **"What is GQA?"** — Fewer KV heads than Q heads (8 vs 16). Multiple Q heads share one KV head. Cuts KV cache memory proportionally with minimal quality loss.
+-
+-3. **"What is RoPE?"** — Rotary Position Embedding. Rotates Q/K by position-dependent angles. Each dimension pair rotates at a different frequency. After rotation, dot products depend only on relative position (m-n). V is not rotated.
+-
+-4. **"Why multiple RoPE frequencies?"** — Like clock hands: fast frequencies distinguish nearby tokens, slow frequencies distinguish far-apart tokens. The base (1M) controls the spectrum.
+-
+-5. **"What is SwiGLU?"** — Gated MLP: `W_down(SiLU(W_gate(x)) * W_up(x))`. Gate learns to filter, up learns to represent. SiLU is smooth (unlike ReLU's hard cutoff), preventing dying neurons.
+-
+-6. **"Why fuse QKV / gate+up?"** — One large matmul is more efficient than multiple small ones on a GPU (better Tensor Core utilization, fewer kernel launches).
+-
+-7. **"How does weight tying work?"** — Embedding and LM head share the same weight. During training, gradients from both ends accumulate into one gradient tensor. Saves parameters and enforces geometric consistency: the vector that *represents* token T as input is the same vector used to *detect* token T as output — the model cannot learn different geometries for embedding vs prediction.
++1. **RMSNorm** — Divides by root-mean-square, scales by γ; no mean subtraction. ~10–15% faster than LayerNorm with equivalent quality. Used 57× in Qwen3: pre-Attention, pre-MLP, per Q/K head (prevents attention collapse), and final norm. Pre-Norm placement (norm before sub-block, not after residual) fixes gradient instability in deep networks.
++
++2. **GQA (Grouped Query Attention)** — 8 KV heads shared by 16 Q heads; 2 Q heads per KV head. KV cache shrinks by `num_kv_heads/num_q_heads` (0.5× here, 8× for Llama 3 70B's 8/64 ratio). Quality loss is minimal because V is only linearly combined — the KV heads don't need 1:1 correspondence with Q heads to preserve expressive power.
++
++3. **SwiGLU** — `W_down(SiLU(W_gate(x)) × W_up(x))`. Gate and content are decoupled linear projections: gate learns *whether* a feature matters, up learns *what* it is. SiLU is smooth everywhere (non-zero gradient for x<0), preventing dying neurons. Intermediate size is ~8d/3 (not 4d) to keep total parameter count equal to a 2-matrix FFN.
++
++4. **RoPE** — Rotates Q and K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each of the d/2 dimension pairs rotates at frequency `θᵢ = base^(−2i/d)` — fast frequencies distinguish nearby tokens, slow ones distinguish far-apart tokens. V is not rotated (no positional bias needed for the weighted sum). Zero extra parameters.
++
++5. **Tensor Parallelism tradeoffs** — Megatron Column→Row pattern: ColumnParallel (QKV, gate+up) needs zero communication; RowParallel (o_proj, down_proj) needs one all_reduce. Total: **2 all_reduces per layer**. Scaling cost: all_reduce latency grows with tp_size (more GPUs = larger collective). Benefit saturates when per-GPU compute < all_reduce latency — typically tp_size ≤ 8 within a single NVLink node. Embedding uses all_reduce (sum); LM head uses gather+concat — same shared weight, different collectives because one is a row-lookup and the other slices the vocabulary.
++
++6. **"Walk me through a decoder layer."** — Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
++
++7. **"Why fuse QKV / gate+up?"** — One large matmul is more efficient than multiple small ones on a GPU (better Tensor Core utilization, fewer kernel launches).
+ 
+ 8. **"What's the residual pattern?"** — Fused add+norm: RMSNorm first adds previous output to running residual, saves un-normalized sum, then normalizes. Compiles to single kernel, preserves clean gradient path.
+ 
+-9. **"Embedding and LM head share weights — why different implementations?"** — They do opposite operations: embedding is a row lookup (`weight[token_id]`), LM head is a matmul (`hidden @ weight.T`). On multi-GPU: embedding uses `all_reduce` (sum) because only one GPU has the real embedding, others contribute zeros. LM head uses `gather + concat` because each GPU computes logits for a different vocabulary slice — summing them would mix scores for unrelated tokens.
++9. **"How does weight tying work?"** — Embedding and LM head share the same `[151936, 1024]` tensor. Gradients from both ends accumulate into one `W.grad`. Saves ~293MB (fp16) and enforces geometric consistency: the vector that *represents* token T as input is the same vector used to *detect* token T as output.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:20:36
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -381,25 +381,25 @@
+ 
+ ---
+ 
+-## Interview Talking Points
+-
+-1. **"Walk me through a decoder layer."** — Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+-
+-2. **"What is GQA?"** — Fewer KV heads than Q heads (8 vs 16). Multiple Q heads share one KV head. Cuts KV cache memory proportionally with minimal quality loss.
+-
+-3. **"What is RoPE?"** — Rotary Position Embedding. Rotates Q/K by position-dependent angles. Each dimension pair rotates at a different frequency. After rotation, dot products depend only on relative position (m-n). V is not rotated.
+-
+-4. **"Why multiple RoPE frequencies?"** — Like clock hands: fast frequencies distinguish nearby tokens, slow frequencies distinguish far-apart tokens. The base (1M) controls the spectrum.
+-
+-5. **"What is SwiGLU?"** — Gated MLP: `W_down(SiLU(W_gate(x)) * W_up(x))`. Gate learns to filter, up learns to represent. SiLU is smooth (unlike ReLU's hard cutoff), preventing dying neurons.
+-
+-6. **"Why fuse QKV / gate+up?"** — One large matmul is more efficient than multiple small ones on a GPU (better Tensor Core utilization, fewer kernel launches).
+-
+-7. **"How does weight tying work?"** — Embedding and LM head share the same weight. During training, gradients from both ends accumulate into one gradient tensor. Saves parameters and enforces geometric consistency: the vector that *represents* token T as input is the same vector used to *detect* token T as output — the model cannot learn different geometries for embedding vs prediction.
+-
+-8. **"What's the residual pattern?"** — Fused add+norm: RMSNorm first adds previous output to running residual, saves un-normalized sum, then normalizes. Compiles to single kernel, preserves clean gradient path.
+-
+-9. **"Embedding and LM head share weights — why different implementations?"** — They do opposite operations: embedding is a row lookup (`weight[token_id]`), LM head is a matmul (`hidden @ weight.T`). On multi-GPU: embedding uses `all_reduce` (sum) because only one GPU has the real embedding, others contribute zeros. LM head uses `gather + concat` because each GPU computes logits for a different vocabulary slice — summing them would mix scores for unrelated tokens.
++## Interview Questions
++
++1. **Walk me through a decoder layer.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
++
++2. **Explain GQA and its memory benefit.** Fewer KV heads than Q heads (8 vs 16 here). Multiple Q heads share one KV head. KV cache reduction factor = `num_kv_heads / num_q_heads` (0.5× here, 8× for Llama 3 70B with 8 KV heads / 64 Q heads). Minimal quality loss empirically.
++
++3. **RMSNorm vs LayerNorm trade-offs.** RMSNorm drops mean subtraction and the β parameter — ablations show re-centering is unnecessary for Transformers. Result: ~10–15% faster, same quality. LayerNorm has γ+β; RMSNorm has γ only.
++
++4. **Why does Qwen3 add Q/K norm but not V norm?** Q and K participate in `QKᵀ / √d_k` — large magnitudes explode attention scores, saturating softmax and killing gradients. V is only weighted-summed; its magnitude doesn't affect score sharpness. Normalizing V would erase useful semantic magnitude for free.
++
++5. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each dimension pair rotates at a different base frequency `θᵢ = base^(−2i/d)`. Like clock hands: fast frequencies distinguish nearby tokens, slow frequencies distinguish far-apart tokens. Zero extra parameters. V is not rotated.
++
++6. **What is SwiGLU and why does it outperform ReLU MLP?** `W_down(SiLU(W_gate(x)) * W_up(x))`. Gate learns to filter, up learns to represent — decoupled projections. SiLU has non-zero gradient everywhere (minimum ≈ −0.28 at x≈−1.28), preventing dying neurons that plague ReLU at scale. Parameter count stays equal by using `intermediate = 8d/3 ≈ 2.67d` instead of 4d.
++
++7. **Why fuse QKV / gate+up into one matmul?** One large matmul is more efficient than two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation.
++
++8. **Explain the TP communication pattern per decoder layer.** Megatron Column→Row pattern: ColumnParallel (QKV, gate+up) needs zero communication — each GPU independently computes its output slice. RowParallel (o_proj, down_proj) needs one all_reduce to sum partial results. Total: **2 all_reduces per layer**.
++
++9. **Embedding and LM head share weights — why different collective ops on multi-GPU?** Embedding uses `all_reduce` (sum) because only one GPU has the real embedding row, others contribute zeros. LM head uses `gather + concat` because each GPU computes logits for a different vocabulary slice — summing would mix scores for unrelated tokens.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:20:36
+Note: ml-systems/vllm-weight-loading.md
+============================================================
+--- a/ml-systems/vllm-weight-loading.md
++++ b/ml-systems/vllm-weight-loading.md
+@@ -4,17 +4,12 @@
+ 
+ ## TL;DR
+ 
+-vLLM loads model weights via a `load_weights()` method on each model class. The method iterates checkpoint tensors, **remaps names** from the checkpoint's naming convention to the model's PyTorch parameter names, then delegates actual data copying to each parameter's `weight_loader` method. The `weight_loader` is a vLLM convention (not PyTorch) that handles tensor parallelism sharding transparently — the same `load_weights()` code works for TP=1 and TP=8 without changes.
+-
+-## Interview Talking Points
+-
+-1. **What is weight loading?** Moving trained parameters from checkpoint files on disk into the live PyTorch model in GPU memory. vLLM's `load_weights()` is the entry point: it iterates `(name, tensor)` pairs from safetensors shards and populates every `nn.Parameter` in the model.
+-
+-2. **Why name remapping?** Checkpoint authors (JAX/Flax/custom trainers) use their own naming conventions; vLLM models use PyTorch module-hierarchy names. The same tensor is `transformer.tamm_model.layers.segment_0.layer_0.attention.qkv_transform.fused_linear.weight` in the checkpoint and `model.layers.0.self_attn.qkv_proj.weight` in the model. `load_weights()` bridges this gap via regex + suffix-map translation before any data is copied.
+-
+-3. **How does `weight_loader` work?** It is a vLLM-specific callable monkey-patched onto each `nn.Parameter` during `__init__`. Instead of `param.data.copy_(tensor)`, you call `weight_loader(param, tensor)`. Each parallel layer type attaches its own implementation (`QKVParallelLinear._load_fused_qkv`, etc.). Parameters without a custom loader fall through to `default_weight_loader`, which is just `param.data.copy_()`. This indirection means `load_weights()` never contains any TP-aware logic itself.
+-
+-4. **TP sharding: how it works end-to-end.** When TP=8, each rank holds only 1/8 of each parallel weight. The `weight_loader` on each rank receives the *full* checkpoint tensor and slices out its own shard: `ColumnParallelLinear` slices output-dim rows, `RowParallelLinear` slices input-dim columns, `QKVParallelLinear` splits Q/K/V then shards each. Because sharding is inside `weight_loader`, the outer `load_weights()` loop is identical for TP=1 and TP=8 — no conditional logic needed.
++vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pairs → **remap names** (checkpoint convention → PyTorch module hierarchy) → call each parameter's `weight_loader` (vLLM convention, not PyTorch) which handles TP sharding transparently. Same code works for TP=1 and TP=8.
++
++**Interview talking points:**
++- **Name remapping**: checkpoint authors use their own conventions; `load_weights()` bridges via regex + suffix-map (e.g. `transformer.tamm_model.layers.segment_0.layer_0.attention.qkv_transform.fused_linear.weight` → `model.layers.0.self_attn.qkv_proj.weight`).
++- **`weight_loader`**: monkey-patched onto each `nn.Parameter` during `__init__`; `QKVParallelLinear`, `ColumnParallelLinear`, `RowParallelLinear` each attach their own shard logic; non-parallel params fall through to `default_weight_loader` (`param.data.copy_()`).
++- **TP sharding**: each rank's `weight_loader` receives the full tensor and slices its shard — outer loop has zero TP-aware logic.
+ 
+ ---
+ ---
+@@ -55,7 +50,7 @@
+ # {"model.layers.0.self_attn.qkv_proj.weight": Parameter([2304, 2048]), ...}
+ ```
+ 
+-`named_parameters()` is a built-in PyTorch method on `nn.Module`. It recursively walks the module tree and yields `(name, Parameter)` pairs. The names are dot-separated paths reflecting the module hierarchy: `self.model.layers[0].self_attn.qkv_proj.weight` becomes `"model.layers.0.self_attn.qkv_proj.weight"`.
++`named_parameters()` recursively walks the module tree; dot-separated paths reflect the hierarchy.
+ 
+ ### Step 2: Remap Each Checkpoint Name
+ 
+@@ -101,15 +96,7 @@
+ weight_loader(param, tensor)
+ ```
+ 
+-This is the critical part. `weight_loader` is **not** a PyTorch concept — it's a vLLM convention. During `__init__`, vLLM's parallel linear layers monkey-patch a custom `weight_loader` method onto their parameter tensors:
+-
+-```python
+-# Inside QKVParallelLinear.__init__():
+-self.weight = Parameter(torch.empty(q_size + 2*kv_size, hidden_size))
+-self.weight.weight_loader = self._load_fused_qkv  # vLLM attaches this
+-```
+-
+-Each layer type's `weight_loader` knows how to handle tensor parallelism:
++`weight_loader` is a vLLM convention (not PyTorch) — monkey-patched onto each `nn.Parameter` during `__init__`. Each layer type's implementation handles TP sharding:
+ 
+ | Layer Type | What weight_loader Does |
+ |---|---|
+@@ -119,9 +106,7 @@
+ | `VocabParallelEmbedding` | Slice vocab dimension by TP rank |
+ | `RMSNorm` | No sharding — just copy (falls through to `default_weight_loader`) |
+ 
+-`default_weight_loader` is the fallback — it does `param.data.copy_(tensor)` with no sharding. Parameters without a custom `weight_loader` (like norm weights) use this path.
+-
+-**Key insight**: `load_weights()` doesn't need to know about tensor parallelism at all. The sharding logic is encapsulated in each parameter's `weight_loader`. The same code works identically for TP=1 and TP=8.
++`default_weight_loader` (fallback) does `param.data.copy_(tensor)` — used by norms and other non-parallel params. The outer `load_weights()` loop is TP-agnostic.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:22:37
+Note: ml-systems/attention-mechanics.md
+============================================================
+--- a/ml-systems/attention-mechanics.md
++++ b/ml-systems/attention-mechanics.md
+@@ -396,21 +396,19 @@
+ 
+ ## Interview Talking Points
+ 
+-1. **"Walk me through attention math."** — Q·K^T gives raw relevance scores. Divide by √d_k to prevent softmax saturation. Apply causal mask (-∞ for future tokens). Softmax normalizes each row to a probability distribution. Multiply by V to get a weighted blend of value vectors.
+-
+-2. **"Why scale by √d_k?"** — Dot product of d_k-dimensional vectors has variance ≈ d_k. Without scaling, large scores push softmax to near-one-hot, killing gradients. Dividing by √d_k normalizes variance back to ~1.
+-
+-3. **"How does the causal mask work?"** — Set upper-triangle scores to -∞ before softmax. Since e^(-∞)=0, future tokens get exactly zero attention weight. Not a deletion — a mathematical zeroing via the softmax function.
+-
+-4. **"Why Q, K, V instead of just one matrix?"** — K determines *why* a token is attended to (identity). V determines *what* information it transmits (payload). Decoupling these gives the model more expressiveness than K=V.
+-
+-5. **"Why Q/K norm but not V?"** — Q·K produces scores that go into softmax. Unstable magnitudes → attention collapse. V is only weighted-summed — its magnitude IS the signal strength. Plus V flows into residual → LayerNorm anyway.
+-
+-6. **"GQA tradeoff?"** — 16 Q heads (diverse questioning) share 8 KV heads (passive information). Halves KV cache with minimal quality loss. MQA (1 KV head) saves more but degrades quality — GQA is the sweet spot.
+-
+-7. **"Prefill vs decode kernel?"** — Prefill: all tokens available, compute-bound, uses `flash_attn_varlen_func`. Decode: 1 new token reads entire KV cache, memory-bound, uses `flash_attn_with_kvcache`. Different bottlenecks → different kernels.
+-
+-8. **"How does attention parallelize?"** — Heads are independent → split across GPUs (ColumnParallel for QKV). Each GPU computes its heads locally. Only o_proj needs all_reduce (RowParallel). KV cache is also sharded — no duplication.
++1. **Explain attention end-to-end.** Q·K^T scores relevance; divide by √d_k to prevent softmax saturation (variance of dot product ≈ d_k without scaling → near-one-hot → dead gradients). Apply causal mask (upper triangle = -∞ so e^(-∞)=0). Softmax normalizes each row → probability distribution. Multiply by V → weighted blend of value vectors. Total: score → scale → mask → normalize → blend.
++
++2. **GQA vs MHA vs MQA.** MHA: H_q=H_kv (full heads, max quality, max KV memory). MQA: H_kv=1 (minimum memory, quality degrades). GQA: H_kv=H_q/G (sweet spot). Qwen3-0.6B uses 16Q/8KV → halves KV cache vs MHA. Memory formula: `H_kv × d_k × 2 × dtype_bytes` per token per layer. At 28 layers, 4096 tokens: MHA≈900MB, GQA≈450MB. Q heads still diverse (different search strategies); KV heads are passive providers shared by a group — like one book read by multiple readers focusing on different passages.
++
++3. **Prefill vs decode kernel choice.** Prefill: all N tokens' QKV available simultaneously, O(N²·d_k) compute → **compute-bound** → use `flash_attn_varlen_func` (fused tiled matmul, supports variable-length packed sequences for continuous batching). Decode: only 1 new Q token, must read all N cached KV from HBM → O(N·d_k) compute but O(N·H_kv·d_k·bytes) memory read → **memory-bound** → use `flash_attn_with_kvcache` (optimized for KV cache scatter reads via block_table). Different arithmetic intensity → different kernels.
++
++4. **Why Q, K, V instead of one matrix?** K = identity broadcast (why attended to). V = information payload (what is transmitted). Decoupling lets a token be found for one reason (syntactic role) but transmit different content (semantic meaning). K=V collapses these, limiting expressiveness.
++
++5. **Why Q/K norm but not V?** Q·K dot products feed softmax — unstable magnitudes cause attention collapse or saturation. V is only linearly combined; its magnitude carries signal strength. V also flows into residual stream → hit by LayerNorm downstream anyway.
++
++6. **How does attention parallelize with TP?** Heads are independent → QKV ColumnParallel (each GPU owns H_q/tp and H_kv/tp heads, zero communication). Each GPU computes its heads fully locally. o_proj RowParallel + all_reduce to sum partial outputs. KV cache sharded: GPU i caches only its H_kv/tp heads — no duplication. Net: 1 all_reduce per attention block.
++
++7. **Causal mask mechanism.** Upper-triangle of score matrix set to -∞ before softmax. e^(-∞)=0 → future tokens receive exactly zero weight. Not a deletion — a mathematical zeroing. During prefill the full causal mask applies; during decode the single new token always attends to all cached positions (no masking needed for past tokens).
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:22:37
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -385,21 +385,21 @@
+ 
+ 1. **Walk me through a decoder layer.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+ 
+-2. **Explain GQA and its memory benefit.** Fewer KV heads than Q heads (8 vs 16 here). Multiple Q heads share one KV head. KV cache reduction factor = `num_kv_heads / num_q_heads` (0.5× here, 8× for Llama 3 70B with 8 KV heads / 64 Q heads). Minimal quality loss empirically.
+-
+-3. **RMSNorm vs LayerNorm trade-offs.** RMSNorm drops mean subtraction and the β parameter — ablations show re-centering is unnecessary for Transformers. Result: ~10–15% faster, same quality. LayerNorm has γ+β; RMSNorm has γ only.
+-
+-4. **Why does Qwen3 add Q/K norm but not V norm?** Q and K participate in `QKᵀ / √d_k` — large magnitudes explode attention scores, saturating softmax and killing gradients. V is only weighted-summed; its magnitude doesn't affect score sharpness. Normalizing V would erase useful semantic magnitude for free.
+-
+-5. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each dimension pair rotates at a different base frequency `θᵢ = base^(−2i/d)`. Like clock hands: fast frequencies distinguish nearby tokens, slow frequencies distinguish far-apart tokens. Zero extra parameters. V is not rotated.
+-
+-6. **What is SwiGLU and why does it outperform ReLU MLP?** `W_down(SiLU(W_gate(x)) * W_up(x))`. Gate learns to filter, up learns to represent — decoupled projections. SiLU has non-zero gradient everywhere (minimum ≈ −0.28 at x≈−1.28), preventing dying neurons that plague ReLU at scale. Parameter count stays equal by using `intermediate = 8d/3 ≈ 2.67d` instead of 4d.
+-
+-7. **Why fuse QKV / gate+up into one matmul?** One large matmul is more efficient than two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation.
+-
+-8. **Explain the TP communication pattern per decoder layer.** Megatron Column→Row pattern: ColumnParallel (QKV, gate+up) needs zero communication — each GPU independently computes its output slice. RowParallel (o_proj, down_proj) needs one all_reduce to sum partial results. Total: **2 all_reduces per layer**.
+-
+-9. **Embedding and LM head share weights — why different collective ops on multi-GPU?** Embedding uses `all_reduce` (sum) because only one GPU has the real embedding row, others contribute zeros. LM head uses `gather + concat` because each GPU computes logits for a different vocabulary slice — summing would mix scores for unrelated tokens.
++2. **GQA: what it is, why it matters, and the exact memory formula.** Fewer KV heads than Q heads (8 vs 16 here). Multiple Q heads share one KV head. KV cache shrinks by factor `num_kv_heads / num_q_heads` — 0.5× here, 8× for Llama 3 70B (8 KV / 64 Q heads). Quality loss is minimal because KV heads still carry full `head_dim=64` information; only the *number* of distinct K/V representations is reduced. MQA is the extreme case (1 KV head), GQA is the generalisation.
++
++3. **RMSNorm vs LayerNorm — trade-offs and why RMSNorm won.** RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary for Transformers — the residual stream already has zero mean at init. Result: ~10–15% faster, same quality. LayerNorm has γ+β (2 × hidden_dim params); RMSNorm has γ only (1 ×). Pre-Norm placement (before each sub-block) is also critical: it keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
++
++4. **Why Q/K norm but not V norm in Qwen3?** Q and K participate in `QKᵀ / √d_k` — heads with large L2 norm explode attention scores, saturating softmax and zeroing gradients (attention collapse). V is only weighted-summed by attention weights; its magnitude doesn't affect score sharpness. Normalizing V would destroy useful semantic magnitude information for no benefit.
++
++5. **SwiGLU mechanics and why it outperforms ReLU FFN.** `output = W_down( SiLU(W_gate(x)) × W_up(x) )`. Gate and content paths are decoupled learnable projections: gate learns *whether* a feature fires, up learns *what* the feature is. SiLU has non-zero gradient everywhere (minimum ≈ −0.28 at x≈−1.28), eliminating dying neurons that plague ReLU at scale. To keep parameter count equal to the original 4× FFN (2 matrices), SwiGLU uses 3 matrices with `intermediate = 8d/3 ≈ 2.67d`; Qwen3 rounds to 3× (3072/1024). SiLU and element-wise multiply are per-element ops, so TP sharding is trivially correct — unlike softmax which needs a global denominator.
++
++6. **Explain the TP Column→Row pattern and communication cost.** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication. RowParallel (o_proj, down_proj): each GPU holds input_size/tp rows of W and produces a partial sum; one `all_reduce` recombines. Total: **2 all_reduces per decoder layer**. With tp=2, attention splits Q into 8 heads per GPU and KV into 4 heads per GPU; GQA ratio is preserved per-GPU.
++
++7. **Why fuse QKV / gate+up into one matmul?** One large matmul beats two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation. `SiluAndMul` then uses `@torch.compile` to fuse the chunk + SiLU + multiply into a single GPU kernel.
++
++8. **Embedding vs LM head: same weights, different collective ops — why?** Embedding uses `all_reduce` (sum): vocabulary rows are sharded, so only one GPU has the real embedding for a given token, others contribute zeros — summing reconstructs the correct vector. LM head uses `gather + concat`: each GPU computes logits for its vocabulary slice — summing would mix scores for *different* tokens, corrupting the distribution.
++
++9. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each of the `d/2` dimension pairs rotates at `θᵢ = base^(−2i/d)`. Fast frequencies distinguish nearby tokens; slow frequencies distinguish distant ones — analogous to clock hands. Zero extra parameters; V is not rotated because it is summed, not dot-producted.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:23:38
+Note: ml-systems/attention-mechanics.md
+============================================================
+--- a/ml-systems/attention-mechanics.md
++++ b/ml-systems/attention-mechanics.md
+@@ -396,7 +396,7 @@
+ 
+ ## Interview Talking Points
+ 
+-1. **"Walk me through attention math."** — Q·K^T gives raw relevance scores. Divide by √d_k to prevent softmax saturation. Apply causal mask (-∞ for future tokens). Softmax normalizes each row to a probability distribution. Multiply by V to get a weighted blend of value vectors.
++1. **"Walk me through attention math."** — Q·K^T gives raw relevance scores. Divide by √d_k to prevent softmax saturation. Apply causal mask (-∞ for future tokens). Softmax normalizes each row to a probability distribution. Multiply by V to get a weighted blend of value vectors. In one line: `softmax(QK^T/√d_k + M)·V`.
+ 
+ 2. **"Why scale by √d_k?"** — Dot product of d_k-dimensional vectors has variance ≈ d_k. Without scaling, large scores push softmax to near-one-hot, killing gradients. Dividing by √d_k normalizes variance back to ~1.
+ 
+@@ -406,9 +406,9 @@
+ 
+ 5. **"Why Q/K norm but not V?"** — Q·K produces scores that go into softmax. Unstable magnitudes → attention collapse. V is only weighted-summed — its magnitude IS the signal strength. Plus V flows into residual → LayerNorm anyway.
+ 
+-6. **"GQA tradeoff?"** — 16 Q heads (diverse questioning) share 8 KV heads (passive information). Halves KV cache with minimal quality loss. MQA (1 KV head) saves more but degrades quality — GQA is the sweet spot.
+-
+-7. **"Prefill vs decode kernel?"** — Prefill: all tokens available, compute-bound, uses `flash_attn_varlen_func`. Decode: 1 new token reads entire KV cache, memory-bound, uses `flash_attn_with_kvcache`. Different bottlenecks → different kernels.
++6. **"GQA vs MHA tradeoff?"** — MHA (16/16): every Q head has its own KV head — maximum expressiveness, maximum KV cache. MQA (16/1): one KV head shared by all Q heads — 16× cache reduction but quality degrades. GQA (16/8): each KV head shared by 2 Q heads — halves cache vs MHA with minimal quality loss. Key insight: Q heads need diversity (different search strategies); KV heads are passive stores that can be shared. Qwen3-0.6B uses GQA as the sweet spot.
++
++7. **"Prefill vs decode kernel — why different?"** — Prefill: all N tokens' Q,K,V are available simultaneously; computation is O(N²·d_k) so GPU SMs are busy → **compute-bound** → use `flash_attn_varlen_func` (optimized for large square matmuls, supports variable-length packing for continuous batching). Decode: only 1 new Q token, but must read entire KV cache (N×heads×d_k×2 from HBM) → **memory-bandwidth-bound** → use `flash_attn_with_kvcache` (optimized for reading paged cache blocks via `block_table`). Same math, different bottleneck → different kernel.
+ 
+ 8. **"How does attention parallelize?"** — Heads are independent → split across GPUs (ColumnParallel for QKV). Each GPU computes its heads locally. Only o_proj needs all_reduce (RowParallel). KV cache is also sharded — no duplication.
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:24:51
+Note: ml-systems/attention-mechanics.md
+============================================================
+--- a/ml-systems/attention-mechanics.md
++++ b/ml-systems/attention-mechanics.md
+@@ -396,21 +396,19 @@
+ 
+ ## Interview Talking Points
+ 
+-1. **"Walk me through attention math."** — Q·K^T gives raw relevance scores. Divide by √d_k to prevent softmax saturation. Apply causal mask (-∞ for future tokens). Softmax normalizes each row to a probability distribution. Multiply by V to get a weighted blend of value vectors.
+-
+-2. **"Why scale by √d_k?"** — Dot product of d_k-dimensional vectors has variance ≈ d_k. Without scaling, large scores push softmax to near-one-hot, killing gradients. Dividing by √d_k normalizes variance back to ~1.
+-
+-3. **"How does the causal mask work?"** — Set upper-triangle scores to -∞ before softmax. Since e^(-∞)=0, future tokens get exactly zero attention weight. Not a deletion — a mathematical zeroing via the softmax function.
+-
+-4. **"Why Q, K, V instead of just one matrix?"** — K determines *why* a token is attended to (identity). V determines *what* information it transmits (payload). Decoupling these gives the model more expressiveness than K=V.
+-
+-5. **"Why Q/K norm but not V?"** — Q·K produces scores that go into softmax. Unstable magnitudes → attention collapse. V is only weighted-summed — its magnitude IS the signal strength. Plus V flows into residual → LayerNorm anyway.
+-
+-6. **"GQA tradeoff?"** — 16 Q heads (diverse questioning) share 8 KV heads (passive information). Halves KV cache with minimal quality loss. MQA (1 KV head) saves more but degrades quality — GQA is the sweet spot.
+-
+-7. **"Prefill vs decode kernel?"** — Prefill: all tokens available, compute-bound, uses `flash_attn_varlen_func`. Decode: 1 new token reads entire KV cache, memory-bound, uses `flash_attn_with_kvcache`. Different bottlenecks → different kernels.
+-
+-8. **"How does attention parallelize?"** — Heads are independent → split across GPUs (ColumnParallel for QKV). Each GPU computes its heads locally. Only o_proj needs all_reduce (RowParallel). KV cache is also sharded — no duplication.
++1. **"Explain attention end-to-end."** — Project hidden states into Q, K, V. Compute scores = Q·K^T / √d_k (scaling prevents softmax saturation from high-variance dot products). Apply causal mask: set upper-triangle to -∞ so e^(-∞)=0 gives future tokens exactly zero weight. Softmax normalizes each row to a probability distribution. Output = weighted sum of V vectors. Concat all heads, project through o_proj.
++
++2. **"Why scale by √d_k?"** — d_k-dim dot products have variance ≈ d_k; raw ±64 scores push softmax to near-one-hot, killing gradients. Dividing by √d_k restores variance to ~1, keeping softmax in a trainable regime.
++
++3. **"Why GQA over MHA?"** — KV cache is the memory bottleneck at decode time. GQA (16Q/8KV for Qwen3-0.6B) halves KV cache vs MHA (16Q/16KV): 2048 vs 4096 bytes/token/layer. Q heads need diversity (each is a different search strategy); KV heads can be shared because different Q heads querying the same KV head still produce different attention distributions. MQA (1 KV head) saves 16× but degrades quality — GQA is the empirical sweet spot.
++
++4. **"Why separate K and V?"** — K is a token's identity broadcast (why it gets selected); V is its information payload (what gets transmitted). Decoupling means a token can be found for one reason (syntactic role via K) while transmitting entirely different content (semantics via V). K=V locks these together, limiting expressiveness.
++
++5. **"Prefill vs decode: different kernels, why?"** — Prefill has all N tokens' Q,K,V available; compute scales O(N²·d_k) → compute-bound → `flash_attn_varlen_func` (packed variable-length sequences for continuous batching). Decode generates 1 token; Q is [1, d_k] but must read all N cached K,V from HBM → memory-bound → `flash_attn_with_kvcache` (paged block_table addressing). Same math, opposite bottleneck, different kernel optimizations.
++
++6. **"Why Q/K norm but not V?"** — Q·K scores feed softmax; magnitude instability causes attention collapse. V is only weighted-summed — its magnitude carries signal strength. V also flows into the residual stream where LayerNorm follows.
++
++7. **"How does attention shard across GPUs?"** — Heads are independent → QKV uses ColumnParallel (each GPU gets a head slice, no communication). Each GPU runs full attention on its heads locally. o_proj uses RowParallel + all_reduce to sum partial results. KV cache is sharded too: GPU 0 stores heads 0–3, GPU 1 stores heads 4–7. Only 1 all_reduce per attention block.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:26:47
+Note: ml-systems/vllm-weight-loading.md
+============================================================
+--- a/ml-systems/vllm-weight-loading.md
++++ b/ml-systems/vllm-weight-loading.md
+@@ -86,7 +86,7 @@
+     name = name.replace(old, new)
+ ```
+ 
+-The second pattern separates **prefix** (which layer?) from **suffix** (which component?). Adding a new model variant means adding rows to the table, not new if/else branches. The suffix map is also self-documenting — it's a complete specification of the name mapping.
++The second pattern separates **prefix** (which layer?) from **suffix** (which component?) — adding a variant means adding table rows, not if/else branches.
+ 
+ ### Step 3: Load via weight_loader
+ 
+@@ -209,30 +209,21 @@
+ 
+ After slicing, the tensor looks identical to what a single-track model would produce. The standard `weight_loader` handles TP sharding from there.
+ 
+-### Why Transpose? (150B only — 3B does NOT transpose)
+-
+-The 3B checkpoint stores linear weights in PyTorch convention `[out_dim, in_dim]` — no transpose needed. The 3B `load_weights` calls `weight_loader(param, tensor)` directly.
+-
+-The 150B checkpoint packs all tracks along dim 0, but the per-track slices come out as `[in_dim, out_dim]` — the opposite convention:
+-
+-```
+-3B gate_proj:   [6656, 2048]  = [out, in]  ← PyTorch ready, no transpose
++### Why Transpose? (150B only)
++
++| Model | Convention after slicing | Transpose? |
++|-------|--------------------------|------------|
++| 3B | `[out, in]` — PyTorch-ready | No |
++| 150B | `[in, out]` — HF export artifact | Yes (2D linears only) |
++
++```
+ 150B gate_proj: [8, 2048, 5888] → slice → [2048, 5888] = [in, out] ← needs .t()
+ ```
+ 
+-This is NOT because "JAX stores [in, out]" — the 3B checkpoint (also from JAX/ajax) is already `[out, in]`. The transpose need is specific to how the 150B HuggingFace export stacks per-track weights along dim 0. The inner dimensions end up in `[in, out]` order after the track-stacking.
+-
+-Every 2D per-track weight needs `.t()` after slicing. Norms (1D) don't. Experts (3D) are loaded per-expert via `FusedMoE.weight_loader` which handles its own layout.
+-
+-### Determining What Needs Transpose
+-
+-Only 2D linear weights need transpose. Norms and expert weights don't:
++Norms (1D) and expert weights (handled by `FusedMoE.weight_loader`) never need transpose.
+ 
+ ```python
+ def needs_transpose(name: str) -> bool:
+-    # Norms are 1D — no transpose
+-    # Expert weights go through FusedMoE.weight_loader — no transpose
+-    # Everything else (qkv, o_proj, gate, up, down, router) is 2D linear
+     return "norm" not in name and "experts" not in name
+ ```
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:26:47
+Note: ml-systems/attention-mechanics.md
+============================================================
+--- a/ml-systems/attention-mechanics.md
++++ b/ml-systems/attention-mechanics.md
+@@ -400,15 +400,11 @@
+ 
+ 2. **"Why scale by √d_k?"** — d_k-dim dot products have variance ≈ d_k; raw ±64 scores push softmax to near-one-hot, killing gradients. Dividing by √d_k restores variance to ~1, keeping softmax in a trainable regime.
+ 
+-3. **"Why GQA over MHA?"** — KV cache is the memory bottleneck at decode time. GQA (16Q/8KV for Qwen3-0.6B) halves KV cache vs MHA (16Q/16KV): 2048 vs 4096 bytes/token/layer. Q heads need diversity (each is a different search strategy); KV heads can be shared because different Q heads querying the same KV head still produce different attention distributions. MQA (1 KV head) saves 16× but degrades quality — GQA is the empirical sweet spot.
+-
+-4. **"Why separate K and V?"** — K is a token's identity broadcast (why it gets selected); V is its information payload (what gets transmitted). Decoupling means a token can be found for one reason (syntactic role via K) while transmitting entirely different content (semantics via V). K=V locks these together, limiting expressiveness.
+-
+-5. **"Prefill vs decode: different kernels, why?"** — Prefill has all N tokens' Q,K,V available; compute scales O(N²·d_k) → compute-bound → `flash_attn_varlen_func` (packed variable-length sequences for continuous batching). Decode generates 1 token; Q is [1, d_k] but must read all N cached K,V from HBM → memory-bound → `flash_attn_with_kvcache` (paged block_table addressing). Same math, opposite bottleneck, different kernel optimizations.
+-
+-6. **"Why Q/K norm but not V?"** — Q·K scores feed softmax; magnitude instability causes attention collapse. V is only weighted-summed — its magnitude carries signal strength. V also flows into the residual stream where LayerNorm follows.
+-
+-7. **"How does attention shard across GPUs?"** — Heads are independent → QKV uses ColumnParallel (each GPU gets a head slice, no communication). Each GPU runs full attention on its heads locally. o_proj uses RowParallel + all_reduce to sum partial results. KV cache is sharded too: GPU 0 stores heads 0–3, GPU 1 stores heads 4–7. Only 1 all_reduce per attention block.
++3. **"GQA vs MHA vs MQA — how do you choose?"** — All three are the same attention math; they differ only in how many KV heads are shared. MHA (16Q/16KV): maximum quality, maximum KV cache (4096 bytes/token/layer for Qwen3). GQA (16Q/8KV): halves KV cache to 2048 bytes/token/layer with minimal quality loss — the empirical sweet spot used by Qwen3, LLaMA-3, Mistral. MQA (16Q/1KV): 16× smaller cache but measurable quality degradation on long-context tasks. Choose GQA for production LLMs; MQA only under extreme memory constraints; MHA when reproducing older architectures (GPT-2 era).
++
++4. **"Prefill vs decode: different kernels, why?"** — Same attention math, opposite bottleneck. Prefill: all N tokens' Q,K,V available, compute scales O(N²·d_k) → compute-bound → `flash_attn_varlen_func` with packed variable-length sequences for continuous batching. Decode: Q is 1 token but must read all N cached K,V from HBM → memory-bound → `flash_attn_with_kvcache` with paged block_table addressing. Optimizations target the actual bottleneck: fused kernels for prefill, PagedAttention + speculative decoding for decode.
++
++5. **"Flash Attention vs standard attention — when would you choose each?"** — Standard attention materializes the full [N,N] score matrix in HBM: O(N²) memory, simple to implement, fine for N<512. Flash Attention tiles Q,K,V in SRAM, never materializing [N,N]: O(N) memory, ~3× faster for N>1K due to fewer HBM reads, required for long-context (N=32K+). Choose Flash Attention for any production inference or training with sequences >512 tokens; standard only for debugging or when tiling constraints make Flash impractical (e.g., very small head_dim).
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:26:47
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -381,25 +381,17 @@
+ 
+ ---
+ 
+-## Interview Questions
+-
+-1. **Walk me through a decoder layer.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+-
+-2. **GQA: what it is, why it matters, and the exact memory formula.** Fewer KV heads than Q heads (8 vs 16 here). Multiple Q heads share one KV head. KV cache shrinks by factor `num_kv_heads / num_q_heads` — 0.5× here, 8× for Llama 3 70B (8 KV / 64 Q heads). Quality loss is minimal because KV heads still carry full `head_dim=64` information; only the *number* of distinct K/V representations is reduced. MQA is the extreme case (1 KV head), GQA is the generalisation.
+-
+-3. **RMSNorm vs LayerNorm — trade-offs and why RMSNorm won.** RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary for Transformers — the residual stream already has zero mean at init. Result: ~10–15% faster, same quality. LayerNorm has γ+β (2 × hidden_dim params); RMSNorm has γ only (1 ×). Pre-Norm placement (before each sub-block) is also critical: it keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
+-
+-4. **Why Q/K norm but not V norm in Qwen3?** Q and K participate in `QKᵀ / √d_k` — heads with large L2 norm explode attention scores, saturating softmax and zeroing gradients (attention collapse). V is only weighted-summed by attention weights; its magnitude doesn't affect score sharpness. Normalizing V would destroy useful semantic magnitude information for no benefit.
+-
+-5. **SwiGLU mechanics and why it outperforms ReLU FFN.** `output = W_down( SiLU(W_gate(x)) × W_up(x) )`. Gate and content paths are decoupled learnable projections: gate learns *whether* a feature fires, up learns *what* the feature is. SiLU has non-zero gradient everywhere (minimum ≈ −0.28 at x≈−1.28), eliminating dying neurons that plague ReLU at scale. To keep parameter count equal to the original 4× FFN (2 matrices), SwiGLU uses 3 matrices with `intermediate = 8d/3 ≈ 2.67d`; Qwen3 rounds to 3× (3072/1024). SiLU and element-wise multiply are per-element ops, so TP sharding is trivially correct — unlike softmax which needs a global denominator.
+-
+-6. **Explain the TP Column→Row pattern and communication cost.** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication. RowParallel (o_proj, down_proj): each GPU holds input_size/tp rows of W and produces a partial sum; one `all_reduce` recombines. Total: **2 all_reduces per decoder layer**. With tp=2, attention splits Q into 8 heads per GPU and KV into 4 heads per GPU; GQA ratio is preserved per-GPU.
+-
+-7. **Why fuse QKV / gate+up into one matmul?** One large matmul beats two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation. `SiluAndMul` then uses `@torch.compile` to fuse the chunk + SiLU + multiply into a single GPU kernel.
+-
+-8. **Embedding vs LM head: same weights, different collective ops — why?** Embedding uses `all_reduce` (sum): vocabulary rows are sharded, so only one GPU has the real embedding for a given token, others contribute zeros — summing reconstructs the correct vector. LM head uses `gather + concat`: each GPU computes logits for its vocabulary slice — summing would mix scores for *different* tokens, corrupting the distribution.
+-
+-9. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each of the `d/2` dimension pairs rotates at `θᵢ = base^(−2i/d)`. Fast frequencies distinguish nearby tokens; slow frequencies distinguish distant ones — analogous to clock hands. Zero extra parameters; V is not rotated because it is summed, not dot-producted.
++## Interview Talking Points
++
++1. **Explain how you'd decide between GQA, MQA, and MHA for a new model.** KV cache memory scales as `2 × num_kv_heads × head_dim × layers × seq_len × bytes`. MQA (1 KV head) gives maximum memory savings but risks attention quality collapse — all Q heads compete for one KV representation. GQA is the practical middle ground: Qwen3 uses 8 KV / 16 Q (0.5× KV cache vs MHA); Llama 3 70B uses 8 KV / 64 Q (8× reduction). Choose based on memory budget vs quality ablations; MHA is only justified when memory is not a bottleneck.
++
++2. **Why did Qwen3 add per-head Q/K RMSNorm, and what problem does it solve?** QKV projection produces heads with heterogeneous L2 norms. One high-magnitude head can dominate `QKᵀ / √d_k` scores, saturating softmax and collapsing gradients (attention collapse). Per-head norm pins each head to unit scale before RoPE, ensuring all heads compete fairly. V is not normalized because it is weighted-summed, not dot-producted — its magnitude affects semantic richness, not score sharpness.
++
++3. **Walk through the decision to use SwiGLU over ReLU FFN, including the parameter count trade-off.** SwiGLU uses 3 weight matrices (gate, up, down) vs ReLU's 2. To match original 4× parameter count: `3 × d × I = 2 × d × 4d` → `I = 8d/3 ≈ 2.67d`. SiLU has non-zero gradient everywhere (minimum ≈ −0.28), eliminating dying neurons. Decoupled gate/content paths let the model independently learn *whether* and *what* to activate — empirically improves perplexity at scale.
++
++4. **Explain the Column→Row tensor parallelism pattern and why it needs exactly 2 all_reduces per layer.** ColumnParallel (QKV, gate+up) shards the output dimension — each GPU computes its slice independently, zero communication. RowParallel (o_proj, down_proj) shards the input dimension — each GPU produces a partial sum, requiring one `all_reduce` to reconstruct the full output. Attention contributes 1 all_reduce (o_proj), MLP contributes 1 (down_proj) = **2 total per layer**. ColumnParallel requires no sync because `Y_i = X @ W_i` produces a correct partial output slice without needing other GPUs' results.
++
++5. **Why do embedding and LM head use different collective operations despite sharing the same weight matrix?** Embedding uses `all_reduce` (sum): for a given token ID, only one GPU holds the real embedding row — others contribute zeros, so summing reconstructs the correct vector. LM head uses `gather + concat`: each GPU computes logits for a different vocabulary slice — summing would add scores for *different* tokens together, corrupting the distribution. Same weight, opposite communication pattern because the operation direction is transposed (lookup vs projection).
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:28:10
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -381,25 +381,17 @@
+ 
+ ---
+ 
+-## Interview Questions
+-
+-1. **Walk me through a decoder layer.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+-
+-2. **GQA: what it is, why it matters, and the exact memory formula.** Fewer KV heads than Q heads (8 vs 16 here). Multiple Q heads share one KV head. KV cache shrinks by factor `num_kv_heads / num_q_heads` — 0.5× here, 8× for Llama 3 70B (8 KV / 64 Q heads). Quality loss is minimal because KV heads still carry full `head_dim=64` information; only the *number* of distinct K/V representations is reduced. MQA is the extreme case (1 KV head), GQA is the generalisation.
+-
+-3. **RMSNorm vs LayerNorm — trade-offs and why RMSNorm won.** RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary for Transformers — the residual stream already has zero mean at init. Result: ~10–15% faster, same quality. LayerNorm has γ+β (2 × hidden_dim params); RMSNorm has γ only (1 ×). Pre-Norm placement (before each sub-block) is also critical: it keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
+-
+-4. **Why Q/K norm but not V norm in Qwen3?** Q and K participate in `QKᵀ / √d_k` — heads with large L2 norm explode attention scores, saturating softmax and zeroing gradients (attention collapse). V is only weighted-summed by attention weights; its magnitude doesn't affect score sharpness. Normalizing V would destroy useful semantic magnitude information for no benefit.
+-
+-5. **SwiGLU mechanics and why it outperforms ReLU FFN.** `output = W_down( SiLU(W_gate(x)) × W_up(x) )`. Gate and content paths are decoupled learnable projections: gate learns *whether* a feature fires, up learns *what* the feature is. SiLU has non-zero gradient everywhere (minimum ≈ −0.28 at x≈−1.28), eliminating dying neurons that plague ReLU at scale. To keep parameter count equal to the original 4× FFN (2 matrices), SwiGLU uses 3 matrices with `intermediate = 8d/3 ≈ 2.67d`; Qwen3 rounds to 3× (3072/1024). SiLU and element-wise multiply are per-element ops, so TP sharding is trivially correct — unlike softmax which needs a global denominator.
+-
+-6. **Explain the TP Column→Row pattern and communication cost.** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication. RowParallel (o_proj, down_proj): each GPU holds input_size/tp rows of W and produces a partial sum; one `all_reduce` recombines. Total: **2 all_reduces per decoder layer**. With tp=2, attention splits Q into 8 heads per GPU and KV into 4 heads per GPU; GQA ratio is preserved per-GPU.
+-
+-7. **Why fuse QKV / gate+up into one matmul?** One large matmul beats two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation. `SiluAndMul` then uses `@torch.compile` to fuse the chunk + SiLU + multiply into a single GPU kernel.
+-
+-8. **Embedding vs LM head: same weights, different collective ops — why?** Embedding uses `all_reduce` (sum): vocabulary rows are sharded, so only one GPU has the real embedding for a given token, others contribute zeros — summing reconstructs the correct vector. LM head uses `gather + concat`: each GPU computes logits for its vocabulary slice — summing would mix scores for *different* tokens, corrupting the distribution.
+-
+-9. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each of the `d/2` dimension pairs rotates at `θᵢ = base^(−2i/d)`. Fast frequencies distinguish nearby tokens; slow frequencies distinguish distant ones — analogous to clock hands. Zero extra parameters; V is not rotated because it is summed, not dot-producted.
++## Interview Talking Points
++
++1. **Walk me through a decoder layer — explain every sub-block and why it exists.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks to prevent vanishing gradients.
++
++2. **Why did Qwen3 choose GQA over MHA, and what trade-off did the designers accept?** GQA uses fewer KV heads than Q heads (8 vs 16 here). KV cache shrinks by `num_kv_heads / num_q_heads` — 0.5× here, 8× for Llama 3 70B. Quality loss is minimal because KV heads still carry full `head_dim=64` information; only the *number* of distinct K/V representations is reduced. The trade-off: slightly less expressive attention vs dramatically lower memory pressure during decoding.
++
++3. **Why does Qwen3 add per-head Q/K RMSNorm, and what problem does it solve?** QKV projection can produce heads with very different L2 norms. Without normalization, a high-magnitude head dominates softmax scores (attention collapse). Adding RMSNorm per head prevents this. V is not normalized because it is weighted-summed rather than dot-producted — its magnitude doesn't affect score sharpness, and normalizing it would erase semantic magnitude information.
++
++4. **You need to decide between SwiGLU and a standard ReLU FFN for a new model — what factors drive your choice?** SwiGLU decouples gate (whether a feature fires) and content (what the feature is) into independent projections. SiLU has non-zero gradient everywhere, eliminating dying neurons that compound at scale. Cost: 3 weight matrices instead of 2, requiring `intermediate = 8d/3` to match parameter count. SwiGLU is TP-friendly because SiLU and element-wise multiply are per-element ops, unlike softmax.
++
++5. **Explain the TP Column→Row pattern — where does communication happen and why only there?** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication needed. RowParallel (o_proj, down_proj): splitting the input dimension gives partial sums (`Y = X_0@W_0 + X_1@W_1`), so one `all_reduce` recombines. Total: **2 all_reduces per decoder layer**. Embedding uses all_reduce (zeros from non-owner GPUs); LM head uses gather+concat (summing would mix logits for different tokens).
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:29:22
+Note: ml-systems/attention-mechanics.md
+============================================================
+--- a/ml-systems/attention-mechanics.md
++++ b/ml-systems/attention-mechanics.md
+@@ -396,19 +396,15 @@
+ 
+ ## Interview Talking Points
+ 
+-1. **"Explain attention end-to-end."** — Project hidden states into Q, K, V. Compute scores = Q·K^T / √d_k (scaling prevents softmax saturation from high-variance dot products). Apply causal mask: set upper-triangle to -∞ so e^(-∞)=0 gives future tokens exactly zero weight. Softmax normalizes each row to a probability distribution. Output = weighted sum of V vectors. Concat all heads, project through o_proj.
+-
+-2. **"Why scale by √d_k?"** — d_k-dim dot products have variance ≈ d_k; raw ±64 scores push softmax to near-one-hot, killing gradients. Dividing by √d_k restores variance to ~1, keeping softmax in a trainable regime.
+-
+-3. **"Why GQA over MHA?"** — KV cache is the memory bottleneck at decode time. GQA (16Q/8KV for Qwen3-0.6B) halves KV cache vs MHA (16Q/16KV): 2048 vs 4096 bytes/token/layer. Q heads need diversity (each is a different search strategy); KV heads can be shared because different Q heads querying the same KV head still produce different attention distributions. MQA (1 KV head) saves 16× but degrades quality — GQA is the empirical sweet spot.
+-
+-4. **"Why separate K and V?"** — K is a token's identity broadcast (why it gets selected); V is its information payload (what gets transmitted). Decoupling means a token can be found for one reason (syntactic role via K) while transmitting entirely different content (semantics via V). K=V locks these together, limiting expressiveness.
+-
+-5. **"Prefill vs decode: different kernels, why?"** — Prefill has all N tokens' Q,K,V available; compute scales O(N²·d_k) → compute-bound → `flash_attn_varlen_func` (packed variable-length sequences for continuous batching). Decode generates 1 token; Q is [1, d_k] but must read all N cached K,V from HBM → memory-bound → `flash_attn_with_kvcache` (paged block_table addressing). Same math, opposite bottleneck, different kernel optimizations.
+-
+-6. **"Why Q/K norm but not V?"** — Q·K scores feed softmax; magnitude instability causes attention collapse. V is only weighted-summed — its magnitude carries signal strength. V also flows into the residual stream where LayerNorm follows.
+-
+-7. **"How does attention shard across GPUs?"** — Heads are independent → QKV uses ColumnParallel (each GPU gets a head slice, no communication). Each GPU runs full attention on its heads locally. o_proj uses RowParallel + all_reduce to sum partial results. KV cache is sharded too: GPU 0 stores heads 0–3, GPU 1 stores heads 4–7. Only 1 all_reduce per attention block.
++1. **"Explain attention end-to-end."** — Project hidden states into Q, K, V. Compute scores = Q·K^T / √d_k (scaling prevents softmax saturation). Apply causal mask: upper-triangle → -∞ so future tokens get zero weight. Softmax normalizes each row. Output = weighted sum of V vectors. Concat all heads, project through o_proj.
++
++2. **"Why scale by √d_k?"** — d_k-dim dot products have variance ≈ d_k; raw ±64 scores push softmax to near-one-hot, killing gradients. Dividing by √d_k restores variance to ~1, keeping softmax trainable.
++
++3. **"Why GQA over MHA?"** — KV cache is the decode bottleneck. GQA (16Q/8KV) halves KV cache vs MHA: 2048 vs 4096 bytes/token/layer. Q heads need diversity; KV heads can be shared because different Q heads querying the same KV head still produce different attention distributions. MQA saves 16× but degrades quality — GQA is the sweet spot.
++
++4. **"Why separate K and V?"** — K is a token's identity broadcast (why it gets selected); V is its information payload (what gets transmitted). Decoupling means a token can be found for one reason (syntactic role) while transmitting different content (semantics). K=V locks these together, limiting expressiveness.
++
++5. **"Prefill vs decode: different kernels, why?"** — Prefill has all N tokens available; compute scales O(N²·d_k) → compute-bound → `flash_attn_varlen_func` (packed sequences for continuous batching). Decode: Q is [1, d_k] but reads all N cached K,V from HBM → memory-bound → `flash_attn_with_kvcache` (paged block_table addressing). Same math, opposite bottleneck, different optimizations.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:29:22
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -385,21 +385,21 @@
+ 
+ 1. **Walk me through a decoder layer.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+ 
+-2. **GQA: what it is, why it matters, and the exact memory formula.** Fewer KV heads than Q heads (8 vs 16 here). Multiple Q heads share one KV head. KV cache shrinks by factor `num_kv_heads / num_q_heads` — 0.5× here, 8× for Llama 3 70B (8 KV / 64 Q heads). Quality loss is minimal because KV heads still carry full `head_dim=64` information; only the *number* of distinct K/V representations is reduced. MQA is the extreme case (1 KV head), GQA is the generalisation.
+-
+-3. **RMSNorm vs LayerNorm — trade-offs and why RMSNorm won.** RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary for Transformers — the residual stream already has zero mean at init. Result: ~10–15% faster, same quality. LayerNorm has γ+β (2 × hidden_dim params); RMSNorm has γ only (1 ×). Pre-Norm placement (before each sub-block) is also critical: it keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
+-
+-4. **Why Q/K norm but not V norm in Qwen3?** Q and K participate in `QKᵀ / √d_k` — heads with large L2 norm explode attention scores, saturating softmax and zeroing gradients (attention collapse). V is only weighted-summed by attention weights; its magnitude doesn't affect score sharpness. Normalizing V would destroy useful semantic magnitude information for no benefit.
+-
+-5. **SwiGLU mechanics and why it outperforms ReLU FFN.** `output = W_down( SiLU(W_gate(x)) × W_up(x) )`. Gate and content paths are decoupled learnable projections: gate learns *whether* a feature fires, up learns *what* the feature is. SiLU has non-zero gradient everywhere (minimum ≈ −0.28 at x≈−1.28), eliminating dying neurons that plague ReLU at scale. To keep parameter count equal to the original 4× FFN (2 matrices), SwiGLU uses 3 matrices with `intermediate = 8d/3 ≈ 2.67d`; Qwen3 rounds to 3× (3072/1024). SiLU and element-wise multiply are per-element ops, so TP sharding is trivially correct — unlike softmax which needs a global denominator.
+-
+-6. **Explain the TP Column→Row pattern and communication cost.** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication. RowParallel (o_proj, down_proj): each GPU holds input_size/tp rows of W and produces a partial sum; one `all_reduce` recombines. Total: **2 all_reduces per decoder layer**. With tp=2, attention splits Q into 8 heads per GPU and KV into 4 heads per GPU; GQA ratio is preserved per-GPU.
+-
+-7. **Why fuse QKV / gate+up into one matmul?** One large matmul beats two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation. `SiluAndMul` then uses `@torch.compile` to fuse the chunk + SiLU + multiply into a single GPU kernel.
+-
+-8. **Embedding vs LM head: same weights, different collective ops — why?** Embedding uses `all_reduce` (sum): vocabulary rows are sharded, so only one GPU has the real embedding for a given token, others contribute zeros — summing reconstructs the correct vector. LM head uses `gather + concat`: each GPU computes logits for its vocabulary slice — summing would mix scores for *different* tokens, corrupting the distribution.
+-
+-9. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each of the `d/2` dimension pairs rotates at `θᵢ = base^(−2i/d)`. Fast frequencies distinguish nearby tokens; slow frequencies distinguish distant ones — analogous to clock hands. Zero extra parameters; V is not rotated because it is summed, not dot-producted.
++2. **GQA vs MHA — trade-offs.** MHA: `num_q_heads == num_kv_heads` (16/16 here if full). GQA: fewer KV heads (8 here), multiple Q heads share one KV head. KV cache shrinks by `num_kv_heads / num_q_heads` — 0.5× here, 8× for Llama 3 70B. Quality loss is minimal: KV heads still carry full `head_dim=64` information. MQA (1 KV head) is the extreme; GQA is the generalisation. Decode throughput improves because KV cache memory bandwidth is the bottleneck.
++
++3. **RMSNorm vs LayerNorm — trade-offs and why RMSNorm won.** RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary — residual stream has near-zero mean at init. Result: ~10–15% faster, same quality. LayerNorm has γ+β (2× hidden_dim params); RMSNorm has γ only. Pre-Norm placement keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
++
++4. **Why Q/K norm but not V norm in Qwen3?** Q and K participate in `QKᵀ / √d_k` — large L2 norm explodes scores, saturates softmax, zeros gradients (attention collapse). V is only weighted-summed; its magnitude doesn't affect score sharpness. Normalizing V destroys semantic magnitude for no benefit.
++
++5. **SwiGLU mechanics and why it outperforms ReLU FFN.** `output = W_down( SiLU(W_gate(x)) × W_up(x) )`. Gate learns *whether* a feature fires, up learns *what* it is. SiLU has non-zero gradient everywhere (min ≈ −0.28), eliminating dying neurons. To match original 4× FFN parameter count (2 matrices), SwiGLU uses 3 matrices at `intermediate = 8d/3 ≈ 2.67d`; Qwen3 rounds to 3×. SiLU and element-wise multiply are per-element, so TP sharding is trivially correct.
++
++6. **Explain the TP Column→Row pattern and communication cost.** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication. RowParallel (o_proj, down_proj): partial sums recombined via one `all_reduce`. Total: **2 all_reduces per decoder layer**.
++
++7. **Why fuse QKV / gate+up into one matmul?** One large matmul beats two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation. `SiluAndMul` fuses chunk + SiLU + multiply into a single compiled kernel.
++
++8. **Embedding vs LM head: same weights, different collective ops — why?** Embedding uses `all_reduce` (sum): only one GPU has the real embedding per token, others contribute zeros. LM head uses `gather + concat`: each GPU computes logits for its vocab slice — summing would mix scores for *different* tokens.
++
++9. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each `d/2` pair rotates at `θᵢ = base^(−2i/d)`. Fast frequencies distinguish nearby tokens; slow frequencies distinguish distant ones. Zero extra parameters; V is not rotated.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:31:33
+Note: ml-systems/validating-parallelism-at-scale.md
+============================================================
+--- a/ml-systems/validating-parallelism-at-scale.md
++++ b/ml-systems/validating-parallelism-at-scale.md
+@@ -162,8 +162,10 @@
+ 
+ ## Interview Talking Points
+ 
+-**Synthetic model technique** — "We validated the communication pattern of a 150B-parameter model on a laptop using a 343K-parameter synthetic model. The key insight: op types, group names, and call counts are determined by architecture, not weight values. `hidden=64` fires the exact same collectives as `hidden=2048`."
++1. **Synthetic model technique** — "We validated the communication pattern of a 150B-parameter model on a laptop using a 343K-parameter synthetic model. The key insight: op types, group names, and call counts are determined by architecture, not weight values. `hidden=64` fires the exact same collectives as `hidden=2048`."
+ 
+-**GroupCoordinator patching** — "vLLM funnels every collective through `GroupCoordinator` at `parallel_state.py:487`. Patching four methods (`all_reduce`, `all_gather`, `reduce_scatter`, `broadcast`) at the class level gives you a universal tracer. The `unique_name` field (`'tp:0'`, `'pt:0'`) lets you distinguish tensor-parallel from track-parallel traffic; `world_size > 1` guards against recording short-circuited no-ops."
++2. **GroupCoordinator patching** — "vLLM funnels every collective through `GroupCoordinator` at `parallel_state.py:487`. Patching four methods (`all_reduce`, `all_gather`, `reduce_scatter`, `broadcast`) at the class level gives you a universal tracer. The `unique_name` field (`'tp:0'`, `'pt:0'`) lets you distinguish tensor-parallel from track-parallel traffic; `world_size > 1` guards against recording short-circuited no-ops."
+ 
+-**FusedMoE `reduce_results` bug** — "We found a silent data corruption bug: `FusedMoE(reduce_results=False)` is correct at TP=1-per-track but silently wrong at TP>1. Each rank holds only half the correct expert output — the shape is right, no error is thrown, the model generates tokens, just wrong ones. The tracer caught it because the expected `all_reduce` after the MoE layer was absent in the op log. Fix: `reduce_results=True`, which vLLM short-circuits back to a no-op when world_size==1."
++3. **FusedMoE `reduce_results` bug** — "We found a silent data corruption bug: `FusedMoE(reduce_results=False)` is correct at TP=1-per-track but silently wrong at TP>1. Each rank holds only half the correct expert output — the shape is right, no error is thrown, the model generates tokens, just wrong ones. The tracer caught it because the expected `all_reduce` after the MoE layer was absent in the op log. Fix: `reduce_results=True`, which vLLM short-circuits back to a no-op when world_size==1."
++
++4. **When to use this vs integration tests** — "Use the collective-tracing technique when you need fast, deterministic, infrastructure-free verification of *communication structure* — e.g., 'does PT-MoE fire exactly 2 cross-track all_reduces per forward pass regardless of weight values?' Use integration tests (real multi-GPU, real weights or random full-size tensors) when you need to verify *numerical correctness* end-to-end, catch NCCL-specific bugs, or validate performance. The tracer is orders of magnitude cheaper and runs in CI on a laptop; integration tests are reserved for pre-merge or nightly runs on a GPU cluster."
+
+
+============================================================
+Timestamp: 2026-03-21 19:31:33
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -383,23 +383,18 @@
+ 
+ ## Interview Questions
+ 
++**Factual / recall**
+ 1. **Walk me through a decoder layer.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+-
+-2. **GQA vs MHA — trade-offs.** MHA: `num_q_heads == num_kv_heads` (16/16 here if full). GQA: fewer KV heads (8 here), multiple Q heads share one KV head. KV cache shrinks by `num_kv_heads / num_q_heads` — 0.5× here, 8× for Llama 3 70B. Quality loss is minimal: KV heads still carry full `head_dim=64` information. MQA (1 KV head) is the extreme; GQA is the generalisation. Decode throughput improves because KV cache memory bandwidth is the bottleneck.
+-
+-3. **RMSNorm vs LayerNorm — trade-offs and why RMSNorm won.** RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary — residual stream has near-zero mean at init. Result: ~10–15% faster, same quality. LayerNorm has γ+β (2× hidden_dim params); RMSNorm has γ only. Pre-Norm placement keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
+-
+-4. **Why Q/K norm but not V norm in Qwen3?** Q and K participate in `QKᵀ / √d_k` — large L2 norm explodes scores, saturates softmax, zeros gradients (attention collapse). V is only weighted-summed; its magnitude doesn't affect score sharpness. Normalizing V destroys semantic magnitude for no benefit.
+-
+-5. **SwiGLU mechanics and why it outperforms ReLU FFN.** `output = W_down( SiLU(W_gate(x)) × W_up(x) )`. Gate learns *whether* a feature fires, up learns *what* it is. SiLU has non-zero gradient everywhere (min ≈ −0.28), eliminating dying neurons. To match original 4× FFN parameter count (2 matrices), SwiGLU uses 3 matrices at `intermediate = 8d/3 ≈ 2.67d`; Qwen3 rounds to 3×. SiLU and element-wise multiply are per-element, so TP sharding is trivially correct.
+-
+-6. **Explain the TP Column→Row pattern and communication cost.** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication. RowParallel (o_proj, down_proj): partial sums recombined via one `all_reduce`. Total: **2 all_reduces per decoder layer**.
+-
+-7. **Why fuse QKV / gate+up into one matmul?** One large matmul beats two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation. `SiluAndMul` fuses chunk + SiLU + multiply into a single compiled kernel.
+-
+-8. **Embedding vs LM head: same weights, different collective ops — why?** Embedding uses `all_reduce` (sum): only one GPU has the real embedding per token, others contribute zeros. LM head uses `gather + concat`: each GPU computes logits for its vocab slice — summing would mix scores for *different* tokens.
+-
+-9. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each `d/2` pair rotates at `θᵢ = base^(−2i/d)`. Fast frequencies distinguish nearby tokens; slow frequencies distinguish distant ones. Zero extra parameters; V is not rotated.
++2. **Why Q/K norm but not V norm in Qwen3?** Q and K participate in `QKᵀ / √d_k` — large L2 norm explodes scores, saturates softmax, zeros gradients (attention collapse). V is only weighted-summed; its magnitude doesn't affect score sharpness. Normalizing V destroys semantic magnitude for no benefit.
++3. **Why fuse QKV / gate+up into one matmul?** One large matmul beats two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation. `SiluAndMul` fuses chunk + SiLU + multiply into a single compiled kernel.
++4. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each `d/2` pair rotates at `θᵢ = base^(−2i/d)`. Fast frequencies distinguish nearby tokens; slow frequencies distinguish distant ones. Zero extra parameters; V is not rotated.
++
++**Explain / compare (open-ended)**
++1. **Compare GQA, MHA, and MQA — when would you choose each?** MHA: `num_q_heads == num_kv_heads` — maximum expressivity, maximum KV cache. GQA: multiple Q heads share one KV head (8 KV / 16 Q here → 0.5× cache; 8 KV / 64 Q in Llama 3 70B → 8× cache reduction). MQA (1 KV head) is the extreme — fastest decode, slight quality drop. Choose GQA as the default balance; MQA only under extreme memory pressure; MHA for research where cache size is not the bottleneck.
++2. **Compare RMSNorm and LayerNorm — why did RMSNorm win in modern LLMs?** LayerNorm subtracts the mean then divides by std, requiring γ+β. RMSNorm skips mean subtraction and β. Ablations show re-centering is unnecessary — residual stream has near-zero mean at init — so dropping it saves ~10–15% compute with no quality loss. Pre-Norm placement amplifies the win: the residual stream is never normalized, giving gradients a clean backward path.
++3. **Explain SwiGLU and how it compares to a ReLU FFN.** `output = W_down(SiLU(W_gate(x)) × W_up(x))`. Gate learns *whether* a feature fires; up learns *what* it is — decoupled projections vs. one shared matrix in ReLU FFN. SiLU has non-zero gradient everywhere (min ≈ −0.28), eliminating dying neurons. To match original 4× FFN parameter count with 3 matrices, intermediate shrinks to `8d/3 ≈ 2.67d`; Qwen3 rounds to 3×. SiLU is per-element, making TP sharding trivially correct.
++4. **Explain the TP Column→Row pattern. How many all_reduces per layer and why?** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication. RowParallel (o_proj, down_proj): inner-dimension split produces partial sums that must be summed via `all_reduce`. Total: **2 all_reduces per decoder layer** (one after attention, one after MLP).
++5. **Embedding and LM head share weights but use different collective ops — explain why.** Embedding vocab rows are sharded; for a given token only one GPU has the real embedding, others contribute zeros, so `all_reduce` (sum) is correct. LM head computes logits for a different vocab slice per GPU — summing across GPUs would add scores for *unrelated* tokens, so `gather + concat` is used instead.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:31:33
+Note: ml-systems/attention-mechanics.md
+============================================================
+--- a/ml-systems/attention-mechanics.md
++++ b/ml-systems/attention-mechanics.md
+@@ -18,35 +18,14 @@
+ 
+ ## The Math (Single Head)
+ 
+-### Step 1: Compute Attention Scores
++### Steps 1–2: Compute & Scale Attention Scores
+ 
+ ```
+ score(i, j) = dot(Q_i, K_j) / √d_k
+ ```
+ 
+-- `Q_i`: token i's query vector — "what am I looking for?"
+-- `K_j`: token j's key vector — "what do I contain?"
+-- `d_k`: head dimension (64 for Qwen3-0.6B)
+-
+-**Geometric intuition**: `dot(Q, K) = |Q| × |K| × cos(θ)`. Training teaches Q and K projections to align semantically related tokens in the same direction. The score measures directional alignment in a 64-dimensional space.
+-
+-### Step 2: Scale by √d_k
+-
+-Q and K each have 64 dimensions with components roughly in `[-1, 1]`. Their dot product sums 64 terms, giving a result with variance ≈ `d_k = 64` and magnitude around ±64.
+-
+-Feeding raw ±64 values into softmax:
+-
+-```
+-softmax([60, 2, -30]) ≈ [1.0000, 0.0000, 0.0000]   ← nearly one-hot, gradient ≈ 0
+-```
+-
+-Dividing by `√64 = 8` pulls the range back to ±8:
+-
+-```
+-softmax([7.5, 0.25, -3.75]) ≈ [0.999, 0.001, 0.000]  ← still peaked but trainable
+-```
+-
+-**Purpose**: prevent softmax saturation so gradients can flow during training.
++- `Q_i`: "what am I looking for?"; `K_j`: "what do I contain?"; `d_k=64` for Qwen3-0.6B
++- **Why √d_k?** 64-dim dot products have variance ≈ d_k; raw ±64 values push softmax to near-one-hot (gradient ≈ 0). Dividing by `√64=8` restores variance to ~1, keeping gradients alive.
+ 
+ ### Step 3: Causal Mask
+ 
+@@ -72,32 +51,18 @@
+   tok3  [  1.2,    0.5,    1.8,    2.0 ]   ← sees all
+ ```
+ 
+-### Step 4: Softmax (Row-wise Normalization)
+-
+-Softmax converts each row into a probability distribution (non-negative, sums to 1):
+-
+-```
+-softmax(x_i) = e^(x_i) / Σ_j e^(x_j)
+-```
+-
+-Applied to the masked scores:
++### Step 4: Softmax → Step 5: Weighted Sum
+ 
+ ```
+ tok0: softmax([2.1, -∞, -∞, -∞]) = [1.00, 0.00, 0.00, 0.00]
+ tok1: softmax([0.8, 1.7, -∞, -∞]) = [0.29, 0.71, 0.00, 0.00]
+ tok2: softmax([-0.1, 2.3, 1.1, -∞]) = [0.07, 0.76, 0.17, 0.00]
+ tok3: softmax([1.2, 0.5, 1.8, 2.0]) = [0.17, 0.08, 0.31, 0.38]
+-```
+-
+-`-∞` positions become exactly 0 because `e^(-∞) = 0`. The mask doesn't "delete" future tokens — it makes their contribution mathematically vanish.
+-
+-### Step 5: Weighted Sum of Values
+-
+-```
+-output_i = Σ_j  α(i, j) × V_j
+-```
+-
+-Each token's output is a blend of all visible V vectors, weighted by the attention distribution.
++
++output_i = Σ_j  α(i,j) × V_j
++```
++
++`-∞` → `e^(-∞)=0`, so future tokens contribute exactly zero.
+ 
+ ### Matrix Form (All Tokens at Once)
+ 
+@@ -321,7 +286,7 @@
+         softmax_scale=1/sqrt(64), causal=True)
+ ```
+ 
+-All N tokens' Q, K, V are available (just computed). Computation scales as O(N² × d_k), so GPU SMs are busy with matmuls — **compute is the bottleneck**, not memory bandwidth. The `varlen` suffix means this kernel supports variable-length sequences packed into one flat tensor (multiple prompts concatenated end-to-end). This packing is what enables continuous batching: the engine can add or remove sequences from the batch without padding waste.
++All N tokens' Q,K,V available; compute scales O(N²·d_k) → **compute-bound**. The `varlen` suffix supports variable-length sequences packed into one flat tensor (no padding), enabling continuous batching.
+ 
+ ### Decode — Generate One Token at a Time (Memory-Bound)
+ 
+@@ -336,9 +301,7 @@
+         softmax_scale=1/sqrt(64), causal=True)
+ ```
+ 
+-Q is only 1 token, but must read all N cached K, V from HBM. Computation = O(N × d_k) — tiny. But memory read = `N × 8 × 64 × 2 × 2 bytes / layer`. For N=4096 across 28 layers → ~224MB per generated token. **Memory bandwidth is the bottleneck**; GPU compute largely idles.
+-
+-This is why decode optimizations (PagedAttention, speculative decoding, KV compression) all target reducing memory reads. See [[ml-systems/llm-inference-engines]] for the full engine-level prefill/decode lifecycle.
++Q is only 1 token but must read all N cached K,V from HBM. Compute = O(N·d_k) — tiny; N=4096 across 28 layers → ~224MB read per token. **Memory-bandwidth-bound**; GPU compute largely idles. See [[ml-systems/llm-inference-engines]] for the full lifecycle.
+ 
+ ---
+ 
+@@ -356,7 +319,7 @@
+     tl.store(v_cache_ptr + slot * D, value)
+ ```
+ 
+-`slot_mapping` is pre-computed by the CPU scheduler. The GPU does zero address arithmetic — just `cache[slot] = kv`. This is the execution end of PagedAttention's virtual memory system (see [[ml-systems/llm-inference-engines]] for the full paged allocation mechanism and [[ml-systems/gpu-memory-hierarchy]] for why CPU pre-computes addresses).
++`slot_mapping` is pre-computed by the CPU scheduler; the GPU does zero address arithmetic — just `cache[slot] = kv`. See [[ml-systems/llm-inference-engines]] for paged allocation and [[ml-systems/gpu-memory-hierarchy]] for why addresses are CPU-side.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:33:04
+Note: ml-systems/rotary-position-embedding.md
+============================================================
+--- a/ml-systems/rotary-position-embedding.md
++++ b/ml-systems/rotary-position-embedding.md
+@@ -277,6 +277,8 @@
+ 5. **Why is V not rotated?** Position only needs to affect attention weights (who attends to whom), not the content transmitted. Rotating V would inject position bias into the output values unnecessarily.
+ 
+ 6. **How does RoPE extend to long contexts?** Increase `base` (slows all frequencies, extends unique-position range), or use YaRN / LongRoPE to rescale frequencies non-uniformly at inference time without retraining.
++
++7. **When would you choose ALiBi vs RoPE for long-context?** Prefer **ALiBi** when you need strong out-of-the-box extrapolation beyond training length with minimal tuning — its fixed linear distance penalty guarantees monotone decay of attention to distant tokens, which works well for tasks with local dependencies (e.g. language modelling, summarisation). Prefer **RoPE** when the task requires genuine long-range dependencies (e.g. retrieval, multi-document QA, code with distant cross-references) — ALiBi's hard penalty actively suppresses long-range attention, whereas RoPE lets Q/K weights learn to attend far if the data requires it. RoPE also composes naturally with KV-cache and GQA; ALiBi requires no rotations so it has slightly simpler kernels, but it cannot benefit from frequency-scaling tricks (YaRN, LongRoPE) that give RoPE a clear path to 1M+ token contexts.
+ ---
+ 
+ ## See Also
+
+
+============================================================
+Timestamp: 2026-03-21 19:33:04
+Note: ml-systems/vllm-model-integration.md
+============================================================
+--- a/ml-systems/vllm-model-integration.md
++++ b/ml-systems/vllm-model-integration.md
+@@ -220,13 +220,13 @@
+ 
+ 3. **"Why not just call lm_head(hidden_states)?"** — `VocabParallelEmbedding.forward()` does token lookup (wrong direction). `LogitsProcessor` routes through `quant_method.apply()` which does the reverse matmul, handles quantization formats (FP8/int4), and performs TP gather.
+ 
+-4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
+-
+-7. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
+-
+-5. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
+-
+-6. **"How does TAMM's RoPE order differ?"** — TAMM applies RoPE before QK norm (linear→RoPE→norm). Qwen3 applies QK norm before RoPE (linear→norm→RoPE). Same `get_rope()` and `RMSNorm`, just different call order in `forward()`.
++4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. For sharded params (e.g., `QKVParallelLinear` split across TP ranks), pass the `shard_id` kwarg so the loader slices the tensor correctly; for already-fused checkpoints, omit `shard_id` and the loader auto-splits. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
++
++5b. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
++
++5c. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
++
++5d. **"How does TAMM's RoPE order differ?"** — TAMM applies RoPE before QK norm (linear→RoPE→norm). Qwen3 applies QK norm before RoPE (linear→norm→RoPE). Same `get_rope()` and `RMSNorm`, just different call order in `forward()`.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:33:04
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -381,25 +381,21 @@
+ 
+ ---
+ 
+-## Interview Questions
+-
+-1. **Walk me through a decoder layer.** Input → RMSNorm → QKV projection (fused) → per-head norm → RoPE → flash attention (reads/writes KV cache) → output projection. Then RMSNorm → gate+up projection (fused) → SiLU gating → down projection. Residual connections wrap both sub-blocks.
+-
+-2. **GQA vs MHA — trade-offs.** MHA: `num_q_heads == num_kv_heads` (16/16 here if full). GQA: fewer KV heads (8 here), multiple Q heads share one KV head. KV cache shrinks by `num_kv_heads / num_q_heads` — 0.5× here, 8× for Llama 3 70B. Quality loss is minimal: KV heads still carry full `head_dim=64` information. MQA (1 KV head) is the extreme; GQA is the generalisation. Decode throughput improves because KV cache memory bandwidth is the bottleneck.
+-
+-3. **RMSNorm vs LayerNorm — trade-offs and why RMSNorm won.** RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary — residual stream has near-zero mean at init. Result: ~10–15% faster, same quality. LayerNorm has γ+β (2× hidden_dim params); RMSNorm has γ only. Pre-Norm placement keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
+-
+-4. **Why Q/K norm but not V norm in Qwen3?** Q and K participate in `QKᵀ / √d_k` — large L2 norm explodes scores, saturates softmax, zeros gradients (attention collapse). V is only weighted-summed; its magnitude doesn't affect score sharpness. Normalizing V destroys semantic magnitude for no benefit.
+-
+-5. **SwiGLU mechanics and why it outperforms ReLU FFN.** `output = W_down( SiLU(W_gate(x)) × W_up(x) )`. Gate learns *whether* a feature fires, up learns *what* it is. SiLU has non-zero gradient everywhere (min ≈ −0.28), eliminating dying neurons. To match original 4× FFN parameter count (2 matrices), SwiGLU uses 3 matrices at `intermediate = 8d/3 ≈ 2.67d`; Qwen3 rounds to 3×. SiLU and element-wise multiply are per-element, so TP sharding is trivially correct.
+-
+-6. **Explain the TP Column→Row pattern and communication cost.** ColumnParallel (QKV, gate+up): each GPU independently computes its output slice — zero communication. RowParallel (o_proj, down_proj): partial sums recombined via one `all_reduce`. Total: **2 all_reduces per decoder layer**.
+-
+-7. **Why fuse QKV / gate+up into one matmul?** One large matmul beats two/three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip for the input activation. `SiluAndMul` fuses chunk + SiLU + multiply into a single compiled kernel.
+-
+-8. **Embedding vs LM head: same weights, different collective ops — why?** Embedding uses `all_reduce` (sum): only one GPU has the real embedding per token, others contribute zeros. LM head uses `gather + concat`: each GPU computes logits for its vocab slice — summing would mix scores for *different* tokens.
+-
+-9. **What is RoPE and why multiple frequencies?** Rotates Q/K by position-dependent angles so `dot(Q_m, K_n)` depends only on relative distance `(m−n)`. Each `d/2` pair rotates at `θᵢ = base^(−2i/d)`. Fast frequencies distinguish nearby tokens; slow frequencies distinguish distant ones. Zero extra parameters; V is not rotated.
++## Interview Talking Points
++
++1. **Explain GQA.** GQA uses fewer KV heads than Q heads — here 8 KV vs 16 Q, so two Q heads share one KV head. KV cache shrinks by `num_kv_heads/num_q_heads` (0.5× here, 8× for Llama 3 70B). Quality loss is minimal; MQA (1 KV head) is the extreme case.
++
++2. **RMSNorm vs LayerNorm trade-offs.** RMSNorm drops mean subtraction and β. Ablations show re-centering is unnecessary — ~10–15% faster, same quality. Pre-Norm placement keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
++
++3. **Why Q/K norm but not V norm?** Q and K drive `QKᵀ/√d_k` — high L2 norm explodes scores, saturates softmax, kills gradients (attention collapse). V is only weighted-summed; normalizing it destroys semantic magnitude for no benefit.
++
++4. **SwiGLU mechanics.** `W_down(SiLU(W_gate(x)) × W_up(x))`. Gate learns *whether* a feature fires; up learns *what* it is. SiLU has non-zero gradient everywhere (no dying neurons). Three matrices at `8d/3` match 2-matrix 4× FFN param count.
++
++5. **TP Column→Row pattern.** ColumnParallel (QKV, gate+up): each GPU computes its output slice independently — zero communication. RowParallel (o_proj, down_proj): one `all_reduce` to sum partials. Total: **2 all_reduces per decoder layer**.
++
++6. **Why fuse QKV / gate+up?** One large matmul beats three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip. `SiluAndMul` further fuses chunk+SiLU+multiply into one compiled kernel.
++
++7. **Walk me through a decoder layer.** `hidden → RMSNorm → QKV (fused) → per-head Q/K norm → RoPE → flash_attn (KV cache) → o_proj + residual → RMSNorm → gate_up (fused) → SiluAndMul → down_proj + residual → output.`
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:33:54
+Note: ml-systems/rotary-position-embedding.md
+============================================================
+--- a/ml-systems/rotary-position-embedding.md
++++ b/ml-systems/rotary-position-embedding.md
+@@ -277,6 +277,8 @@
+ 5. **Why is V not rotated?** Position only needs to affect attention weights (who attends to whom), not the content transmitted. Rotating V would inject position bias into the output values unnecessarily.
+ 
+ 6. **How does RoPE extend to long contexts?** Increase `base` (slows all frequencies, extends unique-position range), or use YaRN / LongRoPE to rescale frequencies non-uniformly at inference time without retraining.
++
++7. **When would you choose ALiBi vs RoPE for long-context?** Prefer ALiBi when you need strong out-of-the-box extrapolation with zero fine-tuning — its fixed linear distance penalty degrades gracefully beyond training length. Prefer RoPE when (a) the model will be fine-tuned on longer sequences (RoPE's frequency scaling via higher `base` or YaRN adapts well), (b) you need tasks requiring long-range semantic dependencies (ALiBi's hard linear penalty can hurt retrieval-style attention over very distant tokens), or (c) you are using a pretrained model ecosystem (LLaMA, Mistral, Gemma) already built on RoPE where switching would require retraining from scratch.
+ ---
+ 
+ ## See Also
+
+
+============================================================
+Timestamp: 2026-03-21 19:34:50
+Note: ml-systems/vllm-model-integration.md
+============================================================
+--- a/ml-systems/vllm-model-integration.md
++++ b/ml-systems/vllm-model-integration.md
+@@ -220,9 +220,11 @@
+ 
+ 3. **"Why not just call lm_head(hidden_states)?"** — `VocabParallelEmbedding.forward()` does token lookup (wrong direction). `LogitsProcessor` routes through `quant_method.apply()` which does the reverse matmul, handles quantization formats (FP8/int4), and performs TP gather.
+ 
+-4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
+-
+-7. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
++4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. For fused tensors (e.g., TAMM's pre-fused QKV), call `weight_loader` with no `shard_id` and `QKVParallelLinear` auto-splits; for separate gate/up tensors, load directly into separate `ColumnParallelLinear` layers. Return the set of loaded param names so the loader can verify no params were missed. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
++
++7. **"When would you reuse KV cache vs compute full attention per layer?"** — Use KV reuse (`kv_sharing_target_layer_name`) when later layers can share earlier layers' key/value representations — this saves memory (no separate cache allocation) and removes K/V projection weights entirely. Use full attention when each layer needs to attend to its own distinct K/V projections (different linear transformations of the residual stream). TAMM's segment 1 layers are empirically shown to produce similar attention patterns to layer 34, justifying reuse. The trade-off: KV reuse reduces model expressivity but cuts KV cache memory by the number of sharing layers.
++
++8. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
+ 
+ 5. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:36:33
+Note: ml-systems/vllm-distributed-groups.md
+============================================================
+--- a/ml-systems/vllm-distributed-groups.md
++++ b/ml-systems/vllm-distributed-groups.md
+@@ -152,7 +152,7 @@
+ 
+ 1. vLLM builds all six parallel groups from one rank tensor with layout `ExternalDP × DP × PP × PCP × TP`. Each dimension is extracted by transposing and reshaping — same tensor, different views.
+ 2. `GroupCoordinator` holds real NCCL resources. Must `.destroy()` before replacing — leaking communicators wastes GPU memory and can cause hangs.
+-3. Groups can be rebuilt at runtime. PT-MoE uses this to narrow TP scope without modifying vLLM core. Only groups "at or below" TP need rebuilding — PP and DP are orthogonal.
++3. **When to rebuild vs not rebuild**: Rebuild when TP scope changes (PT-MoE narrowing 32→4 GPUs per track), when EP membership changes, or when DCP must match a new TP size. Do NOT rebuild if the change is orthogonal to TP (PP pipeline stages, DP data shards) — those groups span across TP boundaries and rebuilding them would break the world communicator topology. Trigger conditions: (a) `get_tp_group().world_size != intended_tp_size`, (b) group membership has structurally changed, (c) you're inside `model.__init__()` before any layers are constructed. Never rebuild mid-forward-pass or after `determine_available_memory()` has run.
+ 4. After rebuilding, `parallel_config.tensor_parallel_size` and `get_tp_group().world_size` diverge. Most runtime code reads the config (safe), but KV cache head calculation reads config too (risk for models with >1 KV heads per track).
+ 5. `rank_in_group` vs `local_rank`: `rank_in_group` is your logical position within a communication group (computed from rank list). `local_rank` is your physical GPU slot on the node (set by torchrun). Never confuse them — PT-MoE uses `rank_in_group` of the cross-track group as the track index.
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:36:33
+Note: ml-systems/vllm-model-integration.md
+============================================================
+--- a/ml-systems/vllm-model-integration.md
++++ b/ml-systems/vllm-model-integration.md
+@@ -220,13 +220,13 @@
+ 
+ 3. **"Why not just call lm_head(hidden_states)?"** — `VocabParallelEmbedding.forward()` does token lookup (wrong direction). `LogitsProcessor` routes through `quant_method.apply()` which does the reverse matmul, handles quantization formats (FP8/int4), and performs TP gather.
+ 
+-4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
+-
+-7. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
+-
+-5. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
+-
+-6. **"How does TAMM's RoPE order differ?"** — TAMM applies RoPE before QK norm (linear→RoPE→norm). Qwen3 applies QK norm before RoPE (linear→norm→RoPE). Same `get_rope()` and `RMSNorm`, just different call order in `forward()`.
++4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch). For fused tensors (e.g., QKV already fused in checkpoint), call `weight_loader(param, tensor)` with no `shard_id` and `QKVParallelLinear` auto-splits; for tied weights (lm_head = embed_tokens), simply skip loading lm_head — the parameter is already the same object.
++
++5. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors differently). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution, and the segment offset arithmetic (layer 35+M) must be computed at load time.
++
++6. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
++
++7. **"How does TAMM's RoPE order differ?"** — TAMM applies RoPE before QK norm (linear→RoPE→norm). Qwen3 applies QK norm before RoPE (linear→norm→RoPE). Same `get_rope()` and `RMSNorm`, just different call order in `forward()`.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:36:33
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -383,19 +383,15 @@
+ 
+ ## Interview Talking Points
+ 
+-1. **Explain GQA.** GQA uses fewer KV heads than Q heads — here 8 KV vs 16 Q, so two Q heads share one KV head. KV cache shrinks by `num_kv_heads/num_q_heads` (0.5× here, 8× for Llama 3 70B). Quality loss is minimal; MQA (1 KV head) is the extreme case.
+-
+-2. **RMSNorm vs LayerNorm trade-offs.** RMSNorm drops mean subtraction and β. Ablations show re-centering is unnecessary — ~10–15% faster, same quality. Pre-Norm placement keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
+-
+-3. **Why Q/K norm but not V norm?** Q and K drive `QKᵀ/√d_k` — high L2 norm explodes scores, saturates softmax, kills gradients (attention collapse). V is only weighted-summed; normalizing it destroys semantic magnitude for no benefit.
+-
+-4. **SwiGLU mechanics.** `W_down(SiLU(W_gate(x)) × W_up(x))`. Gate learns *whether* a feature fires; up learns *what* it is. SiLU has non-zero gradient everywhere (no dying neurons). Three matrices at `8d/3` match 2-matrix 4× FFN param count.
+-
+-5. **TP Column→Row pattern.** ColumnParallel (QKV, gate+up): each GPU computes its output slice independently — zero communication. RowParallel (o_proj, down_proj): one `all_reduce` to sum partials. Total: **2 all_reduces per decoder layer**.
+-
+-6. **Why fuse QKV / gate+up?** One large matmul beats three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip. `SiluAndMul` further fuses chunk+SiLU+multiply into one compiled kernel.
+-
+-7. **Walk me through a decoder layer.** `hidden → RMSNorm → QKV (fused) → per-head Q/K norm → RoPE → flash_attn (KV cache) → o_proj + residual → RMSNorm → gate_up (fused) → SiluAndMul → down_proj + residual → output.`
++1. **Walk me through a decoder layer.** "Each token's hidden state passes through RMSNorm, then a fused QKV projection — Q gets 16 heads, K and V share 8 heads each (GQA). Per-head RMSNorm on Q and K prevents attention collapse, then RoPE encodes position. FlashAttention reads from the KV cache, o_proj recombines heads, a residual is added, then RMSNorm feeds the SwiGLU MLP — gate_up fused matmul, SiluAndMul, down_proj, final residual."
++
++2. **Why GQA and what does it save?** "8 KV heads vs 16 Q heads means two Q heads share one KV pair. KV cache memory scales with `num_kv_heads`, not `num_q_heads` — a 0.5× reduction here, 8× for Llama 3 70B. Quality is nearly identical to full MHA because attention patterns generalize across Q heads sharing a KV."
++
++3. **RMSNorm vs LayerNorm — why switch?** "RMSNorm drops mean subtraction and the β parameter. Ablations show re-centering is unnecessary for Transformers — roughly 10–15% faster with equivalent quality. Pre-Norm placement means the residual stream is never normalized, so gradients flow cleanly back to the embedding without the vanishing-gradient pathology of Post-Norm."
++
++4. **Explain SwiGLU and why not ReLU.** "SwiGLU computes `W_down(SiLU(W_gate(x)) × W_up(x))` — gate and content are decoupled learnable projections. SiLU has non-zero gradient everywhere; ReLU's zero gradient for x < 0 causes dying neurons that never recover. Three matrices at 8d/3 ≈ 2.67d keeps total params equal to a 2-matrix 4× FFN."
++
++5. **Describe the Tensor Parallelism pattern per layer.** "ColumnParallel (QKV, gate+up): each GPU computes its output slice with no communication — the output dimension is partitioned. RowParallel (o_proj, down_proj): each GPU holds a column slice of the weight, computes a partial sum, then one `all_reduce` sums across GPUs. Total cost: exactly 2 all_reduces per decoder layer, one after attention and one after MLP."
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:37:25
+Note: ml-systems/vllm-model-integration.md
+============================================================
+--- a/ml-systems/vllm-model-integration.md
++++ b/ml-systems/vllm-model-integration.md
+@@ -220,7 +220,7 @@
+ 
+ 3. **"Why not just call lm_head(hidden_states)?"** — `VocabParallelEmbedding.forward()` does token lookup (wrong direction). `LogitsProcessor` routes through `quant_method.apply()` which does the reverse matmul, handles quantization formats (FP8/int4), and performs TP gather.
+ 
+-4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
++4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch). For fused tensors (e.g., TAMM's pre-fused QKV), call `weight_loader(param, tensor)` with no `shard_id` — `QKVParallelLinear` auto-splits by head. For tied weights (lm_head = embed_tokens), skip loading lm_head entirely; the parameter is already populated.
+ 
+ 7. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:38:22
+Note: ml-systems/transformer-model-internals.md
+============================================================
+--- a/ml-systems/transformer-model-internals.md
++++ b/ml-systems/transformer-model-internals.md
+@@ -383,19 +383,15 @@
+ 
+ ## Interview Talking Points
+ 
+-1. **Explain GQA.** GQA uses fewer KV heads than Q heads — here 8 KV vs 16 Q, so two Q heads share one KV head. KV cache shrinks by `num_kv_heads/num_q_heads` (0.5× here, 8× for Llama 3 70B). Quality loss is minimal; MQA (1 KV head) is the extreme case.
+-
+-2. **RMSNorm vs LayerNorm trade-offs.** RMSNorm drops mean subtraction and β. Ablations show re-centering is unnecessary — ~10–15% faster, same quality. Pre-Norm placement keeps the residual stream un-normalized, giving gradients a clean path back to the embedding.
+-
+-3. **Why Q/K norm but not V norm?** Q and K drive `QKᵀ/√d_k` — high L2 norm explodes scores, saturates softmax, kills gradients (attention collapse). V is only weighted-summed; normalizing it destroys semantic magnitude for no benefit.
+-
+-4. **SwiGLU mechanics.** `W_down(SiLU(W_gate(x)) × W_up(x))`. Gate learns *whether* a feature fires; up learns *what* it is. SiLU has non-zero gradient everywhere (no dying neurons). Three matrices at `8d/3` match 2-matrix 4× FFN param count.
+-
+-5. **TP Column→Row pattern.** ColumnParallel (QKV, gate+up): each GPU computes its output slice independently — zero communication. RowParallel (o_proj, down_proj): one `all_reduce` to sum partials. Total: **2 all_reduces per decoder layer**.
+-
+-6. **Why fuse QKV / gate+up?** One large matmul beats three small ones: better Tensor Core utilization, fewer kernel launches, one memory round-trip. `SiluAndMul` further fuses chunk+SiLU+multiply into one compiled kernel.
+-
+-7. **Walk me through a decoder layer.** `hidden → RMSNorm → QKV (fused) → per-head Q/K norm → RoPE → flash_attn (KV cache) → o_proj + residual → RMSNorm → gate_up (fused) → SiluAndMul → down_proj + residual → output.`
++1. **Walk me through a decoder layer.** "Each layer has two sub-blocks. First, input goes through RMSNorm, then fused QKV projection, per-head Q/K norm, RoPE, flash attention against the KV cache, o_proj, and residual add. Then RMSNorm again, fused gate+up projection, SiluAndMul activation, down_proj, and another residual add."
++
++2. **How does GQA reduce memory?** "GQA uses fewer KV heads than Q heads — here 8 KV vs 16 Q, so two Q heads share one KV head. KV cache shrinks by the ratio num_kv_heads/num_q_heads — 0.5× here, 8× for Llama 3 70B. MQA is the extreme case with one KV head."
++
++3. **Why RMSNorm instead of LayerNorm?** "RMSNorm drops mean subtraction and the β parameter. Ablation studies show re-centering is unnecessary for transformers, making it ~10–15% faster with equivalent quality. Pre-Norm placement keeps the residual stream un-normalized so gradients flow cleanly back to the embedding."
++
++4. **Why normalize Q and K but not V?** "Q and K drive the dot-product scores — high L2 norms explode attention logits, saturate softmax, and kill gradients, which is attention collapse. V is only weighted-summed by those scores, so its magnitude doesn't affect sharpness. Normalizing V would erase useful semantic magnitude for no benefit."
++
++5. **Explain the TP Column→Row pattern.** "ColumnParallel layers like QKV and gate+up need zero communication — each GPU independently computes its output slice. RowParallel layers like o_proj and down_proj each need one all_reduce to sum partial results. That gives exactly two all_reduces per decoder layer."
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:39:35
+Note: ml-systems/rotary-position-embedding.md
+============================================================
+--- a/ml-systems/rotary-position-embedding.md
++++ b/ml-systems/rotary-position-embedding.md
+@@ -277,6 +277,8 @@
+ 5. **Why is V not rotated?** Position only needs to affect attention weights (who attends to whom), not the content transmitted. Rotating V would inject position bias into the output values unnecessarily.
+ 
+ 6. **How does RoPE extend to long contexts?** Increase `base` (slows all frequencies, extends unique-position range), or use YaRN / LongRoPE to rescale frequencies non-uniformly at inference time without retraining.
++
++7. **When would you choose ALiBi over RoPE?** ALiBi is preferable when (a) you need strong out-of-the-box length extrapolation with zero implementation complexity — its fixed linear penalty degrades gracefully beyond training length; (b) you are training a purely encoder-free, generation-focused model where the hard recency bias is acceptable or even desirable; and (c) you want to avoid any risk of frequency-aliasing issues when extending context. RoPE is preferable when (a) the task requires attending to tokens far away (e.g. retrieval, long-document QA) where ALiBi's hard penalty actively hurts; (b) you want learned, content-dependent relative weighting rather than a fixed slope; and (c) you plan to extend context post-training via YaRN/LongRoPE. In practice, most frontier LLMs (LLaMA, Mistral, Gemma, Qwen) have converged on RoPE because its extrapolation can be fixed with base scaling, while ALiBi's hard bias cannot be easily relaxed without retraining.
+ ---
+ 
+ ## See Also
+
+
+============================================================
+Timestamp: 2026-03-21 19:39:35
+Note: ml-systems/vllm-weight-loading.md
+============================================================
+--- a/ml-systems/vllm-weight-loading.md
++++ b/ml-systems/vllm-weight-loading.md
+@@ -43,60 +43,29 @@
+ 
+ ## Three-Step Implementation
+ 
+-### Step 1: Build the Lookup Table
+-
+-```python
+-params_dict = dict(self.named_parameters())
+-# {"model.layers.0.self_attn.qkv_proj.weight": Parameter([2304, 2048]), ...}
+-```
+-
+-`named_parameters()` recursively walks the module tree; dot-separated paths reflect the hierarchy.
+-
+-### Step 2: Remap Each Checkpoint Name
+-
+-Translate the checkpoint name to the model's naming convention. Two design patterns:
+-
+-**If/else cascade** (simple but verbose):
+-```python
+-if "attention.qkv_transform" in name:
+-    name = name.replace("attention.qkv_transform.fused_linear", "self_attn.qkv_proj")
+-elif "attention.q_transform" in name:
+-    name = name.replace(...)
+-# ... 12+ branches
+-```
+-
+-**Prefix/suffix separation** (declarative, extensible):
+-```python
+-# Step 2a: translate segment prefix → flat layer index
++```python
++# Step 1: build lookup table
++params_dict = dict(self.named_parameters())  # dot-separated paths from module tree
++
++# Step 2: remap checkpoint name → model name (two patterns below)
++# Pattern A — if/else cascade (simple, verbose, 12+ branches)
++# Pattern B — prefix/suffix separation (declarative, extensible):
+ _SEG_RE = re.compile(r"layers\.segment_(\d+)\.layer_(\d+)\.")
+ m = _SEG_RE.search(name)
+ if m:
+     seg, layer = int(m.group(1)), int(m.group(2))
+     idx = layer + (num_regular_layers if seg else 0)
+-    name = f"model.layers.{idx}." + name[m.end():]
+-
+-# Step 2b: translate component suffixes via table
+-_SUFFIX_MAP = [
+-    ("attention.qkv_transform.fused_linear.", "self_attn.qkv_proj."),
+-    ("attention.q_transform.",                "self_attn.q_proj."),
+-    ("feed_forward.hidden_transform.linear_0.", "mlp.gate_proj."),
+-    # ... more rows
+-]
+-for old, new in _SUFFIX_MAP:
++    name = f"model.layers.{idx}." + name[m.end():]  # prefix: which layer?
++for old, new in _SUFFIX_MAP:                          # suffix: which component?
+     name = name.replace(old, new)
+-```
+-
+-The second pattern separates **prefix** (which layer?) from **suffix** (which component?) — adding a variant means adding table rows, not if/else branches.
+-
+-### Step 3: Load via weight_loader
+-
+-```python
++
++# Step 3: load via weight_loader (vLLM convention, monkey-patched in __init__)
+ param = params_dict[vllm_name]
+ weight_loader = getattr(param, "weight_loader", default_weight_loader)
+-weight_loader(param, tensor)
+-```
+-
+-`weight_loader` is a vLLM convention (not PyTorch) — monkey-patched onto each `nn.Parameter` during `__init__`. Each layer type's implementation handles TP sharding:
++weight_loader(param, tensor)  # handles TP sharding; outer loop is TP-agnostic
++```
++
++`weight_loader` is monkey-patched onto each `nn.Parameter` during `__init__`. Each layer type's implementation handles TP sharding:
+ 
+ | Layer Type | What weight_loader Does |
+ |---|---|
+@@ -152,8 +121,6 @@
+             loaded.add(pytorch_name)
+         return loaded
+ ```
+-
+-The TAMM model has a unique challenge: its 56 layers span two segments. Segment 0 (layers 0-34) uses full QKV attention with `qkv_transform.fused_linear`. Segment 1 (layers 35-55) uses Q-only attention with `q_transform` (KV is reused from layer 34's cache). The remap function handles this via the regex: `segment_1.layer_M` becomes `model.layers.(35+M)`.
+ 
+ ---
+ 
+
+
+============================================================
+Timestamp: 2026-03-21 19:40:26
+Note: ml-systems/rotary-position-embedding.md
+============================================================
+--- a/ml-systems/rotary-position-embedding.md
++++ b/ml-systems/rotary-position-embedding.md
+@@ -277,6 +277,8 @@
+ 5. **Why is V not rotated?** Position only needs to affect attention weights (who attends to whom), not the content transmitted. Rotating V would inject position bias into the output values unnecessarily.
+ 
+ 6. **How does RoPE extend to long contexts?** Increase `base` (slows all frequencies, extends unique-position range), or use YaRN / LongRoPE to rescale frequencies non-uniformly at inference time without retraining.
++
++7. **When would you choose ALiBi over RoPE?** ALiBi is preferable when (a) inference-time extrapolation to longer sequences than training is the primary concern — its fixed linear distance penalty degrades more gracefully than RoPE without any frequency rescaling tricks, and (b) simplicity of implementation outweighs flexibility. The trade-off: ALiBi's hard linear penalty is a strong inductive bias that *forces* attention to decay with distance, which can hurt tasks requiring long-range dependencies (e.g. retrieval over long documents). RoPE imposes no such penalty — the Q/K matrices learn from data how much to weight distant tokens — making RoPE more expressive but requiring explicit techniques (YaRN, LongRoPE) for reliable length extrapolation.
+ ---
+ 
+ ## See Also
+
+
+============================================================
+Timestamp: 2026-03-21 19:41:30
+Note: ml-systems/vllm-weight-loading.md
+============================================================
+--- a/ml-systems/vllm-weight-loading.md
++++ b/ml-systems/vllm-weight-loading.md
+@@ -43,30 +43,11 @@
+ 
+ ## Three-Step Implementation
+ 
+-### Step 1: Build the Lookup Table
+-
+-```python
++```python
++# Step 1: build lookup table — named_parameters() walks module tree; paths are dot-separated
+ params_dict = dict(self.named_parameters())
+-# {"model.layers.0.self_attn.qkv_proj.weight": Parameter([2304, 2048]), ...}
+-```
+-
+-`named_parameters()` recursively walks the module tree; dot-separated paths reflect the hierarchy.
+-
+-### Step 2: Remap Each Checkpoint Name
+-
+-Translate the checkpoint name to the model's naming convention. Two design patterns:
+-
+-**If/else cascade** (simple but verbose):
+-```python
+-if "attention.qkv_transform" in name:
+-    name = name.replace("attention.qkv_transform.fused_linear", "self_attn.qkv_proj")
+-elif "attention.q_transform" in name:
+-    name = name.replace(...)
+-# ... 12+ branches
+-```
+-
+-**Prefix/suffix separation** (declarative, extensible):
+-```python
++
++# Step 2: remap each checkpoint name (prefix/suffix separation is preferred over if/else cascade)
+ # Step 2a: translate segment prefix → flat layer index
+ _SEG_RE = re.compile(r"layers\.segment_(\d+)\.layer_(\d+)\.")
+ m = _SEG_RE.search(name)
+@@ -74,29 +55,17 @@
+     seg, layer = int(m.group(1)), int(m.group(2))
+     idx = layer + (num_regular_layers if seg else 0)
+     name = f"model.layers.{idx}." + name[m.end():]
+-
+-# Step 2b: translate component suffixes via table
+-_SUFFIX_MAP = [
+-    ("attention.qkv_transform.fused_linear.", "self_attn.qkv_proj."),
+-    ("attention.q_transform.",                "self_attn.q_proj."),
+-    ("feed_forward.hidden_transform.linear_0.", "mlp.gate_proj."),
+-    # ... more rows
+-]
++# Step 2b: translate component suffixes via table (adding a variant = adding rows, not if/else branches)
+ for old, new in _SUFFIX_MAP:
+     name = name.replace(old, new)
+-```
+-
+-The second pattern separates **prefix** (which layer?) from **suffix** (which component?) — adding a variant means adding table rows, not if/else branches.
+-
+-### Step 3: Load via weight_loader
+-
+-```python
++
++# Step 3: load via weight_loader — vLLM convention (not PyTorch), monkey-patched onto each nn.Parameter
+ param = params_dict[vllm_name]
+ weight_loader = getattr(param, "weight_loader", default_weight_loader)
+ weight_loader(param, tensor)
+ ```
+ 
+-`weight_loader` is a vLLM convention (not PyTorch) — monkey-patched onto each `nn.Parameter` during `__init__`. Each layer type's implementation handles TP sharding:
++`weight_loader` handles TP sharding per layer type:
+ 
+ | Layer Type | What weight_loader Does |
+ |---|---|
+@@ -152,8 +121,6 @@
+             loaded.add(pytorch_name)
+         return loaded
+ ```
+-
+-The TAMM model has a unique challenge: its 56 layers span two segments. Segment 0 (layers 0-34) uses full QKV attention with `qkv_transform.fused_linear`. Segment 1 (layers 35-55) uses Q-only attention with `q_transform` (KV is reused from layer 34's cache). The remap function handles this via the regex: `segment_1.layer_M` becomes `model.layers.(35+M)`.
+ 
+ ---
+ 
+

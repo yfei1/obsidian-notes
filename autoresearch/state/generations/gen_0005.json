@@ -1,0 +1,17 @@
+{
+  "generation": 5,
+  "target": "ml-systems/parallel-track-architecture.md",
+  "strategies": [
+    "concretize",
+    "densify",
+    "motivate"
+  ],
+  "num_valid_deltas": 3,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "motivate",
+  "winner_advantage": 1.034792955221957,
+  "affected_files": [
+    "ml-systems/parallel-track-architecture.md"
+  ]
+}
