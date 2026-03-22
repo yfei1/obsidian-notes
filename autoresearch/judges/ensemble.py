@@ -35,11 +35,20 @@ def default_ensemble() -> list[Judge]:
     """
     return [
         Judge(
-            id="holistic_sonnet",
+            id="scope_sonnet",
             model="sonnet",
             provider="claude",
-            persona=None,
-            description="Default Claude Sonnet judge",
+            persona=(
+                "scope discipline auditor. Your single concern: does the edit "
+                "stay within the note's stated topic? Prefer narrower, sharper "
+                "notes over broader, speculative ones. Penalize edits that add "
+                "neighboring subtopics, survey the design space, or broaden scope "
+                "beyond the source material. An edit that improves textbook feel "
+                "by adding framing or adjacent context but does not clearly improve "
+                "mechanism understanding within scope is NOT an improvement — "
+                "prefer identity in that case."
+            ),
+            description="Scope discipline enforcer, Claude Sonnet",
         ),
         Judge(
             id="interviewer_sonnet",

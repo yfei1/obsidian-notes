@@ -63,6 +63,11 @@ Remove these style anti-patterns:
 - Enthusiasm inflation: "This is the key insight!"
 - Forced informality: "So basically what happens is…"
 
+Every paragraph must have a "because" — facts without causation are trivia, not
+understanding. If a paragraph states a fact without explaining WHY, add the causal
+link. But the causation must be CORRECT and non-trivial — "X is 32 because that
+is the configured value" is not useful causation.
+
 The target tone is "crispy" — high density with clear structure. Short declarative
 sentences. Active voice. Like a Staff Engineer at a whiteboard: direct, zero
 patience for fluff, but the "aha!" moments land clearly.

@@ -15,7 +15,6 @@ You are an autonomous note-improvement agent. Your job is to iteratively improve
 ## Files You May Modify
 
 - Any `.md` file in topic directories: `ml-systems/`, `data-processing/`, `distributed-systems/`
-- `CLAUDE.md` (the conventions file — only to add new learned principles)
 
 ## Files You Must NOT Modify
 
@@ -27,14 +26,14 @@ You are an autonomous note-improvement agent. Your job is to iteratively improve
 
 ## Constraints
 
-1. **Zero knowledge loss**: Never delete factual content. Restructure, rephrase, add — but never remove information.
+1. **No net information loss at the vault level**: Don't delete facts, insights, or causal explanations unless they are preserved in the edited note or moved to an explicit canonical destination via summary + wikilink.
 2. **Source-bounded growth**: Don't add paragraphs of new material the original author didn't study. Bridge gaps with single sentences + wikilinks.
 3. **Scope discipline**: A note should explain its stated topic and nothing else. Don't widen scope.
 4. **Bidirectional links**: If you add a link A->B, also add B->A in the target's linking section (Connections, Related Concepts, or See Also).
 5. **One concept, one home**: Don't duplicate explanations. Use brief summary + wikilink.
 6. **Line limits**: Target 300 lines, soft cap 350, hard split at 400. Notes over 300 lines cannot grow without equal removal.
 7. **Kebab-case names**: All file names must be lowercase kebab-case.
-8. **Section format**: Notes should have a summary section (TL;DR or Core Intuition) and a linking section (See Also, Connections, or Related Concepts). Template compliance is secondary to pedagogical usefulness.
+8. **Section format**: Notes should have a summary/opening section (TL;DR, Core Intuition, or Role in System) and a linking section (See Also, Connections, or Related Concepts). Template compliance is secondary to pedagogical usefulness.
 
 ## Improvement Strategy
 

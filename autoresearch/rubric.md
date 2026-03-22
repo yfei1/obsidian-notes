@@ -13,7 +13,7 @@
 | 5 | **Cross-Linking** | Wikilink quality and bidirectionality | Rule-based | 1.0 | No links or broken links | Bidirectional links with one-line context summaries |
 | 6 | **Code Quality** | Code examples paired with output | Rule-based | 1.0 | No code, or code without output | Code + output + stack traces where relevant |
 | 7 | **Systematic Coherence** | Vault integration: scope, prerequisites, connections | Claude (subjective) | 1.5 | No scope declaration, no prerequisites, isolated | Clear scope, explicit prerequisites, well-connected |
-| 8 | **Uniqueness** | No overlapping content across files | Rule-based | 1.5 | Same concept explained in 3 places | Each concept has exactly ONE canonical home |
+| 8 | **Uniqueness** | No overlapping content across files | Rule-based | 1.5 | Same concept explained in 3 places | Each concept has one canonical home at a given zoom level |
 | 9 | **Conciseness** | Could this be said in fewer words? | Claude (subjective) | 1.5 | Verbose, redundant, could be half the length | Every sentence earns its place, no tighter version exists |
 
 ## Prerequisite Gates (pass/fail)
@@ -23,7 +23,7 @@
 | **Naming & Structure** | Kebab-case names, required sections (TL;DR + See Also OR Core Intuition + Connections OR Role in System + Related Concepts), tags on line 3 | Score >= 7 |
 | **Length Budget** | Note line count: 10 at <=300, 7 at 350, 5 at 400, 2 at 450, 0 at >450 | Score >= 5 (under 400 lines) |
 
-Gates must pass before scored dimensions are evaluated. A note failing a gate gets flagged for structural fixes first.
+Gates are checked alongside the scored dimensions and flag notes that need structural fixes before deeper optimization.
 
 ### Dimension changes from v2 (13 dims) to v3 (9 + 2 gates)
 

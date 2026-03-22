@@ -72,9 +72,9 @@ SUBJECTIVE_PROMPTS = {
         "excellent": "Every sentence lands immediately, one concept per sentence, jargon defined inline",
     },
     "Knowledge Density": {
-        "description": "Insight-per-line ratio. Every line should teach something non-obvious. No filler, repetition, or statements obvious to the target audience.",
-        "poor": "Filler words, repetition, obvious statements that waste reader time",
-        "excellent": "Every line teaches something non-obvious, high signal-to-noise ratio",
+        "description": "Insight-per-line ratio. Every line should teach something non-obvious. Every paragraph must have a 'because' — facts without causation are trivia. Concrete verb over abstract adjective. No filler, repetition, or statements obvious to the target audience.",
+        "poor": "Filler words, repetition, obvious statements, facts stated without causation or evidence",
+        "excellent": "Every line teaches something non-obvious, every claim has a 'because', concrete verbs throughout",
     },
     "Structure & Flow": {
         "description": "Two valid structures depending on note type. CONCEPT notes: Core Intuition -> How It Works -> Trade-offs & Decisions -> Common Confusions -> Connections. IMPLEMENTATION notes: Role in System -> Mental Model -> Step-by-Step Walkthrough -> Failure Modes -> Related Concepts. Both types: opening summary section (TL;DR, Core Intuition, or Role in System) must be self-sufficient, each section independently comprehensible, WHY before HOW, progressive conceptual build-up. Score based on whichever template fits the note's content. Notes that don't fit either template are fine if they serve the pedagogical purpose.",
