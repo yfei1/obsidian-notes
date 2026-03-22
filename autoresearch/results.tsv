@@ -69,3 +69,4 @@ none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	discarded	retry: 
 f0c7a08	ml-systems/transformer-model-internals.md	Interview Readiness	6	7	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Interview Readiness (6->7/10)
 none	ml-systems/parallelism-strategies.md	Conciseness	5	5	failed	Edits could not be applied
 none	ml-systems/vllm-weight-loading.md	Interview Readiness	7	7	failed	Edits could not be applied
+878169b	ml-systems/attention-mechanics.md	Interview Readiness	4	6	kept	autoresearch: improve ml-systems/attention-mechanics.md on Interview Readiness (4->6/10)

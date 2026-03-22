@@ -86,7 +86,7 @@ for old, new in _SUFFIX_MAP:
     name = name.replace(old, new)
 ```
 
-The second pattern separates **prefix** (which layer?) from **suffix** (which component?). Adding a new model variant means adding rows to the table, not new if/else branches. The suffix map is also self-documenting — it's a complete specification of the name mapping.
+The second pattern separates **prefix** (which layer?) from **suffix** (which component?) — adding a variant means adding table rows, not if/else branches.
 
 ### Step 3: Load via weight_loader
 
@@ -209,30 +209,21 @@ for ckpt_name, tensor in weights:
 
 After slicing, the tensor looks identical to what a single-track model would produce. The standard `weight_loader` handles TP sharding from there.
 
-### Why Transpose? (150B only — 3B does NOT transpose)
+### Why Transpose? (150B only)
 
-The 3B checkpoint stores linear weights in PyTorch convention `[out_dim, in_dim]` — no transpose needed. The 3B `load_weights` calls `weight_loader(param, tensor)` directly.
-
-The 150B checkpoint packs all tracks along dim 0, but the per-track slices come out as `[in_dim, out_dim]` — the opposite convention:
+| Model | Convention after slicing | Transpose? |
+|-------|--------------------------|------------|
+| 3B | `[out, in]` — PyTorch-ready | No |
+| 150B | `[in, out]` — HF export artifact | Yes (2D linears only) |
 
 ```
-3B gate_proj:   [6656, 2048]  = [out, in]  ← PyTorch ready, no transpose
 150B gate_proj: [8, 2048, 5888] → slice → [2048, 5888] = [in, out] ← needs .t()
 ```
 
-This is NOT because "JAX stores [in, out]" — the 3B checkpoint (also from JAX/ajax) is already `[out, in]`. The transpose need is specific to how the 150B HuggingFace export stacks per-track weights along dim 0. The inner dimensions end up in `[in, out]` order after the track-stacking.
-
-Every 2D per-track weight needs `.t()` after slicing. Norms (1D) don't. Experts (3D) are loaded per-expert via `FusedMoE.weight_loader` which handles its own layout.
-
-### Determining What Needs Transpose
-
-Only 2D linear weights need transpose. Norms and expert weights don't:
+Norms (1D) and expert weights (handled by `FusedMoE.weight_loader`) never need transpose.
 
 ```python
 def needs_transpose(name: str) -> bool:
-    # Norms are 1D — no transpose
-    # Expert weights go through FusedMoE.weight_loader — no transpose
-    # Everything else (qkv, o_proj, gate, up, down, router) is 2D linear
     return "norm" not in name and "experts" not in name
 ```
 
