@@ -79,3 +79,8 @@ none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	discarded	no impr
 82c8f1a	ml-systems/transformer-model-internals.md	Interview Readiness	3	6	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Interview Readiness (3->6/10)
 c15350d	ml-systems/validating-parallelism-at-scale.md	Interview Readiness	7	8	kept	autoresearch: improve ml-systems/validating-parallelism-at-scale.md on Interview Readiness (7->8/10)
 none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+0338a79	ml-systems/attention-mechanics.md	Conciseness	5	6	kept	autoresearch: improve ml-systems/attention-mechanics.md on Conciseness (5->6/10)
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	7	7	discarded	retry: no improvement (7->7)
+none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	retry: no improvement (7->7)
