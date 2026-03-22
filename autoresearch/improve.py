@@ -172,7 +172,7 @@ def _get_rule_based_criteria(dimension: str) -> str | None:
 - Bidirectional: if this note links to [[X]], then X must link back to this note
 - Score = f(valid_links, broken_links, bidirectional_ratio)
 - Need ALL links bidirectional + context summaries for score 10
-- Add reverse links in target notes' See Also sections to improve bidirectionality""",
+- Add reverse links in target notes' linking sections (Connections or See Also) to improve bidirectionality""",
 
         "Code Quality": """SCORING CRITERIA (rule-based — Code Quality):
 - Code blocks MUST use a language tag (python, go, rust, etc.) to count as code
@@ -230,7 +230,7 @@ def improve_note_search_replace(note_path: str, dimension: str, score: int,
                 target_content = read_note(target_path)
                 # Try multiple section names (old: TL;DR, new: Core Intuition, impl: What This Component Does)
                 summary_match = re.search(
-                    r'## (?:TL;DR|Core Intuition|What This Component Does)\n(.*?)(?=\n## |\n---)',
+                    r'## (?:TL;DR|Core Intuition|What This Component Does|Role in System)\n(.*?)(?=\n## |\n---)',
                     target_content, re.DOTALL,
                 )
                 if summary_match:

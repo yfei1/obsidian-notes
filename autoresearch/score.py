@@ -107,8 +107,8 @@ CONTENT_STRATEGIES: dict[str, str] = {
     "Knowledge Density": "full",
     "Structure & Flow": "skeleton",
     "Concrete Examples": "full",
-    "Interview Readiness": "full",
-    "Conciseness": "conciseness_ctx",  # Full content + related notes' TL;DRs for cross-note context
+    "Systematic Coherence": "full",
+    "Conciseness": "conciseness_ctx",  # Full content + related notes' summaries for cross-note context
 }
 
 # Score cache: (content_hash, dimension, strategy) -> score_dict
@@ -292,7 +292,7 @@ def score_cross_linking(note: Path, content: str, all_notes: list[Path],
     elif ratio < 0.3:
         score = 4
         reason = f"{len(valid)} valid links but only {bidirectional} are bidirectional"
-        suggestion = "Add reverse links in target notes' See Also sections"
+        suggestion = "Add reverse links in target notes' linking sections (Connections or See Also)"
     elif ratio < 0.6:
         score = 6
         reason = f"{len(valid)} valid links, {bidirectional}/{len(valid)} bidirectional"
@@ -433,9 +433,13 @@ def score_naming_structure(note: Path, content: str) -> dict:
     if fname != fname.lower() or ' ' in fname or '_' in fname:
         issues.append(f"File name '{fname}' is not kebab-case")
 
-    for section in REQUIRED_SECTIONS:
-        if f"## {section}" not in content:
-            issues.append(f"Missing required section: ## {section}")
+    # Accept old OR new section formats (transition-aware, like engine/gates.py)
+    from shared import REQUIRED_SECTIONS_OLD, REQUIRED_SECTIONS_NEW_CONCEPT, REQUIRED_SECTIONS_NEW_IMPL
+    has_old = all(f"## {s}" in content for s in REQUIRED_SECTIONS_OLD)
+    has_new_concept = all(f"## {s}" in content for s in REQUIRED_SECTIONS_NEW_CONCEPT)
+    has_new_impl = all(f"## {s}" in content for s in REQUIRED_SECTIONS_NEW_IMPL)
+    if not (has_old or has_new_concept or has_new_impl):
+        issues.append("Missing required sections: need [TL;DR + See Also] or [Core Intuition + Connections] or [Role in System + Related Concepts]")
 
     lines = content.split('\n')
     if len(lines) >= 3:
