@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 from shared import (
-    REPO_ROOT, AUTORESEARCH_DIR, SCORES_TSV, NOTE_DIRS, REQUIRED_SECTIONS,
+    REPO_ROOT, AUTORESEARCH_DIR, SCORES_TSV, NOTE_DIRS,
     MAX_NOTE_LINES,
     discover_notes, relative_path, read_note, extract_wikilinks,
 )
@@ -77,7 +77,7 @@ SUBJECTIVE_PROMPTS = {
         "excellent": "Every line teaches something non-obvious, high signal-to-noise ratio",
     },
     "Structure & Flow": {
-        "description": "Two valid structures depending on note type. CONCEPT notes: Core Intuition -> How It Works -> Trade-offs & Decisions -> Common Confusions -> Connections. IMPLEMENTATION notes: Role in System -> Mental Model -> Step-by-Step Walkthrough -> Failure Modes -> Related Concepts. Both types: summary section (TL;DR or Core Intuition) must be self-sufficient, each section independently comprehensible, WHY before HOW, progressive conceptual build-up. Score based on whichever template fits the note's content. Notes that don't fit either template are fine if they serve the pedagogical purpose.",
+        "description": "Two valid structures depending on note type. CONCEPT notes: Core Intuition -> How It Works -> Trade-offs & Decisions -> Common Confusions -> Connections. IMPLEMENTATION notes: Role in System -> Mental Model -> Step-by-Step Walkthrough -> Failure Modes -> Related Concepts. Both types: opening summary section (TL;DR, Core Intuition, or Role in System) must be self-sufficient, each section independently comprehensible, WHY before HOW, progressive conceptual build-up. Score based on whichever template fits the note's content. Notes that don't fit either template are fine if they serve the pedagogical purpose.",
         "poor": "Jumps into implementation details without context, no clear hierarchy, no explanation of WHY the topic matters",
         "excellent": "Clear progressive flow matching the note's type, every section independently comprehensible, motivation established before mechanism, summary section self-sufficient",
     },
