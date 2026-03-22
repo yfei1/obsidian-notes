@@ -12,11 +12,14 @@ from pathlib import Path
 
 from shared import (
     SHRINKAGE_THRESHOLD, CAUSAL_LOSS_THRESHOLD, BULLET_LOSS_THRESHOLD,
-    MAX_NOTE_LINES, NET_ZERO_THRESHOLD, REQUIRED_SECTIONS,
+    MAX_NOTE_LINES, NET_ZERO_THRESHOLD,
+    REQUIRED_SECTIONS_OLD, REQUIRED_SECTIONS_NEW_CONCEPT, REQUIRED_SECTIONS_NEW_IMPL,
 )
 
-# Gates use "## " prefixed section headers
-_REQUIRED_SECTION_HEADERS = [f"## {s}" for s in REQUIRED_SECTIONS]
+# During transition, accept old OR new constitution section names.
+_OLD_HEADERS = [f"## {s}" for s in REQUIRED_SECTIONS_OLD]
+_NEW_CONCEPT_HEADERS = [f"## {s}" for s in REQUIRED_SECTIONS_NEW_CONCEPT]
+_NEW_IMPL_HEADERS = [f"## {s}" for s in REQUIRED_SECTIONS_NEW_IMPL]
 
 
 # ---------------------------------------------------------------------------
@@ -52,11 +55,36 @@ def _gate_shrinkage(original: str, new_content: str, result: GateResult) -> None
 
 
 def _gate_required_sections(new_content: str, result: GateResult) -> None:
-    """Required sections must be present."""
+    """Required sections must be present (old OR new constitution format).
+
+    Old format: ## TL;DR + ## See Also
+    New concept format: ## Core Intuition + ## Connections
+    New implementation format: ## Role in System + ## Related Concepts
+    """
     lower = new_content.lower()
-    for section in _REQUIRED_SECTION_HEADERS:
-        if section.lower() not in lower:
-            result.fail(f"Missing required section: {section}")
+
+    def _has_all(headers: list[str]) -> bool:
+        return all(h.lower() in lower for h in headers)
+
+    if _has_all(_OLD_HEADERS):
+        import sys
+        print("  Gate: found old-format sections (TL;DR + See Also)", file=sys.stderr)
+        return
+    if _has_all(_NEW_CONCEPT_HEADERS):
+        import sys
+        print("  Gate: found new concept sections (Core Intuition + Connections)", file=sys.stderr)
+        return
+    if _has_all(_NEW_IMPL_HEADERS):
+        import sys
+        print("  Gate: found new implementation sections (Role in System + Related Concepts)", file=sys.stderr)
+        return
+
+    result.fail(
+        "Missing required sections: need either "
+        "[## TL;DR + ## See Also] or "
+        "[## Core Intuition + ## Connections] or "
+        "[## Role in System + ## Related Concepts]"
+    )
 
 
 def _gate_section_preservation(original: str, new_content: str, result: GateResult) -> None:

@@ -29,7 +29,13 @@ CAUSAL_LOSS_THRESHOLD = 0.80     # Must retain >= 80% of causal connectors
 BULLET_LOSS_THRESHOLD = 0.70     # Must retain >= 70% of bullet/list items
 MAX_NOTE_LINES = 450             # Hard line limit
 NET_ZERO_THRESHOLD = 300         # Notes above this must be net-zero or shrink
-REQUIRED_SECTIONS = ["TL;DR", "See Also"]  # Base names; consumers add "## " prefix
+# Old format: TL;DR + See Also. New constitution format: Core Intuition + Connections/Related Concepts.
+# During transition, accept either format — see _gate_required_sections() in gates.py.
+REQUIRED_SECTIONS_OLD = ["TL;DR", "See Also"]
+REQUIRED_SECTIONS_NEW_CONCEPT = ["Core Intuition", "Connections"]
+REQUIRED_SECTIONS_NEW_IMPL = ["Role in System", "Related Concepts"]
+# Legacy alias — kept for any external consumers; gates.py uses the new groups directly.
+REQUIRED_SECTIONS = REQUIRED_SECTIONS_OLD
 
 # ---------------------------------------------------------------------------
 # Note I/O (used by all modules — lives here to avoid circular deps)
@@ -109,10 +115,19 @@ def git_head_hash() -> str:
 # ---------------------------------------------------------------------------
 
 
+def _find_link_section(content: str) -> str | None:
+    """Find the linking section name in a note (See Also, Connections, or Related Concepts)."""
+    for section in ("## Connections", "## Related Concepts", "## See Also"):
+        if section in content:
+            return section
+    return None
+
+
 def fix_bidirectional_links(all_notes: list[Path]) -> int:
     """Pre-pass: ensure all wikilinks are bidirectional.
 
-    For each [[target]] in note A, ensure target has [[A]] in its See Also.
+    For each [[target]] in note A, ensure target has [[A]] in its linking section
+    (Connections, Related Concepts, or See Also — whichever the target uses).
     Returns number of fixes applied.
     """
     fixes = 0
@@ -143,19 +158,21 @@ def fix_bidirectional_links(all_notes: list[Path]) -> int:
             if target_path is None:
                 continue
 
-            if "## See Also" in target_content:
-                see_also_idx = target_content.index("## See Also")
-                rest = target_content[see_also_idx:]
+            link_section = _find_link_section(target_content)
+            if link_section:
+                section_idx = target_content.index(link_section)
+                rest = target_content[section_idx:]
                 next_header = rest.find("\n## ", 1)
                 if next_header == -1:
                     new_content = target_content.rstrip('\n') + f"\n- [[{stem}]]\n"
                 else:
-                    insert_pos = see_also_idx + next_header
+                    insert_pos = section_idx + next_header
                     new_content = (target_content[:insert_pos].rstrip('\n') +
                                    f"\n- [[{stem}]]\n" +
                                    target_content[insert_pos:])
             else:
-                new_content = target_content.rstrip('\n') + f"\n\n## See Also\n- [[{stem}]]\n"
+                # No linking section exists — create one using new-format name
+                new_content = target_content.rstrip('\n') + f"\n\n## Connections\n- [[{stem}]]\n"
 
             target_path.write_text(new_content, encoding="utf-8")
             note_contents[target_rel] = new_content

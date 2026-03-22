@@ -42,7 +42,7 @@ CONTENT_TRUNCATE = 12000  # Max chars of note content to include in prompts
 
 DIMENSIONS = [
     "Clarity", "Knowledge Density", "Structure & Flow", "Concrete Examples",
-    "Cross-Linking", "Code Quality", "Interview Readiness", "Uniqueness",
+    "Cross-Linking", "Code Quality", "Systematic Coherence", "Uniqueness",
     "Conciseness",
 ]
 
@@ -52,10 +52,10 @@ GATE_DIMS = {"Naming & Structure", "Length Budget"}  # Pass/fail, not scored
 
 # Weights for target prioritization only (not for scoring — each dim is still 0-10)
 DIMENSION_WEIGHTS: dict[str, float] = {
-    "Interview Readiness": 3.0,
     "Clarity": 2.0,
     "Knowledge Density": 2.0,
-    "Conciseness": 2.0,
+    "Systematic Coherence": 1.5,
+    "Conciseness": 1.5,
     "Structure & Flow": 1.5,
     "Concrete Examples": 1.5,
     "Uniqueness": 1.5,
@@ -77,19 +77,19 @@ SUBJECTIVE_PROMPTS = {
         "excellent": "Every line teaches something non-obvious, high signal-to-noise ratio",
     },
     "Structure & Flow": {
-        "description": "Two valid structures depending on note type. CONCEPT notes: motivation (problem + why) -> overview -> building blocks -> details -> edge cases. IMPLEMENTATION notes: what the component does -> step-by-step walkthrough with code -> edge cases & gotchas. Both types: TL;DR must be self-sufficient, each section independently comprehensible, WHY before HOW. Score based on whichever template fits the note's content.",
+        "description": "Two valid structures depending on note type. CONCEPT notes: Core Intuition -> How It Works -> Trade-offs & Decisions -> Common Confusions -> Connections. IMPLEMENTATION notes: Role in System -> Mental Model -> Step-by-Step Walkthrough -> Failure Modes -> Related Concepts. Both types: summary section (TL;DR or Core Intuition) must be self-sufficient, each section independently comprehensible, WHY before HOW, progressive conceptual build-up. Score based on whichever template fits the note's content. Notes that don't fit either template are fine if they serve the pedagogical purpose.",
         "poor": "Jumps into implementation details without context, no clear hierarchy, no explanation of WHY the topic matters",
-        "excellent": "Clear flow matching the note's type (concept or implementation), every section independently comprehensible, motivation established before mechanism",
+        "excellent": "Clear progressive flow matching the note's type, every section independently comprehensible, motivation established before mechanism, summary section self-sufficient",
     },
     "Concrete Examples": {
         "description": "Uses real numbers, tensor shapes, hardware specs, latencies, batch sizes. Avoids vague abstract descriptions.",
         "poor": "Abstract descriptions only, no real numbers or concrete values",
         "excellent": "Actual values throughout (H100 specs, tensor shapes [B,S,D], latencies in ms, frequencies)",
     },
-    "Interview Readiness": {
-        "description": "Could you explain this topic verbally in 60 seconds using the note? Has clear numbered talking points mixing 'explain X' and 'when would you choose X vs Y?' questions. Covers the key questions an interviewer would ask.",
-        "poor": "No talking points, would struggle to explain this verbally",
-        "excellent": "Clear numbered points covering key questions with decision-oriented trade-offs, ready for 60-second verbal explanation",
+    "Systematic Coherence": {
+        "description": "Note integrates well into the vault as a system. Scope is clear within the first few lines. Non-obvious prerequisites are declared with [[wikilinks]]. Connections section links to related notes. Terminology is consistent with the rest of the vault. Sibling notes partition cleanly without overlap. No unexplained jumps or undefined acronyms.",
+        "poor": "No scope declaration, missing prerequisites, no connections to other notes, inconsistent terminology, reader gets lost in the vault",
+        "excellent": "Clear scope, explicit prerequisites with links, well-connected to related notes, consistent terminology, reader can navigate the vault from this note",
     },
     "Conciseness": {
         "description": "Could this be said in fewer words or lines without losing information? Penalizes verbose explanations, redundant phrasing, unnecessary qualifiers, filler phrases ('it is worth noting', 'essentially', 'basically'), and paragraphs that could be sentences. Sections > 20 lines of prose signal bloat. Distinct from Knowledge Density: a note can be dense but still verbose.",
@@ -137,21 +137,25 @@ def clear_score_cache():
         _score_cache.clear()
 
 
+# Summary section names (old + new constitution formats)
+_SUMMARY_SECTIONS = {"## TL;DR", "## Core Intuition", "## What This Component Does", "## Role in System"}
+
+
 def _prepare_skeleton(content: str) -> str:
-    """Structural skeleton for Structure & Flow: TL;DR + headers + first 2 lines per section."""
+    """Structural skeleton for Structure & Flow: summary section + headers + first 2 lines per section."""
     lines = content.split('\n')
     result = []
-    in_tldr = False
+    in_summary = False
     lines_after_header = 0
 
     for line in lines:
-        if line.startswith('## TL;DR'):
-            in_tldr = True
+        if any(line.startswith(s) for s in _SUMMARY_SECTIONS):
+            in_summary = True
             result.append(line)
             continue
-        if in_tldr:
+        if in_summary:
             if line.startswith('## ') or line.strip() == '---':
-                in_tldr = False
+                in_summary = False
             else:
                 result.append(line)
                 continue
@@ -166,21 +170,27 @@ def _prepare_skeleton(content: str) -> str:
     return '\n'.join(result)
 
 
+def _extract_summary(content: str) -> str | None:
+    """Extract the summary section (TL;DR, Core Intuition, etc.) from a note."""
+    pattern = r'## (?:TL;DR|Core Intuition|What This Component Does|Role in System)\n(.*?)(?=\n## |\n---)'
+    match = re.search(pattern, content, re.DOTALL)
+    return match.group(1).strip()[:200] if match else None
+
+
 def _prepare_conciseness_context(content: str, note_path: str, all_contents: dict[str, str]) -> str:
-    """For Conciseness: full content + TL;DRs from linked notes for cross-note context."""
+    """For Conciseness: full content + summaries from linked notes for cross-note context."""
     links = extract_wikilinks(content)
-    related_tldrs = []
+    related_summaries = []
     for link in links[:5]:
         target_rel = link + ".md"
         if target_rel in all_contents:
-            target_content = all_contents[target_rel]
-            tldr_match = re.search(r'## TL;DR\n(.*?)(?=\n## |\n---)', target_content, re.DOTALL)
-            if tldr_match:
-                related_tldrs.append(f"[{link}]: {tldr_match.group(1).strip()[:200]}")
+            summary = _extract_summary(all_contents[target_rel])
+            if summary:
+                related_summaries.append(f"[{link}]: {summary}")
 
-    if related_tldrs:
-        ctx = "\n\n--- Related Notes' TL;DRs (content already covered in these canonical notes) ---\n"
-        ctx += "\n".join(related_tldrs)
+    if related_summaries:
+        ctx = "\n\n--- Related Notes' Summaries (content already covered in these canonical notes) ---\n"
+        ctx += "\n".join(related_summaries)
         return content + ctx
     return content
 

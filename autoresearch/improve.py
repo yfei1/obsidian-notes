@@ -48,8 +48,8 @@ CALIBRATE_EVERY = 2  # Run rubric calibration every N iterations
 
 # Per-dimension minimum scores for convergence
 DIMENSION_MINIMUMS = {
-    "Interview Readiness": 7,
     "Clarity": 7,
+    "Knowledge Density": 7,
 }
 
 
@@ -228,9 +228,13 @@ def improve_note_search_replace(note_path: str, dimension: str, score: int,
             target_path = REPO_ROOT / (link + ".md")
             if target_path.exists():
                 target_content = read_note(target_path)
-                tldr_match = re.search(r'## TL;DR\n(.*?)(?=\n## |\n---)', target_content, re.DOTALL)
-                if tldr_match:
-                    related_tldrs.append(f"  [{link}]: {tldr_match.group(1).strip()[:200]}")
+                # Try multiple section names (old: TL;DR, new: Core Intuition, impl: What This Component Does)
+                summary_match = re.search(
+                    r'## (?:TL;DR|Core Intuition|What This Component Does)\n(.*?)(?=\n## |\n---)',
+                    target_content, re.DOTALL,
+                )
+                if summary_match:
+                    related_tldrs.append(f"  [{link}]: {summary_match.group(1).strip()[:200]}")
         if related_tldrs:
             criteria_block += "\nRELATED NOTES (content already covered in these canonical notes — consider replacing duplicates with one-liner + [[wikilink]]):\n" + "\n".join(related_tldrs) + "\n"
 
@@ -256,7 +260,8 @@ CONSTRAINTS:
 - old_text must be an EXACT substring of the note (copy-paste precision)
 - old_text must be unique in the note (if ambiguous, include more surrounding context)
 - new_text CANNOT be empty — if removing content, provide shorter replacement
-- NEVER remove ## TL;DR or ## See Also sections
+- NEVER remove the note's primary summary section (## TL;DR, ## Core Intuition, or equivalent)
+- NEVER remove the note's linking section (## See Also, ## Connections, ## Related Concepts, or equivalent)
 - Keep edits minimal and focused on the target dimension ({dimension})
 - Do not touch unrelated sections
 - Aim for 1-5 edits maximum

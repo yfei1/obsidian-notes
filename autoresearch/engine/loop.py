@@ -20,7 +20,7 @@ from autoresearch_core.util import detect_overlaps, Overlap
 from engine.delta import Delta, Op
 from engine.grpo import grpo_rank, IDENTITY_ID
 from engine.strategies import (
-    NOTE_STRATEGIES, SPLIT_STRATEGY, DEDUP_STRATEGY,
+    NOTE_STRATEGIES, SPLIT_STRATEGY, DEDUP_STRATEGY, SYSTEMATIZE_STRATEGY,
     SPLIT_LINE_THRESHOLD, select_strategies, Strategy,
 )
 from engine.gates import check_all_gates
@@ -46,7 +46,7 @@ def generate_delta(target_path: str, content: str, strategy: Strategy,
                    error_feedback: str = "",
                    extra_vars: dict[str, str] | None = None) -> list | None:
     """Generate ops by calling Claude via the local LLM layer."""
-    max_tokens = 16384 if strategy.name in ("split", "dedup", "cross_link") else 8192
+    max_tokens = 16384 if strategy.name in ("split", "dedup", "cross_link", "systematize") else 8192
 
     def llm_fn(prompt: str) -> str | None:
         return call_claude(prompt, model="sonnet", max_tokens=max_tokens, temperature=0.7)
@@ -94,7 +94,22 @@ def select_target(notes: list[Path], history: list[dict]) -> Path:
         avg = sum(s["score"] for s in rule_scores.values()) / max(len(rule_scores), 1)
         staleness = 1.0 / (1.0 + target_counts.get(rp, 0))
         weakness = 1.0 - (avg / 10.0)
-        combined = 0.4 * weakness + 0.6 * staleness
+
+        # Boost notes lacking systematic coherence signals (prerequisites,
+        # connections sections).  These are cheap string checks that nudge
+        # under-systematized notes toward selection so restructure /
+        # cross_link strategies can add the missing scaffolding.
+        has_prereqs = "Prerequisites:" in content or "Prerequisite:" in content
+        has_connections = (
+            "## Connections" in content
+            or "## Related Concepts" in content
+            or "## See Also" in content
+        )
+        systematize_boost = 0.0
+        if not has_prereqs and not has_connections:
+            systematize_boost = 0.05
+
+        combined = 0.4 * weakness + 0.6 * staleness + systematize_boost
         candidates.append((combined, rp, note))
 
     candidates.sort(reverse=True)
@@ -185,6 +200,10 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE):
                 "overlap_preview": target_overlap.source_preview,
             }))
             n_base -= 1
+
+        # Systematize: always available (needs note_list, provided via extra_vars)
+        conditional_strategies.append((SYSTEMATIZE_STRATEGY, {}))
+        n_base -= 1
 
         base_strategies = select_strategies(NOTE_STRATEGIES, n=max(n_base, 1), history=history)
         strategies_to_run = [(s, {}) for s in base_strategies] + conditional_strategies
@@ -278,7 +297,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE):
             constitution=constitution,
             judges=judges,
             file_contents=file_contents,
-            domain_context="Obsidian notes used for ML interview preparation",
+            domain_context="Obsidian notes building durable mental models for ML systems and inference",
         )
 
         if not result.per_judge:
