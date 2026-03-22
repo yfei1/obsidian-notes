@@ -27,7 +27,8 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from shared import REPO_ROOT, AUTORESEARCH_DIR, extract_json_object, discover_notes, relative_path, read_note
+from shared import REPO_ROOT, AUTORESEARCH_DIR, discover_notes, relative_path, read_note
+from autoresearch_core.util import extract_json_object
 from llm import call_claude
 
 SCORE_PY = AUTORESEARCH_DIR / "score.py"
@@ -35,6 +36,7 @@ SCORE_PY = AUTORESEARCH_DIR / "score.py"
 VARIANCE_THRESHOLD = 1  # If scores differ by more than this, rubric needs tightening
 RATE_LIMIT_SECONDS = 10
 NUM_SAMPLES = 2  # Score each note this many times
+RUBRIC_CONTEXT_TRUNCATE = 4000  # Shorter than CONTENT_TRUNCATE — rubric rewrite only needs a sample
 
 
 def pick_calibration_notes() -> list[str]:
@@ -113,7 +115,7 @@ Anchors (FROZEN — do not change these):
 
 The note scored ({note_path}):
 ---
-{note_content[:4000]}
+{note_content[:RUBRIC_CONTEXT_TRUNCATE]}
 ---
 
 The variance suggests the description is ambiguous — reasonable interpretations lead to different scores.

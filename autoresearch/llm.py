@@ -36,6 +36,10 @@ def call_claude(prompt: str, *, model: str = "sonnet",
                 timeout: int = 300, **kwargs) -> str | None:
     """Call Claude via apple_llm (floodgate), falling back to CLI.
 
+    Returns None on ANY failure (timeout, API error, empty response, missing CLI).
+    All callers treat None uniformly as "retry or skip" — no caller needs to
+    distinguish failure modes.
+
     Extra kwargs (max_tokens, temperature, etc.) are passed through to apple_llm.
     CLI fallback ignores extra kwargs.
     """

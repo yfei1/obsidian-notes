@@ -29,18 +29,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shared import (
-    REPO_ROOT, AUTORESEARCH_DIR,
+    REPO_ROOT, AUTORESEARCH_DIR, RESULTS_TSV, SCORES_TSV,
     NET_ZERO_THRESHOLD, MAX_NOTE_LINES, SHRINKAGE_THRESHOLD,
     git_commit, git_push, git_head_hash,
     fix_bidirectional_links,
     discover_notes, read_note, relative_path, extract_wikilinks,
-    extract_json_array,
 )
+from autoresearch_core.util import extract_json_array
 from llm import call_claude
 from score import DIMENSIONS, ERROR_SCORE, DIMENSION_WEIGHTS
-
-RESULTS_TSV = AUTORESEARCH_DIR / "results.tsv"
-SCORES_TSV = AUTORESEARCH_DIR / "scores.tsv"
 EDIT_DIFFS_LOG = AUTORESEARCH_DIR / "edit_diffs.log"
 
 CONVERGENCE_TARGET = 8.0  # 0-10 scale
@@ -509,7 +506,12 @@ def main():
         if iteration > 1 and (iteration - 1) % CALIBRATE_EVERY == 0 and not args.dry_run:
             updated = run_calibration(discard_log)
             if updated:
-                # Reload score module to pick up rubric changes written to disk
+                # Reload score module to pick up rubric changes written to disk.
+                # Safe: DIMENSIONS/DIMENSION_WEIGHTS are rebound below, and
+                # functions like check_regression/check_convergence read the
+                # module-level names (not stale closures). SUBJECTIVE_DIMS and
+                # SUBJECTIVE_PROMPTS are only used via local imports inside
+                # function bodies, which pick up the reloaded module.
                 import importlib
                 import score as _score_mod
                 importlib.reload(_score_mod)

@@ -16,14 +16,16 @@ from shared import (
     REPO_ROOT, AUTORESEARCH_DIR, git_commit, git_push, git_head_hash,
     fix_bidirectional_links, discover_notes, read_note, relative_path,
 )
+from autoresearch_core.util import detect_overlaps, Overlap
 from engine.delta import Delta, Op
 from engine.grpo import grpo_rank, IDENTITY_ID
 from engine.strategies import (
     NOTE_STRATEGIES, SPLIT_STRATEGY, DEDUP_STRATEGY,
-    SPLIT_LINE_THRESHOLD, select_strategies, generate_delta,
+    SPLIT_LINE_THRESHOLD, select_strategies, Strategy,
 )
-from shared import detect_overlaps, Overlap
 from engine.gates import check_all_gates
+from llm import call_claude
+from autoresearch_core.strategies import generate_delta as _core_generate_delta
 from engine.health import check_health
 from engine.state import (
     AttemptRecord, append_history, load_history, save_generation_metadata,
@@ -37,6 +39,24 @@ from score import score_rule_based
 
 GROUP_SIZE = 4              # 3 strategies + identity
 MAX_GENERATIONS = 100
+
+
+def generate_delta(target_path: str, content: str, strategy: Strategy,
+                   constitution: str,
+                   error_feedback: str = "",
+                   extra_vars: dict[str, str] | None = None) -> list | None:
+    """Generate ops by calling Claude via the local LLM layer."""
+    max_tokens = 16384 if strategy.name in ("split", "dedup", "cross_link") else 8192
+
+    def llm_fn(prompt: str) -> str | None:
+        return call_claude(prompt, model="sonnet", max_tokens=max_tokens, temperature=0.7)
+
+    return _core_generate_delta(
+        target_path, content, strategy, constitution,
+        llm_fn=llm_fn,
+        error_feedback=error_feedback,
+        extra_vars=extra_vars,
+    )
 
 
 def _record_losers(deltas: list[Delta], winner_id: str, generation: int,
@@ -258,6 +278,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE):
             constitution=constitution,
             judges=judges,
             file_contents=file_contents,
+            domain_context="Obsidian notes used for ML interview preparation",
         )
 
         if not result.per_judge:

@@ -24,17 +24,16 @@ import sys
 from pathlib import Path
 
 from shared import (
-    REPO_ROOT, AUTORESEARCH_DIR, NOTE_DIRS, REQUIRED_SECTIONS,
-    MAX_NOTE_LINES, extract_json_object, find_paragraph_overlaps,
+    REPO_ROOT, AUTORESEARCH_DIR, SCORES_TSV, NOTE_DIRS, REQUIRED_SECTIONS,
+    MAX_NOTE_LINES,
     discover_notes, relative_path, read_note, extract_wikilinks,
 )
+from autoresearch_core.util import extract_json_object, find_paragraph_overlaps
 from llm import call_claude as _call_claude
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-
-SCORES_TSV = AUTORESEARCH_DIR / "scores.tsv"
 REPORT_MD = AUTORESEARCH_DIR / "report.md"
 
 MAX_SCORE = 10
@@ -116,6 +115,9 @@ CONTENT_STRATEGIES: dict[str, str] = {
 # Automatically cleared on module reload (e.g., after calibration).
 _score_cache: dict[tuple[str, str, str], dict] = {}
 import threading
+# Lock scope: protects individual cache reads/writes within _score_dim().
+# Cross-function race (clear_score_cache vs score_all_notes_batched) is safe
+# because improve.py always calls them sequentially — never concurrently.
 _score_cache_lock = threading.Lock()
 
 
