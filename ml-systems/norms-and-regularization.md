@@ -85,6 +85,26 @@ Gradient perspective:
 - L2 gradient → `2w` → shrinks as w→0, never reaches 0
 - L1 gradient → `±1` → constant force, drives weight to exactly 0
 
+### Concrete Example: Ridge vs Lasso After 100 Steps
+
+Starting weights `w = [0.5, 0.3, 0.1]`, learning rate = 0.01, λ = 0.01, no data loss (pure regularization):
+
+**Ridge (L2):** gradient = `2λw` → each step multiplies weight by `(1 - 2λ·lr)` = 0.9998
+```
+After 100 steps:
+w ≈ [0.499, 0.299, 0.100]   ← all shrink proportionally, none reach 0
+```
+
+**Lasso (L1):** gradient = `λ·sign(w)` → each step subtracts `λ·lr·sign(w)` = 0.0001
+```
+After 100 steps:
+w ≈ [0.490, 0.290, 0.090]   ← uniform subtraction; small weights approach 0 faster
+After ~1000 steps:
+w ≈ [0.400, 0.200, 0.000]   ← w₃ hits exactly 0 first → sparse!
+```
+
+Key insight: L1 subtracts a **fixed amount** regardless of weight magnitude, so the smallest weight (0.1) reaches zero in ~1000 steps while larger weights survive. L2 never zeroes any weight.
+
 ### Comparison Table
 
 | | Ridge (L2) | Lasso (L1) | L∞ (max) |
