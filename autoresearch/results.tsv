@@ -104,3 +104,7 @@ a943b7b	data-processing/lance-vs-parquet.md	Concrete Examples	4	7	kept	autoresea
 none	data-processing/checkpointing.md	Concrete Examples	4	4	failed	Edits could not be applied
 none	ml-systems/vllm-weight-loading.md	Uniqueness	5	5	discarded	no improvement (5->5)
 none	ml-systems/vllm-weight-loading.md	Uniqueness	5	5	discarded	retry: no improvement (5->5)
+5b71806	data-processing/morsel-driven-parallelism.md	Concrete Examples	4	8	kept	autoresearch: improve data-processing/morsel-driven-parallelism.md on Concrete Examples (4->8/10)
+none	ml-systems/pytorch-module-hooks.md	Conciseness	4	4	failed	Edit generation returned no usable output
+none	ml-systems/vllm-weight-loading.md	Clarity	6	6	discarded	no improvement (6->6)
+none	ml-systems/vllm-weight-loading.md	Clarity	6	6	discarded	retry: no improvement (6->6)

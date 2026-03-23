@@ -99,27 +99,17 @@ RMSNorm(x)  = (x / RMS(x)) * γ          # γ is learned weight [hidden_dim]
 
 **Why sqrt(mean(x²)) and not mean(x)?** Mean can be zero when positives and negatives cancel out (`[3, -3, 3, -3]` → mean=0, division by zero). `mean(x²)` is always non-negative and measures the vector's *energy* regardless of sign direction.
 
-**RMSNorm vs LayerNorm**:
+**RMSNorm vs LayerNorm — where it appears in Qwen3**:
 
-| | LayerNorm | RMSNorm |
+| Location | Weight shape | vs LayerNorm |
 |---|---|---|
-| Subtracts mean | ✅ | ❌ |
-| Divides by std / RMS | std | RMS |
-| Learned params | γ + β | γ only |
-| Speed | baseline | ~10–15% faster |
-| Effect | ≈ equivalent | ≈ equivalent |
-
-The re-centering (mean subtraction) in LayerNorm turns out to be unnecessary for Transformers — ablation studies show removing it doesn't hurt quality. This is empirical, not mathematically proven.
-
-**Where RMSNorm appears in Qwen3**:
-
-| Location | Weight shape | Purpose |
-|---|---|---|
-| `input_layernorm` | [1024] | Normalize before Attention |
-| `post_attn_layernorm` | [1024] | Normalize before MLP |
-| `q_norm` | [64] | Per-head Q normalization (Qwen3-specific) |
-| `k_norm` | [64] | Per-head K normalization (Qwen3-specific) |
+| `input_layernorm` | [1024] | No mean sub, no β; ~10–15% faster, same quality |
+| `post_attn_layernorm` | [1024] | Pre-Norm placement (before MLP) |
+| `q_norm` | [64] | Per-head Q norm (Qwen3-specific) |
+| `k_norm` | [64] | Per-head K norm (Qwen3-specific) |
 | `final norm` | [1024] | Normalize before LM Head |
+
+Re-centering (mean subtraction) in LayerNorm is empirically unnecessary for Transformers — ablations show no quality loss.
 
 **Pre-Norm placement** (modern standard): RMSNorm is applied *before* each sub-block (Attention, MLP), not after. This is called Pre-Norm:
 
@@ -207,18 +197,9 @@ For the full derivation (Euler's formula → 2D rotation → block diagonal exte
 
 ## SwiGLU MLP
 
-### MLP Evolution
+Evolution: ReLU FFN (2017) → GELU FFN (GPT/BERT) → GLU+sigmoid (Dauphin 2017) → **SwiGLU** = `SiLU(x @ W_gate) * (x @ W_up) @ W_down` (Shazeer 2020). Used by LLaMA, Qwen, Mistral.
 
-| Era | Architecture | Formula |
-|---|---|---|
-| Original Transformer (2017) | 2-layer FFN + ReLU | `ReLU(x @ W1) @ W2` |
-| GPT/BERT | 2-layer FFN + GELU | `GELU(x @ W1) @ W2` |
-| GLU (Dauphin 2017) | Gated unit + sigmoid | `sigmoid(x @ W_gate) * (x @ W_up) @ W_down` |
-| **SwiGLU** (Shazeer 2020) | Gated unit + SiLU | `SiLU(x @ W_gate) * (x @ W_up) @ W_down` |
-
-SwiGLU is used by LLaMA, Qwen, Mistral, and most modern LLMs.
-
-**Why intermediate_size ≈ 3× instead of 4×**: Original FFN had 2 weight matrices with 4× expansion. SwiGLU has 3 matrices (gate + up + down). To keep total parameter count equal: `3 × d × intermediate = 2 × d × 4d` → `intermediate = 8d/3 ≈ 2.67d`. Qwen3 rounds up to 3× (3072/1024).
+**Why intermediate_size ≈ 3× instead of 4×**: SwiGLU has 3 matrices vs 2. To match param count: `3 × d × intermediate = 2 × d × 4d` → `intermediate = 8d/3 ≈ 2.67d`. Qwen3 rounds to 3× (3072/1024).
 
 ### SwiGLU = SiLU decomposed into gate and content
 
