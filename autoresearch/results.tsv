@@ -97,3 +97,6 @@ none	ml-systems/vllm-weight-loading.md	Conciseness	6	6	discarded	no improvement 
 none	ml-systems/vllm-weight-loading.md	Conciseness	6	5	discarded	retry: no improvement (6->5)
 none	ml-systems/attention-mechanics.md	Uniqueness	2	2	failed	Edits could not be applied
 none	ml-systems/parallel-track-architecture.md	Uniqueness	2	2	failed	Edits could not be applied
+ab48dd2	ml-systems/norms-and-regularization.md	Concrete Examples	4	7	kept	autoresearch: improve ml-systems/norms-and-regularization.md on Concrete Examples (4->7/10)
+none	ml-systems/attention-mechanics.md	Uniqueness	2	2	failed	Edits could not be applied
+none	ml-systems/parallel-track-architecture.md	Uniqueness	2	2	failed	Edits could not be applied

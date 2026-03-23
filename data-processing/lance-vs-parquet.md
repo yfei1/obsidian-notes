@@ -73,6 +73,11 @@ Stage 2:         Must READ entire file, add column, WRITE new file
 
 At PB scale: Lance Column Link writes O(new_column_size). Parquet rewrite is O(entire_table).
 
+**Concrete benchmark (1TB Parquet table, adding one embedding column ~50GB):**
+- Parquet rewrite: read 1TB + write 1.05TB ≈ 45–90 minutes (cloud object store, ~200MB/s sustained)
+- Lance Column Link: write 50GB new fragment + update manifest ≈ 4–8 minutes (~10–20× faster)
+- At 10TB: Parquet ≈ 8–15 hours; Lance ≈ 40–80 minutes
+
 ---
 
 ## When to Use What
