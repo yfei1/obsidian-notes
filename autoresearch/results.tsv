@@ -108,3 +108,7 @@ none	ml-systems/vllm-weight-loading.md	Uniqueness	5	5	discarded	retry: no improv
 none	ml-systems/pytorch-module-hooks.md	Conciseness	4	4	failed	Edit generation returned no usable output
 none	ml-systems/vllm-weight-loading.md	Clarity	6	6	discarded	no improvement (6->6)
 none	ml-systems/vllm-weight-loading.md	Clarity	6	6	discarded	retry: no improvement (6->6)
+5bc0cb3	ml-systems/transformer-model-internals.md	Conciseness	5	6	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Conciseness (5->6/10)
+none	ml-systems/pt-moe-vllm-implementation.md	Uniqueness	5	5	failed	Edits could not be applied
+none	ml-systems/vllm-weight-loading.md	Clarity	6	6	failed	Edit generation returned no usable output
+none	ml-systems/pytorch-module-hooks.md	Conciseness	4	4	failed	Edits could not be applied

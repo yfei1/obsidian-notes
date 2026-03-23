@@ -4,11 +4,11 @@
 
 ## TL;DR
 
-vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pairs → **remap names** (checkpoint convention → PyTorch module hierarchy) → call each parameter's `weight_loader` (vLLM convention, not PyTorch) which handles TP sharding transparently. Same code works for TP=1 and TP=8.
+vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pairs → **remap names** (checkpoint convention → PyTorch module hierarchy) → call each parameter's `weight_loader` (a callable vLLM attaches to each `nn.Parameter` at model construction time, not a PyTorch built-in) which handles TP sharding transparently. Same code works for TP=1 and TP=8.
 
 **Interview talking points:**
 - **Name remapping**: checkpoint authors use their own conventions; `load_weights()` bridges via regex + suffix-map (e.g. `transformer.tamm_model.layers.segment_0.layer_0.attention.qkv_transform.fused_linear.weight` → `model.layers.0.self_attn.qkv_proj.weight`).
-- **`weight_loader`**: monkey-patched onto each `nn.Parameter` during `__init__`; `QKVParallelLinear`, `ColumnParallelLinear`, `RowParallelLinear` each attach their own shard logic; non-parallel params fall through to `default_weight_loader` (`param.data.copy_()`).
+- **`weight_loader`**: a callable dynamically attached to each `nn.Parameter` during `__init__` (not a PyTorch built-in); `QKVParallelLinear`, `ColumnParallelLinear`, `RowParallelLinear` each attach their own shard logic; non-parallel params fall through to `default_weight_loader` (`param.data.copy_()`).
 - **TP sharding**: each rank's `weight_loader` receives the full tensor and slices its shard — outer loop has zero TP-aware logic.
 
 ---
@@ -33,7 +33,7 @@ Same tensor, same shape `[2304, 2048]`, different names. `load_weights()` is the
 def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
 ```
 
-**Input**: An iterator of `(checkpoint_name, tensor)` pairs from safetensors files on disk. vLLM's model loader provides this.
+**Input**: An iterator of `(checkpoint_name, tensor)` pairs from safetensors files on disk. vLLM's model loader (the engine initialization path that calls `load_weights()`) provides this iterator.
 
 **Output**: A `set[str]` of model parameter names that were successfully loaded. Used for validation (e.g., asserting all 562 tensors loaded).
 
@@ -96,7 +96,7 @@ weight_loader = getattr(param, "weight_loader", default_weight_loader)
 weight_loader(param, tensor)
 ```
 
-`weight_loader` is a vLLM convention (not PyTorch) — monkey-patched onto each `nn.Parameter` during `__init__`. Each layer type's implementation handles TP sharding:
+`weight_loader` is a vLLM convention (not PyTorch) — a callable dynamically attached to each `nn.Parameter` during `__init__`. Each layer type's implementation handles TP sharding:
 
 | Layer Type | What weight_loader Does |
 |---|---|
@@ -171,7 +171,7 @@ The TAMM model has a unique challenge: its 56 layers span two segments. Segment 
 
 ## PT-MoE 150B: Track-Parallel Weight Loading
 
-The 150B PT-MoE checkpoint stores all 8 tracks' weights in a single tensor with `num_tracks` as dimension 0. The `load_weights()` method must slice out the current track's weights before handing them to the standard vLLM `weight_loader` machinery.
+PT-MoE 150B is a multi-track model — each **track** is an independent model replica sharing the same input embedding but running separate transformer layers, used to produce diverse outputs in parallel. The 150B checkpoint stores all 8 tracks' weights in a single tensor with `num_tracks` as dimension 0. The `load_weights()` method must slice out the current track's weights before handing them to the standard vLLM `weight_loader` machinery.
 
 ### Checkpoint Shape Convention
 
@@ -191,7 +191,7 @@ How to distinguish: `tensor.shape[0] == num_tracks` means per-track. Otherwise s
 The 150B `load_weights` does everything the 3B version does (remap names, look up params, call `weight_loader`), plus one upstream step — extract this track's slice and fix the storage convention:
 
 ```python
-track_idx = get_track_idx()  # _PT.rank_in_group — which track am I?
+track_idx = get_track_idx()  # _PT.rank_in_group: this rank's index within the track-parallel group (see [[ml-systems/vllm-distributed-groups]])
 
 for ckpt_name, tensor in weights:
     name = self._remap_name(ckpt_name)
@@ -214,10 +214,10 @@ After slicing, the tensor looks identical to what a single-track model would pro
 | Model | Convention after slicing | Transpose? |
 |-------|--------------------------|------------|
 | 3B | `[out, in]` — PyTorch-ready | No |
-| 150B | `[in, out]` — HF export artifact | Yes (2D linears only) |
+| 150B | `[in, out]` — export artifact (weight stored transposed relative to PyTorch convention) | Yes (2D linears only) |
 
 ```
-150B gate_proj: [8, 2048, 5888] → slice → [2048, 5888] = [in, out] ← needs .t()
+150B gate_proj: [8, 2048, 5888] → slice → [2048, 5888] = [in, out] ← needs .t() to reach PyTorch convention [out, in]
 ```
 
 Norms (1D) and expert weights (handled by `FusedMoE.weight_loader`) never need transpose.
@@ -240,7 +240,7 @@ for expert_id in range(num_experts):
                   expert_id=expert_id)
 ```
 
-`FusedMoE` internally packs all experts into fused weight matrices (`w13` for gate+up, `w2` for down). The `weight_loader` handles the packing — you just feed it one expert at a time with the correct `shard_id` and `expert_id`.
+`FusedMoE` internally packs all experts into fused weight matrices (`w13` combines gate and up projections into one matrix; `w2` is the down projection). The `weight_loader` handles the packing — you just feed it one expert at a time with the correct `shard_id` and `expert_id`.
 
 ### Verified Checkpoint Shapes (from safetensor headers)
 
@@ -264,7 +264,7 @@ Source: `weights/afm-text-150b-instruct-20250915/tensor_shapes.txt`
 
 ### Global NoPE in Checkpoint
 
-Global NoPE layers use a different checkpoint name for QKV: `qkv_transform_global_nope.fused_linear` instead of `qkv_transform.fused_linear`. Both map to `self_attn.qkv_proj` in the model (same parameter, different checkpoint source). The `_SUFFIX_MAP` handles both:
+Global NoPE (No Positional Encoding — attention layers that omit rotary position embeddings) layers use a different checkpoint name for QKV: `qkv_transform_global_nope.fused_linear` instead of `qkv_transform.fused_linear`. Both map to `self_attn.qkv_proj` in the model (same parameter, different checkpoint source). The `_SUFFIX_MAP` handles both:
 
 ```python
 ("attention.qkv_transform.fused_linear.", "self_attn.qkv_proj."),
