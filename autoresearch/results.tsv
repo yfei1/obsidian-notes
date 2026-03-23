@@ -100,3 +100,7 @@ none	ml-systems/parallel-track-architecture.md	Uniqueness	2	2	failed	Edits could
 ab48dd2	ml-systems/norms-and-regularization.md	Concrete Examples	4	7	kept	autoresearch: improve ml-systems/norms-and-regularization.md on Concrete Examples (4->7/10)
 none	ml-systems/attention-mechanics.md	Uniqueness	2	2	failed	Edits could not be applied
 none	ml-systems/parallel-track-architecture.md	Uniqueness	2	2	failed	Edits could not be applied
+a943b7b	data-processing/lance-vs-parquet.md	Concrete Examples	4	7	kept	autoresearch: improve data-processing/lance-vs-parquet.md on Concrete Examples (4->7/10)
+none	data-processing/checkpointing.md	Concrete Examples	4	4	failed	Edits could not be applied
+none	ml-systems/vllm-weight-loading.md	Uniqueness	5	5	discarded	no improvement (5->5)
+none	ml-systems/vllm-weight-loading.md	Uniqueness	5	5	discarded	retry: no improvement (5->5)
