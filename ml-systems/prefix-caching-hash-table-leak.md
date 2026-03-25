@@ -152,3 +152,6 @@ Both options clean up entries that are *queried and found stale*. Neither cleans
 
 - [[ml-systems/prefix-caching]] — the full prefix caching mechanism this note is an implementation detail of
 - [[ml-systems/kv-cache-internals]] — block lifecycle, ref counting, and free-list mechanics
+## See Also
+
+- [[ml-systems/prefix-caching]] — full prefix caching walkthrough; the unbounded-growth issue is introduced in context there

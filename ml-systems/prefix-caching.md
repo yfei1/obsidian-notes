@@ -174,9 +174,7 @@ Shared blocks (ref_count > 1) survive because seq 2 still holds a reference. Whe
 
 ## Why Does `hash_to_block_id` Grow Without Bound?
 
-`hash_to_block_id` is never cleaned up. When blocks are recycled for different content, the old hash entry becomes stale — functionally harmless (the token_ids comparison in `allocate()` catches mismatches), but the map never shrinks. After 1M requests with unique prefixes: ~1M entries × 16 bytes = **~16 MB** on the CPU side. A naive cleanup in `_allocate_block` can accidentally delete valid entries belonging to other blocks that share the same hash key.
-
-See [[ml-systems/prefix-caching-hash-table-leak]] for the full trace, stale-entry analysis, and correct fix patterns.
+`hash_to_block_id` is never cleaned up — stale entries accumulate as blocks are recycled, reaching ~16 MB after 1M unique-prefix requests. See [[ml-systems/prefix-caching-hash-table-leak]] for the full trace, stale-entry analysis, and correct fix patterns.
 
 <!-- verify:
 python3 -c "
