@@ -30,7 +30,7 @@ from shared import (
     has_required_sections,
 )
 from autoresearch_core.util import extract_json_object, find_paragraph_overlaps
-from llm import call_claude as _call_claude
+from llm_wrapper import call_claude as _call_claude
 
 # ---------------------------------------------------------------------------
 # Constants

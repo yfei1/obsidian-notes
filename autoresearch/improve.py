@@ -36,7 +36,7 @@ from shared import (
     discover_notes, read_note, relative_path, extract_wikilinks,
 )
 from autoresearch_core.util import extract_json_array
-from llm import call_claude
+from llm_wrapper import call_claude
 from score import DIMENSIONS, ERROR_SCORE, DIMENSION_WEIGHTS
 EDIT_DIFFS_LOG = AUTORESEARCH_DIR / "edit_diffs.log"
 

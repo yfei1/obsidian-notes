@@ -29,7 +29,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from shared import REPO_ROOT, AUTORESEARCH_DIR, discover_notes, relative_path, read_note
 from autoresearch_core.util import extract_json_object
-from llm import call_claude
+from llm_wrapper import call_claude
 
 SCORE_PY = AUTORESEARCH_DIR / "score.py"
 

@@ -31,7 +31,7 @@ from engine.gates import (
     _gate_causal_reasoning, _gate_code_block_preservation,
     _gate_bullet_preservation, _gate_inline_definition_preservation,
 )
-from llm import call_claude
+from llm_wrapper import call_claude
 from autoresearch_core.strategies import generate_delta as _core_generate_delta
 from engine.health import check_health
 from engine.state import (

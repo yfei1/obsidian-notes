@@ -1,7 +1,7 @@
 import sys
 from dataclasses import dataclass
 
-from llm import call_claude, call_gemini
+from llm_wrapper import call_claude, call_gemini
 
 
 @dataclass

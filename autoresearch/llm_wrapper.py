@@ -45,9 +45,10 @@ if _LLM_PARENT not in sys.path:
     sys.path.insert(0, _LLM_PARENT)
 
 try:
-    from llm import claude as _claude, gemini as _gemini
+    from llm.client import claude as _claude, gemini as _gemini
     HAS_LLM = True
-except ImportError:
+except ImportError as e:
+    import traceback; traceback.print_exc(file=sys.stderr)
     _claude = None  # type: ignore[assignment]
     _gemini = None  # type: ignore[assignment]
     HAS_LLM = False
