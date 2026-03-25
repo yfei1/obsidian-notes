@@ -314,3 +314,5 @@ Track independence maps directly to hardware:
 - [[ml-systems/vllm-model-integration]]
 - [[ml-systems/fused-moe-vllm-implementation]]
 - [[ml-systems/lora-vllm-serving]]
+- [[ml-systems/ray-compiled-graph-in-vllm]]
+- [[ml-systems/vllm-executor-architecture]]

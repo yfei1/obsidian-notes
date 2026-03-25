@@ -197,3 +197,4 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 - [[ml-systems/gpu-memory-hierarchy]] — register files, shared memory, HBM bandwidth context
 - [[ml-systems/flashinfer-vllm-integration]] — FlashInfer C++/CUDA kernels: same custom-op level as Triton, with native paged KV cache
 - [[ml-systems/lora-vllm-serving]]
+- [[ml-systems/kv-cache-internals]]

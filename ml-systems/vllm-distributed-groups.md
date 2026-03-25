@@ -323,3 +323,6 @@ Memory profiling and scheduling happen after model init, so they see correct sta
 ## Connections
 
 - [[ml-systems/pt-moe-vllm-implementation]] — uses the `GroupCoordinator` `new_group` loop to scope `_TP` all-reduces to the correct cross-track group per rank
+- [[ml-systems/ray-compiled-graph-in-vllm]]
+- [[ml-systems/vllm-cg-investigation-findings]]
+- [[ml-systems/vllm-executor-architecture]]

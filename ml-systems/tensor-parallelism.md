@@ -288,3 +288,5 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/gpu-memory-hierarchy]] — NVLink vs. InfiniBand bandwidth numbers that determine whether TP stays within a node
 - [[ml-systems/validating-parallelism-at-scale]] — correctness checks for TP and other parallelism strategies at deployment scale
 - [[ml-systems/pt-moe-architecture]] — MoE expert parallelism combines with TP; understanding TP is prerequisite for reading that note
+- [[ml-systems/fused-moe-vllm-implementation]]
+- [[ml-systems/vllm-executor-architecture]]
