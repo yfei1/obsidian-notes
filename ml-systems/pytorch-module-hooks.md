@@ -253,7 +253,6 @@ Full benchmarks, stack traces, and the three-mechanism comparison table: [[ml-sy
 
 ## Related Concepts
 
-- [[ml-systems/llm-inference-engines]]
-- [[ml-systems/transformer-model-internals]]
-- [[ml-systems/gpu-memory-hierarchy]]
+See [[ml-systems/vllm-torch-compile-integration]] for how `torch.compile` integrates with a production inference engine, including graph capture, CUDA graph interaction, and compile-time trade-offs.
+
 - [[ml-systems/torch-compile-graph-breaks]] — Empirical test results: what patterns break `fullgraph=True` vs compile fine

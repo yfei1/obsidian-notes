@@ -165,3 +165,4 @@ Dynamic input marking (`decorators.py:381-418`) tells Dynamo which tensor dimens
 - [[ml-systems/vllm-model-integration]] — how to register a custom model in vLLM's plugin system
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE integration where cross-track `all_reduce` creates piecewise compilation
 - [[ml-systems/lora-vllm-serving]]
+- [[ml-systems/pytorch-module-hooks.md]] — How `nn.Module.__call__` dispatches hooks and how `@torch.compile` / `module.compile()` interact with that dispatch path
