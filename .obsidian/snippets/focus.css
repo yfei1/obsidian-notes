@@ -1,0 +1,428 @@
+/* ── Midnight Study ───────────────────────────────────────────────────────────
+   An evidence-based dark theme for focused technical reading.
+   Warm charcoal palette with copper accents — reading by lamplight.
+
+   Typography: Avenir Next body + Georgia headings (editorial contrast)
+   Palette: warm neutrals + copper/sage/teal accents
+
+   Research basis:
+   - Dark mode reduces myopia risk (Aleman et al. 2018, Scientific Reports)
+   - Warm tones reduce blue-light fatigue; parchment text avoids cold halation
+     (Piepenbrock et al. 2013, Ergonomics)
+   - 70ch line length ≈ 65–70 chars (Ruder "Typographie"; Baymard 2022)
+   - Line height 1.75 exceeds WCAG 1.4.12 minimum of 1.5em
+   - Paragraph spacing 1.2em+ supports WCAG 1.4.12
+   - Cognitive load reduction via chrome dimming (Sweller 1988)
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* ── Midnight Study palette ────────────────────────────────────────────────── */
+:root {
+  --ms-deep:          #101014;
+  --ms-base:          #18181e;
+  --ms-surface:       #1f1f27;
+  --ms-raised:        #282832;
+  --ms-border:        #333340;
+  --ms-border-light:  #404050;
+
+  --ms-text-faint:    #555566;
+  --ms-text-muted:    #888898;
+  --ms-text:          #cec8bc;
+  --ms-text-bright:   #e0d8ca;
+
+  --ms-copper:        #c48c5c;
+  --ms-copper-hover:  #d4a070;
+  --ms-sage:          #8aaa7e;
+  --ms-teal:          #6ea0a0;
+  --ms-lavender:      #9480b0;
+  --ms-rust:          #c07060;
+  --ms-amber:         #d4a060;
+  --ms-gold-bg:       rgba(198, 168, 100, 0.15);
+}
+
+/* ── Obsidian variable overrides ───────────────────────────────────────────── */
+.theme-dark {
+  --background-primary:           var(--ms-base);
+  --background-primary-alt:       var(--ms-surface);
+  --background-secondary:         var(--ms-deep);
+  --background-secondary-alt:     var(--ms-deep);
+  --background-modifier-border:   var(--ms-border);
+  --background-modifier-form-field: var(--ms-raised);
+  --background-modifier-form-field-highlighted: var(--ms-border-light);
+  --background-modifier-box-shadow: rgba(10, 10, 14, 0.6);
+  --background-modifier-success:  var(--ms-sage);
+  --background-modifier-error:    var(--ms-rust);
+  --background-modifier-error-hover: #d08070;
+  --background-modifier-cover:    rgba(10, 10, 14, 0.85);
+
+  --text-normal:                  var(--ms-text);
+  --text-muted:                   var(--ms-text-muted);
+  --text-faint:                   var(--ms-text-faint);
+  --text-on-accent:               var(--ms-deep);
+  --text-on-accent-inverted:      var(--ms-text);
+  --text-error:                   var(--ms-rust);
+  --text-success:                 var(--ms-sage);
+  --text-selection:               rgba(196, 140, 92, 0.18);
+  --text-highlight-bg:            var(--ms-gold-bg);
+  --text-accent:                  var(--ms-copper);
+  --text-accent-hover:            var(--ms-copper-hover);
+
+  --interactive-normal:           var(--ms-raised);
+  --interactive-hover:            var(--ms-border);
+  --interactive-accent:           var(--ms-copper);
+  --interactive-accent-hover:     var(--ms-copper-hover);
+
+  --scrollbar-bg:                 transparent;
+  --scrollbar-thumb-bg:           rgba(136, 136, 152, 0.12);
+  --scrollbar-active-thumb-bg:    rgba(136, 136, 152, 0.3);
+
+  --titlebar-background:          var(--ms-deep);
+  --titlebar-background-focused:  var(--ms-deep);
+
+  --tab-text-color:               var(--ms-text-muted);
+  --tab-text-color-focused:       var(--ms-text);
+  --tab-text-color-focused-active: var(--ms-text-bright);
+
+  --nav-item-color:               var(--ms-text-muted);
+  --nav-item-color-hover:         var(--ms-text);
+  --nav-item-color-active:        var(--ms-copper);
+  --nav-item-background-hover:    rgba(196, 140, 92, 0.06);
+  --nav-item-background-active:   rgba(196, 140, 92, 0.10);
+
+  --tag-background:               var(--ms-raised);
+  --tag-color:                    var(--ms-lavender);
+  --tag-background-hover:         var(--ms-border);
+
+  --checkbox-color:               var(--ms-copper);
+  --checkbox-color-hover:         var(--ms-copper-hover);
+  --checkbox-border-color:        var(--ms-border-light);
+
+  --icon-color:                   var(--ms-text-muted);
+  --icon-color-hover:             var(--ms-text);
+  --icon-color-active:            var(--ms-copper);
+  --icon-color-focused:           var(--ms-text-muted);
+
+  --color-accent:                 var(--ms-copper);
+  --color-accent-1:               var(--ms-copper-hover);
+  --color-accent-2:               var(--ms-amber);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* TYPOGRAPHY — editorial contrast                                           */
+/* Avenir Next: geometric warmth for body. Georgia: seriffed gravitas for    */
+/* headings. Both ship on iOS/macOS — zero network dependency.               */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+body {
+  --font-text-size: 17px;
+  --line-height-normal: 1.75;
+  --font-text-theme: "Avenir Next", "Avenir", -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.markdown-rendered,
+.cm-editor {
+  letter-spacing: 0.012em;
+  word-spacing: 0.04em;
+}
+
+/* Paragraph rhythm — WCAG 1.4.12 */
+.markdown-rendered p,
+.cm-line {
+  margin-bottom: 1.2em;
+}
+
+/* Line length — 50–75 chars (Ruder; Baymard 2022; WCAG 1.4.8 max 80) */
+.is-readable-line-width .markdown-source-view.mod-cm6 .cm-content,
+.is-readable-line-width .markdown-preview-view {
+  max-width: 70ch;
+}
+
+/* ── Active line ───────────────────────────────────────────────────────────── */
+.cm-editor .cm-activeLine {
+  background-color: rgba(196, 140, 92, 0.04);
+}
+
+/* ── Selection — warm gold ─────────────────────────────────────────────────── */
+::selection {
+  background: rgba(196, 140, 92, 0.22);
+}
+
+/* ── Cursor — copper ───────────────────────────────────────────────────────── */
+.cm-editor .cm-cursor {
+  border-left-color: var(--ms-copper);
+  border-left-width: 2px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* APP CHROME                                                                */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Sidebar ───────────────────────────────────────────────────────────────── */
+.workspace-drawer,
+.mod-left-split,
+.mod-right-split {
+  background-color: var(--ms-deep);
+}
+
+.nav-folder-title,
+.nav-file-title {
+  padding: 6px 12px;
+  border-radius: 5px;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.nav-folder-title-content {
+  color: var(--ms-text-muted);
+  font-weight: 600;
+  font-size: 0.85em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.nav-file-title.is-active {
+  background-color: rgba(196, 140, 92, 0.10);
+  color: var(--ms-copper);
+}
+
+/* ── Tabs ──────────────────────────────────────────────────────────────────── */
+.workspace-tab-header {
+  background-color: var(--ms-deep);
+  transition: background-color 0.15s ease;
+}
+
+.workspace-tab-header.is-active {
+  background-color: var(--ms-base);
+}
+
+.workspace-tab-header-container {
+  background-color: var(--ms-deep);
+  border-bottom: 1px solid var(--ms-border);
+}
+
+/* ── View header ───────────────────────────────────────────────────────────── */
+.view-header {
+  background-color: var(--ms-base);
+  border-bottom: 1px solid rgba(51, 51, 64, 0.5);
+}
+
+.view-header-title {
+  color: var(--ms-text);
+  font-weight: 600;
+  font-family: Georgia, "New York", "Iowan Old Style", serif;
+}
+
+/* ── Status bar ────────────────────────────────────────────────────────────── */
+.status-bar {
+  background-color: var(--ms-deep);
+  border-top: 1px solid var(--ms-border);
+  color: var(--ms-text-faint);
+  font-size: 0.78em;
+}
+
+/* ── Scrollbar — whisper-thin ──────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 3px; }
+::-webkit-scrollbar-thumb {
+  background-color: rgba(136, 136, 152, 0.12);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(136, 136, 152, 0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* INTERACTIVE ELEMENTS                                                      */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+button.mod-cta {
+  background-color: var(--ms-copper);
+  color: var(--ms-deep);
+  font-weight: 600;
+  border-radius: 5px;
+  transition: background-color 0.15s ease;
+}
+
+button.mod-cta:hover {
+  background-color: var(--ms-copper-hover);
+}
+
+input[type="text"],
+input[type="search"],
+textarea {
+  background-color: var(--ms-raised);
+  border: 1px solid var(--ms-border);
+  color: var(--ms-text);
+  border-radius: 5px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+input[type="text"]:focus,
+input[type="search"]:focus,
+textarea:focus {
+  border-color: var(--ms-copper);
+  box-shadow: 0 0 0 2px rgba(196, 140, 92, 0.12);
+}
+
+/* ── Search results ────────────────────────────────────────────────────────── */
+.search-result-file-title {
+  color: var(--ms-copper);
+  font-weight: 600;
+}
+
+.search-result-file-matched-text {
+  background-color: var(--ms-gold-bg);
+  color: var(--ms-amber);
+}
+
+/* ── Tooltip ───────────────────────────────────────────────────────────────── */
+.tooltip {
+  background-color: var(--ms-raised);
+  color: var(--ms-text);
+  border: 1px solid var(--ms-border);
+  border-radius: 5px;
+  box-shadow: 0 6px 20px rgba(10, 10, 14, 0.5);
+}
+
+/* ── Modals ────────────────────────────────────────────────────────────────── */
+.modal-container .modal {
+  background-color: var(--ms-base);
+  border: 1px solid var(--ms-border);
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(10, 10, 14, 0.7);
+}
+
+.modal-container .modal-close-button { color: var(--ms-text-muted); }
+
+/* ── Quick switcher ────────────────────────────────────────────────────────── */
+.prompt {
+  background-color: var(--ms-base);
+  border: 1px solid var(--ms-border);
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(10, 10, 14, 0.7);
+}
+
+.prompt-input {
+  background-color: var(--ms-surface);
+  border: 1px solid var(--ms-border);
+  border-radius: 5px;
+  color: var(--ms-text);
+}
+
+.suggestion-item.is-selected {
+  background-color: rgba(196, 140, 92, 0.08);
+  color: var(--ms-text-bright);
+}
+
+/* ── Checkboxes ────────────────────────────────────────────────────────────── */
+.markdown-rendered .task-list-item-checkbox:checked {
+  background-color: var(--ms-copper);
+  border-color: var(--ms-copper);
+}
+
+.markdown-rendered .task-list-item.is-checked {
+  color: var(--ms-text-faint);
+  text-decoration: line-through;
+  text-decoration-color: var(--ms-border);
+}
+
+/* ── Embeds ────────────────────────────────────────────────────────────────── */
+.markdown-embed {
+  border: 1px solid var(--ms-border);
+  border-left: 2px solid var(--ms-copper);
+  border-radius: 0 6px 6px 0;
+  background-color: var(--ms-surface);
+  padding: 12px 16px;
+}
+
+.markdown-embed-title {
+  color: var(--ms-copper);
+  font-weight: 600;
+  font-family: Georgia, "New York", "Iowan Old Style", serif;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* MOBILE — phone-first reading                                              */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+.is-mobile {
+  --font-text-size: 17px;
+}
+
+/* Touch targets — 44px minimum per Apple HIG */
+.is-mobile .nav-file-title,
+.is-mobile .nav-folder-title {
+  padding: 10px 14px;
+  font-size: 15px;
+}
+
+.is-mobile .workspace-drawer {
+  background-color: var(--ms-deep);
+}
+
+.is-mobile .workspace-drawer-header {
+  background-color: var(--ms-deep);
+  border-bottom: 1px solid var(--ms-border);
+}
+
+/* Bottom nav — grounded */
+.is-mobile .mobile-navbar {
+  background-color: var(--ms-deep);
+  border-top: 1px solid var(--ms-border);
+}
+
+.is-mobile .mobile-navbar-action { color: var(--ms-text-muted); }
+.is-mobile .mobile-navbar-action.is-active { color: var(--ms-copper); }
+
+/* View header — recede */
+.is-mobile .view-header {
+  background-color: var(--ms-base);
+  padding: 4px 8px;
+}
+
+/* Reading area — generous thumb-zone padding */
+.is-mobile .markdown-preview-view,
+.is-mobile .cm-content {
+  padding: 8px 20px;
+}
+
+/* Hide status bar on phone */
+.is-mobile .status-bar { display: none; }
+
+/* Dim chrome while reading — cognitive load reduction */
+.is-mobile .view-header-title-container-after,
+.is-mobile .view-header-nav-buttons {
+  opacity: 0.45;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* FOCUS ENHANCEMENTS                                                        */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Micro-transitions on interactive elements */
+.nav-file-title,
+.nav-folder-title,
+.workspace-tab-header,
+button, input, textarea, a {
+  transition: color 0.15s ease,
+              background-color 0.15s ease,
+              border-color 0.15s ease,
+              opacity 0.15s ease;
+}
+
+/* Active editor — subtle inset warmth */
+.workspace-leaf.mod-active .view-content {
+  box-shadow: inset 0 1px 0 rgba(196, 140, 92, 0.04);
+}
+
+/* Reading view: deeper paragraph separation */
+.markdown-preview-view p { margin-bottom: 1.4em; }
+.markdown-preview-view li { margin-bottom: 0.35em; }
+
+/* Heading breathing room — section scanning (Meyer 1982) */
+.markdown-rendered h1,
+.markdown-rendered h2 { margin-top: 2.2em; }
+.markdown-rendered h3 { margin-top: 1.6em; }
+
+/* Empty state */
+.empty-state { color: var(--ms-text-faint); }
+.empty-state-title { color: var(--ms-text-muted); }
