@@ -238,13 +238,13 @@ A design for morsel-driven engines (Daft) where map pipelines dominate. See [[da
 
 ## Decision Matrix
 
-| Pipeline Shape | Best Approach | Why |
-|---|---|---|
-| `Map → Map → Sink` (cheap maps) | **Morsel-lease** | Zero overhead, morsel-level retry |
-| `Map → Map → Sink` (expensive maps) | Hybrid lease + materialize | Avoid recomputing expensive stage |
-| `Map → Shuffle(GroupBy) → Map` | Column Link / Identifier ACK | Only approaches that handle shuffle |
-| `Map(CPU) → Map(GPU)` | Materialize at handoff | Different resources need data handoff |
-| Global Sort | ❌ Avoid | No good answer in any framework |
+| Pipeline Shape                      | Best Approach                | Why                                   |
+| ----------------------------------- | ---------------------------- | ------------------------------------- |
+| `Map → Map → Sink` (cheap maps)     | **Morsel-lease**             | Zero overhead, morsel-level retry     |
+| `Map → Map → Sink` (expensive maps) | Hybrid lease + materialize   | Avoid recomputing expensive stage     |
+| `Map → Shuffle(GroupBy) → Map`      | Column Link / Identifier ACK | Only approaches that handle shuffle   |
+| `Map(CPU) → Map(GPU)`               | Materialize at handoff       | Different resources need data handoff |
+| Global Sort                         | ❌ Avoid                      | No good answer in any framework       |
 
 ---
 
