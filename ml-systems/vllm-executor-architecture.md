@@ -142,3 +142,4 @@ Both use the same workers, same NCCL groups, same model runner. The difference i
 - [[ml-systems/vllm-cg-investigation-findings]] — 12 deep-dive questions about CG with code traces
 - [[ml-systems/vllm-distributed-groups]] — The data plane: NCCL groups for TP, PP, EP
 - [[ml-systems/parallelism-strategies]] — TP, PP, EP concepts
+- [[ml-systems/tensor-parallelism]]
