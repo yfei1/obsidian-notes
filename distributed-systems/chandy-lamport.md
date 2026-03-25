@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-Captures a **consistent global snapshot** — a frozen view of every process state and every in-flight message where no message appears received but not sent — without pausing the system. The mechanism: inject **markers** (special control messages) that propagate through the process graph, acting as **logical cuts** (imaginary dividing lines through the execution: everything before the line is pre-snapshot, everything after is post-snapshot). Apache Flink (a stateful stream-processing engine) maps directly onto this model: its **checkpoint barriers** are the markers, and its operator pipeline — a DAG (directed acyclic graph) of stateful processing nodes — plays the role of the process graph.
+Captures a **consistent global snapshot** — a frozen view of every process state and every in-flight message where no message appears received but not sent — without pausing the system. The mechanism: inject **markers** (special control messages) that propagate through the **process graph** (the network of processes connected by message channels), acting as **logical cuts** (imaginary dividing lines through the execution: everything before the line is pre-snapshot, everything after is post-snapshot). Apache Flink (a stateful stream-processing engine) maps directly onto this model: its **checkpoint barriers** are the markers, and its operator pipeline — a DAG (directed acyclic graph) of stateful processing nodes — is the process graph.
 
 ---
 
@@ -51,7 +51,7 @@ Setup: A (counter=10) --[M1=2, M2=5]--> B (counter=7) --[M3=1]--> C (counter=3)
      Channel B→C:     [] (empty — M3 arrived before marker)
 ```
 
-Note: in this pipeline, all in-flight messages happened to arrive before their channel's marker. The channel recording buffer is needed when a message arrives *after* the receiver snaps its state but *before* the marker closes that channel — see the consistency section below for that case.
+Note: in this pipeline, all in-flight messages arrived before their channel's marker, so no buffering was needed. A **channel recording buffer** — a temporary log of messages arriving after the receiver records its local state but before the marker closes that channel — is needed when those two events are reordered; the consistency section below shows when that happens.
 
 ---
 
@@ -59,9 +59,9 @@ Note: in this pipeline, all in-flight messages happened to arrive before their c
 
 Consistency means: if the snapshot shows Process B received message M, it also shows Process A sent M — no message appears received-but-not-sent.
 
-**Concrete race that would break consistency** (extending the running example): suppose A sends M4=3 *after* recording its state (counter=10), then sends the MARKER. B receives the MARKER first (impossible under FIFO, but imagine it) and records counter=14. Now the snapshot shows B has counter=14 but A's recorded state shows counter=10 — the delta of 3 is unaccounted for. M4 appears received (B's counter includes it) but not sent (A's snapshot predates it). This is the inconsistency FIFO prevents.
+**Concrete race that would break consistency** (extending the running example): suppose A sends M4=3 *after* recording its state (counter=10), then sends the MARKER. B receives the MARKER first and records counter=14. Now the snapshot shows B has counter=14 but A's recorded state shows counter=10 — the delta of 3 is unaccounted for. M4 appears received (B's counter includes it) but not sent (A's snapshot predates it).
 
-Under FIFO, M4 — sent before the MARKER on channel A→B — must arrive before the MARKER. So B processes M4 (counter becomes 17) before snapping, and the snapshot correctly shows A sent it and B received it.
+This race is prevented by **FIFO ordering** (first-in-first-out channel delivery — messages arrive in the order sent). Under FIFO, M4 — sent before the MARKER on channel A→B — must arrive before the MARKER. So B processes M4 (counter becomes 17) before snapping, and the snapshot correctly shows A sent it and B received it.
 
 This holds because:
 - A process records its state *before* forwarding the marker, so any message it sent pre-snapshot is in its recorded state
