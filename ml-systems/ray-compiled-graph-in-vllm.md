@@ -46,36 +46,51 @@ Running example: **Llama 70B, PP=2, TP=4** (8 workers, 4 per pipeline stage — 
 
 The DAG must do two things: (1) broadcast the SchedulerOutput to all TP=4 workers in stage 0, and (2) route each worker's intermediate output tensors to the matching stage-1 worker so the next set of layers can continue the computation.
 
+**Key variables and methods** (needed to read the code below):
+
+- **`pp_tp_workers`**: A 2D list of Ray worker handles, indexed `[pp_rank][tp_rank]`. For PP=2, TP=4 it looks like `[[w0, w1, w2, w3], [w4, w5, w6, w7]]` — built at `ray_executor.py:395-403`.
+- **`.bind(input)`**: Ray DAG API. Declares "when this DAG runs, call this method with this input." Does not execute anything — it wires up the graph topology at compile time.
+- **`.with_tensor_transport(transport)`**: Annotates a DAG edge. Tells CG: "route GPU tensors on this edge via NCCL (GPU-direct) instead of the default shared memory (CPU copy)."
+
 ```python
 # ray_executor.py:580-613 (simplified)
 with InputNode() as input_data:
-    # Stage 0: all 4 TP workers receive the same SchedulerOutput
-    outputs = [input_data for _ in pp_tp_workers[0]]  # fan-out to TP=4
+    # outputs = 4 references to the same input (fan-out to TP=4 workers in stage 0)
+    outputs = [input_data for _ in pp_tp_workers[0]]
 
     for pp_rank, tp_group in enumerate(pp_tp_workers):
+        # Wire each worker: "when DAG runs, call execute_model_ray(outputs[i])"
+        # After this, outputs = [DAG node for w0, DAG node for w1, ...]
         outputs = [worker.execute_model_ray.bind(outputs[i])
                    for i, worker in enumerate(tp_group)]
-        # For non-last PP stage: annotate GPU tensor transport
+
+        # For stage 0 only (not the last stage): mark the output edges
+        # so GPU tensors travel via NCCL to the next stage's workers
         if pp_rank < last_pp_rank and channel_type != "shm":
             outputs = [out.with_tensor_transport(transport=channel_type)
                        for out in outputs]
 ```
 
-This produces:
+The compiled DAG topology (built once at startup, reused every step):
 
 ```
-                   PP Stage 0 (TP=4)                    PP Stage 1 (TP=4)
-                   workers 0-3                          workers 4-7
+  Driver                  PP Stage 0              PP Stage 1              Driver
+  (engine)                workers 0-3             workers 4-7             (engine)
 
-                   SHM channels (pickle)                NCCL + SHM channels
-                   ~~~~~~~~~~~~~~~~                     ~~~~~~~~~~~~~~~~~~~
-SchedulerOutput ─> worker 0 ─> (sched, IT [128,8192]) ──NCCL──> worker 4 ─> output
-SchedulerOutput ─> worker 1 ─> (sched, IT [128,8192]) ──NCCL──> worker 5 ─> output
-SchedulerOutput ─> worker 2 ─> (sched, IT [128,8192]) ──NCCL──> worker 6 ─> output
-SchedulerOutput ─> worker 3 ─> (sched, IT [128,8192]) ──NCCL──> worker 7 ─> output
+           SHM (pickle)              NCCL (GPU tensors)        SHM (pickle)
+           ~~~~~~~~~~~           + SHM (CPU metadata)          ~~~~~~~~~~~
+           ─────────>                ─────────>                ─────────>
+  input ─────────────> worker 0 ───────────────> worker 4 ───────────────> output
+  input ─────────────> worker 1 ───────────────> worker 5 ───────────────> output
+  input ─────────────> worker 2 ───────────────> worker 6 ───────────────> output
+  input ─────────────> worker 3 ───────────────> worker 7 ───────────────> output
 
-IT = IntermediateTensors: hidden_states [128,8192] + residual [128,8192]
-     bf16, 128 × 32 KiB = 4 MiB total per step
+  Each worker returns: (SchedulerOutput, GrammarOutput, IntermediateTensors)
+  IT = hidden_states [128,8192] + residual [128,8192], bf16, 4 MiB total
+
+  The NCCL arrows exist because with_tensor_transport on stage 0's outputs
+  (line 60) tells CG to create NCCL channels for the stage0→stage1 edges,
+  so GPU tensors transfer directly without CPU copies.
 ```
 
 ### How CG Splits CPU Data from GPU Tensors
