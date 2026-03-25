@@ -426,3 +426,4 @@ all_reduce(sum) → [N, 1024] correct output on both GPUs
 - [[ml-systems/sequence-and-context-parallelism]]
 - [[ml-systems/tensor-parallelism]]
 - [[ml-systems/flashinfer-vllm-integration]]
+- [[ml-systems/lora-mechanics]]

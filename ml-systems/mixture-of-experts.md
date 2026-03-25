@@ -255,3 +255,4 @@ Full implementation details — buffer shapes, shard_id mapping, per-expert load
 - [[ml-systems/parallel-track-architecture]]
 - [[ml-systems/gpu-kernel-stack]] — how FusedMoE (custom op) interacts with torch.compile and Inductor fusion
 - [[ml-systems/flashinfer-vllm-integration]]
+- [[ml-systems/lora-vllm-serving]]

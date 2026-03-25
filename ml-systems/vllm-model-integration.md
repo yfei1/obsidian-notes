@@ -366,3 +366,5 @@ All assertions passed.
 - [[ml-systems/vllm-distributed-groups]]
 - [[ml-systems/python-import-binding]] — why monkey-patches must use module attribute access for mutable globals
 - [[ml-systems/vllm-torch-compile-integration]] — `@support_torch_compile` decorator: how to enable compilation for your model
+- [[ml-systems/lora-mechanics]]
+- [[ml-systems/lora-vllm-serving]]

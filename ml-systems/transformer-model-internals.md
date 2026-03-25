@@ -398,3 +398,5 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/vllm-model-integration]]
 - [[ml-systems/tensor-parallelism]]
 - [[ml-systems/zero-fsdp-memory-optimization]]
+- [[ml-systems/lora-mechanics]]
+- [[ml-systems/lora-vllm-serving]]

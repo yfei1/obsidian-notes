@@ -321,3 +321,4 @@ The shard header is the source of truth for storage convention (e.g. `[in, out]`
 - [[ml-systems/pt-moe-vllm-implementation]] — the PT-MoE model that uses this loading pattern
 - [[ml-systems/mixture-of-experts]] — FusedMoE weight_loader shard_id mapping
 - [[ml-systems/tensor-parallelism]]
+- [[ml-systems/fused-moe-vllm-implementation]]

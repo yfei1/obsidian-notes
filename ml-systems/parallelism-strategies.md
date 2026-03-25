@@ -313,3 +313,5 @@ Track independence maps directly to hardware:
 - [[ml-systems/pt-moe-vllm-implementation]]
 - [[ml-systems/validating-parallelism-at-scale]]
 - [[ml-systems/vllm-model-integration]]
+- [[ml-systems/fused-moe-vllm-implementation]]
+- [[ml-systems/lora-vllm-serving]]

@@ -164,3 +164,4 @@ Dynamic input marking (`decorators.py:381-418`) tells Dynamo which tensor dimens
 - [[ml-systems/torch-compile-cuda-graphs-hook-interaction]] — `@torch.compile` vs `module.compile()`, CUDA graph mechanics, kernel fusion benchmarks
 - [[ml-systems/vllm-model-integration]] — how to register a custom model in vLLM's plugin system
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE integration where cross-track `all_reduce` creates piecewise compilation
+- [[ml-systems/lora-vllm-serving]]
