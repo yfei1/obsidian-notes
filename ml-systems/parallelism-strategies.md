@@ -233,7 +233,7 @@ vLLM and SGLang are **inference-only** engines. They do not perform backward pas
 
 ## Architecture-Aware Parallelism: PT-MoE
 
-Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it's a model architecture redesign that removes the sequential layer dependencies that cause the PP bubble. Published in the 2025 Foundation Models update.
+Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it's a model architecture redesign that removes the sequential layer dependencies that cause the PP bubble. Published in the [2025 Foundation Models update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates).
 
 ### How it works
 
