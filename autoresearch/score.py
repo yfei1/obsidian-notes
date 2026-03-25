@@ -27,6 +27,7 @@ from shared import (
     REPO_ROOT, AUTORESEARCH_DIR, SCORES_TSV, NOTE_DIRS,
     MAX_NOTE_LINES,
     discover_notes, relative_path, read_note, extract_wikilinks,
+    has_required_sections,
 )
 from autoresearch_core.util import extract_json_object, find_paragraph_overlaps
 from llm import call_claude as _call_claude
@@ -433,12 +434,7 @@ def score_naming_structure(note: Path, content: str) -> dict:
     if fname != fname.lower() or ' ' in fname or '_' in fname:
         issues.append(f"File name '{fname}' is not kebab-case")
 
-    # Accept old OR new section formats (transition-aware, like engine/gates.py)
-    from shared import REQUIRED_SECTIONS_OLD, REQUIRED_SECTIONS_NEW_CONCEPT, REQUIRED_SECTIONS_NEW_IMPL
-    has_old = all(f"## {s}" in content for s in REQUIRED_SECTIONS_OLD)
-    has_new_concept = all(f"## {s}" in content for s in REQUIRED_SECTIONS_NEW_CONCEPT)
-    has_new_impl = all(f"## {s}" in content for s in REQUIRED_SECTIONS_NEW_IMPL)
-    if not (has_old or has_new_concept or has_new_impl):
+    if not has_required_sections(content):
         issues.append("Missing required sections: need [TL;DR + See Also] or [Core Intuition + Connections] or [Role in System + Related Concepts]")
 
     lines = content.split('\n')

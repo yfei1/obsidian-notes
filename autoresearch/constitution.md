@@ -536,6 +536,18 @@ Additional patterns:
 10. **Notes generally end when the facts end** — no ceremonial conclusions.
     A short 2-3 line "Connections" section linking to related notes is encouraged
     — that serves vault navigation, not ceremony.
+11. **Architecture diagram for system notes**: When a note describes a system with
+    3+ interacting components (executors, channels, workers, schedulers), include
+    one annotated call-flow diagram in the first draft — before prose sections.
+    Annotate with `file_path:line` references. This is the reader's map; the prose
+    explains what the map shows. Not needed for pure concept notes (attention, RoPE)
+    where the mechanism is self-contained.
+12. **Step-by-step lifecycle walkthrough**: Immediately after the architecture diagram,
+    include a numbered prose walkthrough that traces one complete lifecycle through
+    the system (e.g., "a single inference step from scheduler to GPU output").
+    Each step names the component, cites `file:line`, and states what data moves
+    and why. The diagram shows *where* things are; the walkthrough shows *when*
+    and *why* they happen in that order.
 
 -----
 

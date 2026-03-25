@@ -1,12 +1,11 @@
 """
 autoresearch.llm — Centralized LLM calling layer.
 
-Single entry point for calling Claude and Gemini via apple_llm (floodgate API)
-with CLI fallback for Claude. Replaces scattered setup_apple_llm_path() calls
-and direct apple_llm imports across the codebase.
+Single entry point for calling Claude and Gemini via apple_llm (floodgate API).
+Replaces scattered setup_apple_llm_path() calls and direct apple_llm imports
+across the codebase.
 """
 
-import subprocess
 import sys
 
 from shared import REPO_ROOT
@@ -34,56 +33,42 @@ except ImportError:
 
 def call_claude(prompt: str, *, model: str = "sonnet",
                 timeout: int = 300, **kwargs) -> str | None:
-    """Call Claude via apple_llm (floodgate), falling back to CLI.
+    """Call Claude via apple_llm (floodgate).
 
-    Returns None on ANY failure (timeout, API error, empty response, missing CLI).
-    All callers treat None uniformly as "retry or skip" — no caller needs to
-    distinguish failure modes.
+    Returns None on any failure (timeout, API error, empty response).
+    All callers treat None uniformly as "retry or skip".
 
-    Extra kwargs (max_tokens, temperature, etc.) are passed through to apple_llm.
-    CLI fallback ignores extra kwargs.
+    Extra kwargs (max_tokens, thinking_budget, etc.) are passed through to apple_llm.
     """
-    if HAS_APPLE_LLM:
-        try:
-            result = _apple_claude(prompt, model=model, timeout=timeout, **kwargs)
-            return result if result else None
-        except Exception as e:
-            print(f"  Warning: apple_llm error: {e}", file=sys.stderr)
-            return None
-
+    if not HAS_APPLE_LLM:
+        print("  Error: apple_llm not available (required for Claude)", file=sys.stderr)
+        return None
     try:
-        result = subprocess.run(
-            ["claude", "--model", model, "--print", "-p", prompt],
-            capture_output=True, text=True, timeout=timeout,
-            cwd=str(REPO_ROOT),
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            print(f"  Warning: Claude CLI exited {result.returncode}: "
-                  f"{stderr or result.stdout.strip()[:200]}", file=sys.stderr)
-            return None
-        output = result.stdout.strip()
-        return output if output else None
-    except subprocess.TimeoutExpired:
-        print("  Warning: Claude CLI timed out", file=sys.stderr)
-        return None
-    except FileNotFoundError:
-        print("  Error: 'claude' CLI not found.", file=sys.stderr)
-        return None
+        result = _apple_claude(prompt, model=model, timeout=timeout, **kwargs)
+        if not result:
+            print(f"  Warning: floodgate Claude ({model}) returned empty response "
+                  f"(prompt: {len(prompt)} chars)", file=sys.stderr)
+        return result if result else None
     except Exception as e:
-        print(f"  Warning: Claude CLI error: {e}", file=sys.stderr)
+        print(f"  Warning: floodgate Claude ({model}) failed: {e}", file=sys.stderr)
         return None
 
 
 def call_gemini(prompt: str, *, model: str = "gemini-3-flash-preview",
-                timeout: int = 300) -> str | None:
-    """Call Gemini via apple_llm (floodgate). No CLI fallback."""
+                timeout: int = 300, **kwargs) -> str | None:
+    """Call Gemini via apple_llm (floodgate).
+
+    Extra kwargs (thinking_budget, etc.) are passed through to apple_llm.
+    """
     if not HAS_APPLE_LLM:
         print("  Error: apple_llm not available (required for Gemini)", file=sys.stderr)
         return None
     try:
-        result = _apple_gemini(prompt, model=model, timeout=timeout)
+        result = _apple_gemini(prompt, model=model, timeout=timeout, **kwargs)
+        if not result:
+            print(f"  Warning: floodgate Gemini ({model}) returned empty response "
+                  f"(prompt: {len(prompt)} chars)", file=sys.stderr)
         return result if result else None
     except Exception as e:
-        print(f"  Warning: Gemini error: {e}", file=sys.stderr)
+        print(f"  Warning: floodgate Gemini ({model}) failed: {e}", file=sys.stderr)
         return None

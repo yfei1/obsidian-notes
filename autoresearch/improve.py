@@ -172,7 +172,7 @@ def _get_rule_based_criteria(dimension: str) -> str | None:
 - Bidirectional: if this note links to [[X]], then X must link back to this note
 - Score = f(valid_links, broken_links, bidirectional_ratio)
 - Need ALL links bidirectional + context summaries for score 10
-- Add reverse links in target notes' linking sections (Connections or See Also) to improve bidirectionality""",
+- Add reverse links in target notes' linking sections (Connections, Related Concepts, or See Also) to improve bidirectionality""",
 
         "Code Quality": """SCORING CRITERIA (rule-based — Code Quality):
 - Code blocks MUST use a language tag (python, go, rust, etc.) to count as code
@@ -520,10 +520,11 @@ def main():
                 import importlib
                 import score as _score_mod
                 importlib.reload(_score_mod)
-                from score import clear_score_cache
-                clear_score_cache()
+                _score_mod.clear_score_cache()
                 global DIMENSIONS, ERROR_SCORE, DIMENSION_WEIGHTS
-                from score import DIMENSIONS, ERROR_SCORE, DIMENSION_WEIGHTS
+                DIMENSIONS = _score_mod.DIMENSIONS
+                ERROR_SCORE = _score_mod.ERROR_SCORE
+                DIMENSION_WEIGHTS = _score_mod.DIMENSION_WEIGHTS
 
         # Step 1: Score all notes
         print("\n[Step 1] Scoring all notes...")
