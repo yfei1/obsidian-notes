@@ -16,7 +16,9 @@ vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pai
 
 ## The Problem: Two Naming Worlds
 
-Training frameworks and inference frameworks evolve independently, so checkpoint tensor names diverge from vLLM's PyTorch module paths. `load_weights()` translates between them. For example, in the AFM v9 3B model (TAMM — internal codename):
+**A checkpoint tensor and its corresponding `nn.Parameter` can have completely different names** — because training frameworks and inference frameworks evolve independently, accumulating divergent naming conventions. Without translation, `params_dict[ckpt_name]` raises `KeyError` for every tensor: the checkpoint's names simply don't exist in the PyTorch module tree. `load_weights()` exists to bridge this gap: remap every checkpoint name to its PyTorch equivalent, then dispatch to the parameter's `weight_loader`. The remapping is the hard part; everything else is bookkeeping.
+
+For example, in the AFM v9 3B model (TAMM — internal codename):
 
 ```
 Checkpoint:  transformer.tamm_model.layers.segment_0.layer_0.attention.qkv_transform.fused_linear.weight
