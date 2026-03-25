@@ -1,0 +1,210 @@
+/* ── ml-notes.css ─────────────────────────────────────────────────────────────
+   Optimized for ML systems / distributed systems technical notes.
+   Catppuccin Mocha palette. Improves: code blocks, tables, callouts, wikilinks.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* ── Catppuccin Mocha variables ──────────────────────────────────────────── */
+:root {
+  --ctp-base:     #1e1e2e;
+  --ctp-mantle:   #181825;
+  --ctp-crust:    #11111b;
+  --ctp-surface0: #313244;
+  --ctp-surface1: #45475a;
+  --ctp-surface2: #585b70;
+  --ctp-overlay1: #7f849c;
+  --ctp-text:     #cdd6f4;
+  --ctp-sapphire: #74c7ec;
+  --ctp-sky:      #89dceb;
+  --ctp-teal:     #94e2d5;
+  --ctp-green:    #a6e3a1;
+  --ctp-yellow:   #f9e2af;
+  --ctp-peach:    #fab387;
+  --ctp-mauve:    #cba6f7;
+  --ctp-lavender: #b4befe;
+  --ctp-blue:     #89b4fa;
+  --ctp-red:      #f38ba8;
+  --ctp-flamingo: #f2cdcd;
+  --ctp-pink:     #f5c2e7;
+}
+
+/* ── Code blocks ─────────────────────────────────────────────────────────── */
+.markdown-rendered pre,
+.cm-s-obsidian .HyperMD-codeblock {
+  background-color: var(--ctp-mantle) !important;
+  border: 1px solid var(--ctp-surface1);
+  border-radius: 6px;
+}
+
+.markdown-rendered pre code {
+  font-size: 0.88em;
+  line-height: 1.6;
+  color: var(--ctp-text);
+}
+
+/* Inline code */
+.markdown-rendered code,
+.cm-inline-code {
+  background-color: var(--ctp-surface0);
+  color: var(--ctp-sapphire);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+
+/* ── Tables ──────────────────────────────────────────────────────────────── */
+.markdown-rendered table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 0.92em;
+}
+
+.markdown-rendered th {
+  background-color: var(--ctp-surface0);
+  color: var(--ctp-sapphire);
+  font-weight: 600;
+  padding: 6px 12px;
+  border-bottom: 2px solid var(--ctp-surface2);
+  text-align: left;
+}
+
+.markdown-rendered td {
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--ctp-surface1);
+}
+
+.markdown-rendered tr:nth-child(even) td {
+  background-color: rgba(49, 50, 68, 0.4);
+}
+
+.markdown-rendered tr:hover td {
+  background-color: rgba(116, 199, 236, 0.08);
+}
+
+/* ── Callouts ────────────────────────────────────────────────────────────── */
+.callout[data-callout="info"] {
+  --callout-color: 116, 199, 236;  /* sapphire */
+}
+
+.callout[data-callout="tip"] {
+  --callout-color: 166, 227, 161;  /* green */
+}
+
+.callout[data-callout="warning"] {
+  --callout-color: 249, 226, 175;  /* yellow */
+}
+
+.callout[data-callout="danger"] {
+  --callout-color: 243, 139, 168;  /* red */
+}
+
+.callout[data-callout="note"] {
+  --callout-color: 203, 166, 247;  /* mauve */
+}
+
+.callout {
+  border-radius: 6px;
+  padding: 10px 14px;
+}
+
+/* Collapsible callouts — reference material */
+.callout.is-collapsible .callout-title {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* ── Headers ─────────────────────────────────────────────────────────────── */
+.markdown-rendered h1 {
+  color: var(--ctp-mauve);
+  border-bottom: 2px solid var(--ctp-surface1);
+  padding-bottom: 4px;
+  font-size: 1.7em;
+}
+
+.markdown-rendered h2 {
+  color: var(--ctp-sapphire);
+  border-bottom: 1px solid var(--ctp-surface1);
+  padding-bottom: 2px;
+  font-size: 1.35em;
+  margin-top: 1.6em;
+}
+
+.markdown-rendered h3 {
+  color: var(--ctp-teal);
+  font-size: 1.15em;
+  margin-top: 1.2em;
+}
+
+.markdown-rendered h4 {
+  color: var(--ctp-green);
+  font-size: 1.0em;
+}
+
+/* ── Wikilinks ───────────────────────────────────────────────────────────── */
+.markdown-rendered .internal-link {
+  color: var(--ctp-blue);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--ctp-blue);
+}
+
+.markdown-rendered .internal-link:hover {
+  color: var(--ctp-lavender);
+  border-bottom-style: solid;
+}
+
+/* Unresolved / dangling wikilinks */
+.markdown-rendered .internal-link.is-unresolved {
+  color: var(--ctp-overlay1);
+  border-bottom-color: var(--ctp-overlay1);
+}
+
+/* ── Tags ────────────────────────────────────────────────────────────────── */
+.markdown-rendered .tag {
+  background-color: var(--ctp-surface0);
+  color: var(--ctp-peach);
+  border-radius: 12px;
+  padding: 1px 8px;
+  font-size: 0.82em;
+  text-decoration: none;
+}
+
+/* ── TL;DR section highlight ─────────────────────────────────────────────── */
+/* Make the first blockquote after ## TL;DR stand out */
+.markdown-rendered h2 + p,
+.markdown-rendered h2 + blockquote {
+  font-size: 0.97em;
+  line-height: 1.65;
+}
+
+/* ── Horizontal rules ────────────────────────────────────────────────────── */
+.markdown-rendered hr {
+  border: none;
+  border-top: 1px solid var(--ctp-surface1);
+  margin: 1.5em 0;
+}
+
+/* ── Bold in running text — use peach for emphasis ───────────────────────── */
+.markdown-rendered strong {
+  color: var(--ctp-peach);
+}
+
+/* ── Blockquotes (checkpoint callouts) ───────────────────────────────────── */
+.markdown-rendered blockquote {
+  border-left: 3px solid var(--ctp-teal);
+  background-color: rgba(148, 226, 213, 0.06);
+  padding: 6px 12px;
+  border-radius: 0 4px 4px 0;
+  color: var(--ctp-text);
+  font-style: normal;
+}
+
+/* ── Reading view: wider content area ───────────────────────────────────── */
+.markdown-preview-view {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* ── Graph view: accent on nodes ────────────────────────────────────────── */
+.graph-view.color-fill {
+  color: var(--ctp-sapphire);
+}
