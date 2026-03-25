@@ -3,7 +3,7 @@
 
 ## TL;DR
 
-**Ray Compiled Graph was introduced to eliminate per-step `ray.remote()` overhead (~1-5 ms) in multi-GPU vLLM deployments.** The investigation shows it fails on its own terms: CG's scheduling dispatch (the per-step CPU work of telling workers what to run) is *slower* than MessageQueue (O(TP) sequential channel writes vs O(1) shared ring buffer), its PP data-plane path adds a CUDA stream sync bubble that MultiprocExecutor avoids, and TP/EP communication are 100% independent of CG regardless. The 10-15% Anyscale benchmark was measured before async scheduling existed — once async scheduling hides dispatch latency behind GPU compute, CG's dispatch overhead becomes a net negative.
+**Ray Compiled Graph was introduced to eliminate per-step `ray.remote()` overhead (~1-5 ms) in multi-GPU vLLM deployments.** The investigation shows it fails on its own terms: CG's scheduling dispatch (the per-step CPU work of telling workers what to run) is *slower* than MessageQueue — a shared-memory ring buffer all workers read from — because CG writes to each worker's channel sequentially (O(TP) writes) while MessageQueue writes once (O(1)). TP/EP communication are 100% independent of CG, and CG's PP data-plane path adds a CUDA stream sync bubble that MultiprocExecutor avoids. The 10-15% Anyscale benchmark was measured before async scheduling (overlapping CPU dispatch with GPU compute) existed — once async scheduling hides dispatch latency behind GPU compute, CG's remaining dispatch overhead becomes a net negative.
 
 Prerequisites: [[ml-systems/vllm-executor-architecture]], [[ml-systems/ray-compiled-graph-in-vllm]]
 
@@ -13,7 +13,7 @@ Prerequisites: [[ml-systems/vllm-executor-architecture]], [[ml-systems/ray-compi
 
 **The problem CG was meant to solve**: every decode step with a naive Ray executor calls `ray.remote()` per worker — ~1-5 ms of Python/RPC overhead that dominates short decode steps. CG replaces this with pre-compiled DAG channels and pickle-over-SHM dispatch, targeting sub-millisecond control-plane cost.
 
-**Why it underdelivers**: CG writes to each worker's channel sequentially (O(TP) writes), while MultiprocExecutor writes once to a shared ring buffer (a circular fixed-size queue in shared memory) all workers read from (O(1)). For TP=4, CG costs ~300 us-1 ms vs MessageQueue's ~100-300 us — and both are dominated by pickle serialization anyway. The PP path adds a `stream.synchronize()` bubble (~5-15 us) that MultiprocExecutor's async `irecv` avoids. Async scheduling (v0.15.0) then hid dispatch latency behind GPU compute entirely, making CG's remaining overhead a pure cost with no benefit.
+**Why it underdelivers**: CG writes to each worker's channel sequentially (O(TP) writes), while MultiprocExecutor's MessageQueue (a circular fixed-size queue in shared memory) lets all workers read from a single write (O(1)). For TP=4, CG costs ~300 us–1 ms vs MessageQueue's ~100-300 us — and both are dominated by pickle serialization anyway. The PP path adds a `stream.synchronize()` bubble (~5-15 us) that MultiprocExecutor's async `irecv` avoids. Async scheduling (added in v0.15.0, overlaps CPU dispatch with ongoing GPU compute) then hid dispatch latency behind GPU compute entirely, making CG's remaining overhead a pure cost with no benefit.
 
 Running example throughout: **Llama 70B, PP=2, TP=4, 8 H100s, batch_size=128.**
 
@@ -31,7 +31,7 @@ CG dispatch is O(TP) sequential writes (~300 us-1 ms); MQ is O(1) (~100-300 us) 
 
 **Why this matters**: Establishes the baseline — if MessageQueue is already ~100-300 us, CG's target of "sub-millisecond dispatch" provides near-zero improvement.
 
-~100-300 us end-to-end, pickle-dominated (70-80%). Full breakdown in [[ml-systems/vllm-executor-architecture#MessageQueue: The Broadcast Channel]]. The unique finding: workers use `SpinCondition` (`shm_broadcast.py:171-196`) — spin-polling at ~300 ns per iteration during active serving (within 1 second of last read), falling back to ZMQ `poll()` only after 1 second idle. During inference, workers are always spinning, so wake-up latency is effectively zero.
+~100-300 us end-to-end, pickle-dominated (70-80%). Full breakdown in [[ml-systems/vllm-executor-architecture#MessageQueue: The Broadcast Channel]]. The unique finding: workers use `SpinCondition` (`shm_broadcast.py:171-196`) — spin-polling (busy-looping to check a flag, ~300 ns per iteration) during active serving (within 1 second of last read), falling back to ZMQ (a messaging library) `poll()` only after 1 second idle. During inference, workers are always spinning, so wake-up latency is effectively zero.
 
 ---
 
@@ -53,7 +53,7 @@ CG dispatch is O(TP) sequential writes (~300 us-1 ms); MQ is O(1) (~100-300 us) 
 
 ## Q5: Multi-Node TP with CG
 
-CG adds **minimal value**. The DAG fans out SchedulerOutput to all TP workers (`ray_executor.py:590`). All actual TP communication — allreduce (summing partial results across all TP workers, defined in Q6) during model forward — goes through `torch.distributed` NCCL, completely independent of CG.
+CG adds **minimal value**. The DAG fans out SchedulerOutput to all TP workers (`ray_executor.py:590`). All actual TP communication during model forward goes through `torch.distributed` NCCL, completely independent of CG. TP uses **allreduce** (each worker holds a partial result from its shard; allreduce sums them so every worker ends up with the full result) and **allgather** (each worker holds a tensor shard; allgather concatenates all shards into the full tensor on every worker) — both are GPU collectives with no CG involvement.
 
 For TP=16 across 2 nodes: CG dispatches SchedulerOutput to 16 workers (O(16) sequential channel writes). Cross-node NCCL allreduce dominates iteration time. CG's O(TP) dispatch adds <1% to the step.
 
@@ -65,7 +65,7 @@ For TP=16 across 2 nodes: CG dispatches SchedulerOutput to 16 workers (O(16) seq
 
 `broadcast_tensor_dict()` (`parallel_state.py:712`) uses `torch.distributed.broadcast()` to replicate GPU tensors within a process group. In v1, it is used for PP logits broadcast (`gpu_model_runner.py:3873`) — **not** for SchedulerOutput dispatch.
 
-TP workers need to combine partial results after each layer. This uses GPU collective operations — **allreduce** (sum each worker's partial result into a full result on every worker) and **allgather** (concatenate each worker's shard into the full tensor) — implemented via `CudaCommunicator` (`cuda_communicator.py:180`). None of these interact with CG.
+TP allreduce and allgather (defined in Q5) are implemented via `CudaCommunicator` (`cuda_communicator.py:180`). None of these interact with CG.
 
 ---
 
@@ -83,7 +83,7 @@ TP allreduce/allgather within attention and MLP layers **are** captured (in PIEC
 
 **Why this matters**: Shows that GPU compute dominates (~90% of step time), making the dispatch difference between CG and MQ <3% — the core argument for CG removal.
 
-PP activation tensor: `hidden_states` [128, 8192] + `residual` [128, 8192] in bf16 = 128 × (8192 × 2 bytes × 2 tensors) = **4 MiB**.
+PP activation tensor: `hidden_states` [128, 8192] + `residual` [128, 8192] in bf16 (bfloat16 — 2 bytes per value) = 128 × (8192 × 2 bytes × 2 tensors) = **4 MiB**.
 
 | Component | CG Path | MQ Path | % of step |
 |-----------|---------|---------|-----------|
@@ -97,7 +97,7 @@ PP activation tensor: `hidden_states` [128, 8192] + `residual` [128, 8192] in bf
 
 ## Q9: EP + DeepEP in Multi-Node MoE
 
-**EP is 100% independent of CG.** `grep "compiled_dag|forward_dag"` across `vllm/distributed/` and `vllm/model_executor/layers/fused_moe/` returns zero matches. All 8 EP backends (`all2all.py`) use `torch.distributed` process groups or custom libraries (DeepEP NVLink/RDMA, flashinfer NVLink, nixl RDMA, mori RDMA). CG removal has zero EP impact.
+**EP is 100% independent of CG.** `grep "compiled_dag|forward_dag"` across `vllm/distributed/` and `vllm/model_executor/layers/fused_moe/` returns zero matches. All 8 EP backends (`all2all.py`) use `torch.distributed` process groups (named subsets of ranks that share a communicator) or custom libraries (DeepEP NVLink/RDMA, flashinfer NVLink, nixl RDMA, mori RDMA). CG removal has zero EP impact.
 
 ---
 
@@ -110,8 +110,8 @@ PR #36836 benchmarks (Qwen3-8B, TP=4, L4 GPUs) — full analysis in [[ml-systems
 | Metric | MP Backend | Ray CG | Ray V2 + Async |
 |--------|-----------|--------|----------------|
 | Throughput (tok/s) | 1193 | 1187 | 1193 |
-| TTFT (ms) | 117 | **86** | 119 |
-| TPOT (ms) | **41** | 46 | **41** |
+| TTFT — time to first token (ms) | 117 | **86** | 119 |
+| TPOT — time per output token (ms) | **41** | 46 | **41** |
 
 CG's lower TTFT (86 vs 117 ms): no batch queue fill delay. CG's worse TPOT (46 vs 41 ms): O(TP) synchronous dispatch per step. **The 10-15% claim predates async scheduling (v0.15.0)** — back then `ray.remote()` overhead (~1-5 ms) was on the critical path; CG reduced it to ~300 us. Async scheduling zeroes out this advantage.
 
@@ -125,8 +125,8 @@ By default (`"auto"`), CG picks NCCL for GPU-to-GPU PP transfers and shared memo
 
 | Channel Type | PP Path | Performance |
 |-------------|---------|-------------|
-| `"nccl"` / `"auto"` (default) | NCCL via RayPPCommunicator → vLLM pynccl | GPU-direct |
-| `"shm"` | Default SHM channel (CPU round-trip) | ~100x slower for large tensors |
+| `"nccl"` / `"auto"` (default) | NCCL via RayPPCommunicator → vLLM pynccl | GPU-direct (no CPU in data path) |
+| `"shm"` | Default SHM channel (CPU round-trip: GPU→CPU→SHM→CPU→GPU) | ~100x slower for large tensors |
 
 ---
 
