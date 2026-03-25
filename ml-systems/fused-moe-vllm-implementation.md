@@ -2,7 +2,7 @@
 
 #ml-systems #vllm #implementation
 
-**Prerequisites**: [[ml-systems/mixture-of-experts]] (MoE architecture, router, expert dispatch), [[ml-systems/vllm-weight-loading]] (weight_loader convention).
+**Prerequisites**: [[ml-systems/mixture-of-experts]] (MoE architecture, router, expert dispatch), [[ml-systems/vllm-weight-loading]] (weight_loader convention), [[ml-systems/tensor-parallelism]] (TP rank, column-parallel vs replicated linear).
 
 ## Role in System
 
@@ -165,6 +165,8 @@ Access via `getattr(param, "weight_loader", default_weight_loader)`. All vLLM pa
 ## Related Concepts
 
 - [[ml-systems/mixture-of-experts]] — MoE architecture, routing mechanism, parameter counts, FusedMoE kernel concept
+- [[ml-systems/pt-moe-architecture]] — the model architecture this note implements
 - [[ml-systems/vllm-weight-loading]] — weight_loader convention used by all vLLM parallel layers
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE vLLM implementation using FusedMoE + ReplicatedLinear
-- [[ml-systems/parallelism-strategies]] — tensor parallelism and why ReplicatedLinear is needed for the router
+- [[ml-systems/tensor-parallelism]] — TP rank sharding mechanics; why ColumnParallelLinear breaks router consistency
+- [[ml-systems/parallelism-strategies]] — broader parallelism taxonomy
