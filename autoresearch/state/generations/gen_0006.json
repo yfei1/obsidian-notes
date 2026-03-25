@@ -1,0 +1,17 @@
+{
+  "generation": 6,
+  "target": "ml-systems/vllm-distributed-groups.md",
+  "strategies": [
+    "consolidate",
+    "clarify",
+    "motivate"
+  ],
+  "num_valid_deltas": 3,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "clarify",
+  "winner_advantage": 1.3867504905630728,
+  "affected_files": [
+    "ml-systems/vllm-distributed-groups.md"
+  ]
+}

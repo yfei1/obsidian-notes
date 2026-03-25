@@ -1,0 +1,17 @@
+{
+  "generation": 18,
+  "target": "ml-systems/vllm-weight-loading.md",
+  "strategies": [
+    "densify",
+    "consolidate",
+    "clarify"
+  ],
+  "num_valid_deltas": 2,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "clarify",
+  "winner_advantage": 1.414213562373095,
+  "affected_files": [
+    "ml-systems/vllm-weight-loading.md"
+  ]
+}

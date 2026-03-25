@@ -1,0 +1,17 @@
+{
+  "generation": 30,
+  "target": "ml-systems/pt-moe-vllm-implementation.md",
+  "strategies": [
+    "clarify",
+    "dedup",
+    "systematize"
+  ],
+  "num_valid_deltas": 2,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "clarify",
+  "winner_advantage": 1.3587324409735149,
+  "affected_files": [
+    "ml-systems/pt-moe-vllm-implementation.md"
+  ]
+}

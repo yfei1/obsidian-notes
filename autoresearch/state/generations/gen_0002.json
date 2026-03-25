@@ -1,0 +1,17 @@
+{
+  "generation": 2,
+  "target": "ml-systems/parallelism-strategies.md",
+  "strategies": [
+    "split",
+    "densify",
+    "clarify"
+  ],
+  "num_valid_deltas": 3,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "clarify",
+  "winner_advantage": 1.4444444444444444,
+  "affected_files": [
+    "ml-systems/parallelism-strategies.md"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "generation": 31,
+  "target": "distributed-systems/chandy-lamport.md",
+  "strategies": [
+    "clarify",
+    "densify",
+    "systematize"
+  ],
+  "num_valid_deltas": 2,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "clarify",
+  "winner_advantage": 1.224744871391589,
+  "affected_files": [
+    "distributed-systems/chandy-lamport.md"
+  ]
+}

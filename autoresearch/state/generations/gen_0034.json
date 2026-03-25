@@ -1,0 +1,17 @@
+{
+  "generation": 34,
+  "target": "ml-systems/parallel-track-architecture.md",
+  "strategies": [
+    "clarify",
+    "dedup",
+    "systematize"
+  ],
+  "num_valid_deltas": 3,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "clarify",
+  "winner_advantage": 1.6666666666666667,
+  "affected_files": [
+    "ml-systems/parallel-track-architecture.md"
+  ]
+}

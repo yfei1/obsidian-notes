@@ -1,0 +1,17 @@
+{
+  "generation": 25,
+  "target": "ml-systems/prefix-caching.md",
+  "strategies": [
+    "restructure",
+    "scope_tighten",
+    "systematize"
+  ],
+  "num_valid_deltas": 2,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "systematize",
+  "winner_advantage": 1.0690449676496976,
+  "affected_files": [
+    "ml-systems/prefix-caching.md"
+  ]
+}

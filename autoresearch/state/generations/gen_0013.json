@@ -1,0 +1,17 @@
+{
+  "generation": 13,
+  "target": "ml-systems/kv-cache-internals.md",
+  "strategies": [
+    "clarify",
+    "densify",
+    "rewrite"
+  ],
+  "num_valid_deltas": 3,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "clarify",
+  "winner_advantage": 1.5554275420956378,
+  "affected_files": [
+    "ml-systems/kv-cache-internals.md"
+  ]
+}

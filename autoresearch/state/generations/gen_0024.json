@@ -1,0 +1,6 @@
+{
+  "generation": 24,
+  "target": "ml-systems/parallelism-strategies.md",
+  "outcome": "vetoed",
+  "strategy": "split"
+}

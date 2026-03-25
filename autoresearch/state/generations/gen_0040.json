@@ -1,0 +1,17 @@
+{
+  "generation": 40,
+  "target": "data-processing/lance-vs-parquet.md",
+  "strategies": [
+    "clarify",
+    "motivate",
+    "systematize"
+  ],
+  "num_valid_deltas": 2,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "clarify",
+  "winner_advantage": 1.2247448713915892,
+  "affected_files": [
+    "data-processing/lance-vs-parquet.md"
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "generation": 19,
+  "target": "ml-systems/tensor-parallelism.md",
+  "strategies": [
+    "clarify",
+    "densify",
+    "concretize"
+  ],
+  "num_valid_deltas": 2,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "densify",
+  "winner_advantage": 1.3587324409735149,
+  "affected_files": [
+    "ml-systems/tensor-parallelism.md"
+  ]
+}

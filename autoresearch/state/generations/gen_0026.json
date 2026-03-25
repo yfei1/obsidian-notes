@@ -1,0 +1,17 @@
+{
+  "generation": 26,
+  "target": "ml-systems/mixture-of-experts.md",
+  "strategies": [
+    "densify",
+    "dedup",
+    "systematize"
+  ],
+  "num_valid_deltas": 3,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "densify",
+  "winner_advantage": 1.709408646894569,
+  "affected_files": [
+    "ml-systems/mixture-of-experts.md"
+  ]
+}

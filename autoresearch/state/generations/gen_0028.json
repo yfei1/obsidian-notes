@@ -1,0 +1,17 @@
+{
+  "generation": 28,
+  "target": "ml-systems/vllm-weight-loading.md",
+  "strategies": [
+    "densify",
+    "dedup",
+    "systematize"
+  ],
+  "num_valid_deltas": 3,
+  "num_valid_judges": 5,
+  "outcome": "adopted",
+  "winner": "densify",
+  "winner_advantage": 1.2686700948330931,
+  "affected_files": [
+    "ml-systems/vllm-weight-loading.md"
+  ]
+}
