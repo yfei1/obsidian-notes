@@ -1,1 +1,11 @@
-{}
+{
+  "accentColor": "#74c7ec",
+  "theme": "",
+  "cssTheme": "",
+  "baseFontSize": 16,
+  "enabledCssSnippets": [
+    "ml-notes",
+    "focus"
+  ],
+  "translucency": false
+}

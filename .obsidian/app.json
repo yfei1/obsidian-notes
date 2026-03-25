@@ -1,1 +1,10 @@
-{}
+{
+  "readableLineLength": true,
+  "showFrontmatter": false,
+  "showInlineTitle": true,
+  "foldHeading": true,
+  "foldIndent": true,
+  "showLineNumber": false,
+  "strictLineBreaks": false,
+  "spellcheck": false
+}
