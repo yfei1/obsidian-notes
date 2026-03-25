@@ -8,7 +8,7 @@
 
 ## TL;DR
 
-Standard Tensor Parallelism (TP) syncs GPUs after every layer — 96 times for a 48-layer model — because each GPU holds only a **shard** (a slice of the full weight matrix) and must combine partial results via **all_reduce** (a collective op that sums tensors across all GPUs) before the next layer can run. At scale, this communication dominates latency. Parallel Track (PT) solves this by splitting the model into N independent smaller transformers ("tracks"), each living entirely on its own GPU(s), so tracks need no coordination between layers. Tracks all_reduce only every D layers, reducing syncs from 2×48=96 to 48/4=12 — 8× fewer at D=4, 16× fewer at D=8. PT is orthogonal to TP: you can apply TP within each track AND PT across tracks. Used by Apple's AFM 150B model (8 tracks, D=4, 300 MoE experts).
+Standard Tensor Parallelism (TP) syncs GPUs after every layer — 96 times for a 48-layer model — because each GPU holds only a **shard** (a slice of the full weight matrix) and must combine partial results via **all_reduce** (a collective op that sums tensors across all GPUs) before the next layer can run. At scale, this communication dominates latency. Parallel Track (PT) solves this by splitting the model into N independent smaller transformers ("tracks"), each living entirely on its own GPU(s), so tracks need no coordination between layers. Tracks all_reduce only every D layers, reducing syncs from 2×48=96 to 48/4=12 — 8× fewer at D=4, 16× fewer at D=8. PT is orthogonal to TP: you can apply TP within each track AND PT across tracks. Used by AFM 150B model (8 tracks, D=4, 300 MoE experts).
 
 **Running example** (used throughout): 30B model, 8 tracks, 48 layers, hidden_dim=7168, 64 attention heads (head_dim=112), batch=1, seq_len=1024. Per-track: 8 heads, hidden_dim=7168, ~3.75B params.
 
@@ -68,7 +68,7 @@ PT's activation tensor is the same size as TP's per sync — the savings come en
 
 Tracks diverge freely between sync points because each has independent weights. A plain average collapses them back to a shared activation with zero extra parameters — unlike MoE routing, which adds a trainable router. The only design variable is D: larger D means fewer syncs (faster) but more divergence before averaging (higher quality risk).
 
-From the PT paper (Apple, Feb 2026):
+From the PT paper (Feb 2026):
 
 ```
 Input:  n=8 tracks, L=48 layers, block depth D=4, embedding input x
@@ -119,7 +119,7 @@ Total params across all tracks ≈ dense model params.
 
 "KV heads" here refers to the key/value projection heads in grouped-query attention (GQA — a post-2016 variant where multiple query heads share one key/value head to cut memory). PT reduces both Q and KV heads proportionally.
 
-From the paper's Table 1 (all use n=8 tracks): <!-- source: PT paper Table 1, Apple Feb 2026 -->
+From the paper's Table 1 (all use n=8 tracks): <!-- source: PT paper Table 1, Feb 2026 -->
 
 | Model | Layers | Total attn heads | Per-track attn heads | KV heads/track | Params/track |
 |-------|--------|-----------------|---------------------|----------------|---------------|
@@ -144,7 +144,7 @@ PT sacrifices per-layer capacity (fewer heads per track) for inference speed (fe
 13B model, D=8:  MMLU 0.583 → 0.575   ← barely noticeable (13B ÷ 8 = 1.6B params/track)
 30B model, D=8:  MMLU 0.629 → 0.618   ← ~1.7% drop   (30B ÷ 8 = 3.75B params/track)
 ```
-<!-- source: PT paper Table 2, Apple Feb 2026 -->
+<!-- source: PT paper Table 2, Feb 2026 -->
 
 **Rule of thumb**: PT works when each track ≥ ~2B params. Below that (e.g., 6B ÷ 8 = 750M/track), the track lacks capacity to model long-range dependencies, causing the MMLU collapse seen above.
 
@@ -216,12 +216,12 @@ PT tracks may look like MoE experts, but they differ fundamentally:
 | Communication | Periodic all_reduce (every D layers) | **All-to-all** dispatch per MoE layer (each GPU sends token activations to whichever GPU holds the selected expert) |
 | Parameters | Each track ≈ 1/N of total | Each expert = separate FFN weights |
 
-Apple's PT-MoE extension combines both: MoE sparsity within each track, track parallelism across tracks.
+PT-MoE extension combines both: MoE sparsity within each track, track parallelism across tracks.
 
 ---
 
 ## Performance Results (30B model, 8×H100)
-<!-- source: PT paper Table 3, Apple Feb 2026 -->
+<!-- source: PT paper Table 3, Feb 2026 -->
 
 | Metric | Dense | PT D=4 | PT D=8 |
 |--------|-------|--------|--------|

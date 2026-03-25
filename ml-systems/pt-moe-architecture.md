@@ -1,4 +1,4 @@
-# PT-MoE Architecture (Apple 150B)
+# PT-MoE Architecture (150B)
 
 #ml-systems #interview-prep
 

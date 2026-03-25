@@ -179,11 +179,11 @@ Our PT-MoE plugin patches `graph_capture()` at plugin load time. `_PT` is `None`
 @contextmanager
 def patched_graph_capture(device):
     # GOOD: module attribute access — reads _PT at call time (Phase 7)
-    import apple_ray_vllm_extension.models.afm_pt_moe as pt_mod
+    import ray_vllm_extension.models.afm_pt_moe as pt_mod
     pt_group = pt_mod._PT  # reads current value
 
     # BAD: from-import at closure scope — would snapshot None forever
-    # from apple_ray_vllm_extension.models.afm_pt_moe import _PT
+    # from ray_vllm_extension.models.afm_pt_moe import _PT
     # pt_group = _PT  # always None
 ```
 

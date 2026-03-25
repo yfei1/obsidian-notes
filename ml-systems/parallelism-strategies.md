@@ -231,9 +231,9 @@ vLLM and SGLang are **inference-only** engines. They do not perform backward pas
 
 ---
 
-## Architecture-Aware Parallelism: Apple PT-MoE
+## Architecture-Aware Parallelism: PT-MoE
 
-Apple's Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it's a model architecture redesign that removes the sequential layer dependencies that cause the PP bubble. Published in the [2025 Apple Foundation Models update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates).
+Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it's a model architecture redesign that removes the sequential layer dependencies that cause the PP bubble. Published in the 2025 Foundation Models update.
 
 ### How it works
 
@@ -293,7 +293,7 @@ Track independence maps directly to hardware:
 
 9. **"When do you compose strategies?"** — Standard recipe: TP within a node (NVLink), PP across nodes (InfiniBand handles activation-only transfers), DP for replicas, ZeRO-1/2 on top of DP to cut optimizer memory. For MoE, add EP alongside TP within a node. SP comes free with TP. CP only when sequences exceed ~64K tokens.
 
-10. **"What's Apple PT-MoE?"** — Not a new parallelism strategy. Redesigns the model into independent parallel tracks instead of sequential layers, eliminating the PP bubble because tracks share no activations until the merge point. TP and EP still apply within each track.
+10. **"What's PT-MoE?"** — Not a new parallelism strategy. Redesigns the model into independent parallel tracks instead of sequential layers, eliminating the PP bubble because tracks share no activations until the merge point. TP and EP still apply within each track.
 ---
 
 ## See Also
@@ -305,7 +305,7 @@ Track independence maps directly to hardware:
 - [[ml-systems/rotary-position-embedding]] — RoPE applied inside the QKV pipeline that tensor parallelism splits
 - [[ml-systems/vllm-weight-loading]] — `weight_loader` convention for TP-aware checkpoint loading
 - [[ml-systems/mixture-of-experts]] — MoE fundamentals, expert parallelism details
-- [[ml-systems/pt-moe-architecture]] — Apple's PT-MoE: 150B model architecture, sync point reduction
+- [[ml-systems/pt-moe-architecture]] — PT-MoE: 150B model architecture, sync point reduction
 - [[ml-systems/vllm-distributed-groups]] — vLLM process group internals, how TP/PP/EP groups are built and can be rebuilt
 - [[ml-systems/attention-mechanics]]
 - [[ml-systems/parallel-track-architecture]]

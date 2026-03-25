@@ -150,7 +150,7 @@ Router matmul FLOPs: 2 × 128 × 2048 × 300 = 157,286,400 ≈ 157M FLOPs
 > # router matmul: 157.3M FLOPs
 > ```
 
-This matmul is small (157M FLOPs vs ~9.4B FLOPs for 8 experts' SwiGLU at seq=128), but every MoE layer pays it regardless of batch content. Across 48 layers: 48 × 157M = 7.5B extra FLOPs per forward pass before any expert compute. Dense layers pay zero routing cost, so models mix dense and MoE layers — routing overhead only appears where specialized capacity justifies it. The mixing ratio is model-specific; see [[ml-systems/pt-moe-architecture]] for Apple's 3-dense-per-1-MoE cycle across 48 layers.
+This matmul is small (157M FLOPs vs ~9.4B FLOPs for 8 experts' SwiGLU at seq=128), but every MoE layer pays it regardless of batch content. Across 48 layers: 48 × 157M = 7.5B extra FLOPs per forward pass before any expert compute. Dense layers pay zero routing cost, so models mix dense and MoE layers — routing overhead only appears where specialized capacity justifies it. The mixing ratio is model-specific; see [[ml-systems/pt-moe-architecture]] for 3-dense-per-1-MoE cycle across 48 layers.
 
 > **Verify expert FLOPs** (8 experts × SwiGLU, seq=128):
 > ```python
@@ -171,7 +171,7 @@ Without an **auxiliary loss** (a secondary loss term enforcing balanced routing)
 
 - **Capacity factor**: each expert accepts at most `capacity_factor × (seq_len / num_experts)` tokens per batch; overflow tokens are dropped or sent to a **fallback expert** (catch-all for tokens rejected by all selected experts)
 - **Load balancing loss**: penalizes the product of each expert's routing probability and its actual token load, so the optimizer spreads tokens evenly
-- **Top-k no-drop**: used in Apple PT-MoE — all top-k experts always process the token, eliminating silent token discard at the cost of no hard capacity bound
+- **Top-k no-drop**: used in PT-MoE — all top-k experts always process the token, eliminating silent token discard at the cost of no hard capacity bound
 
 ### Expert Parallelism vs Tensor Parallelism for MoE
 
@@ -246,7 +246,7 @@ Full implementation details — buffer shapes, shard_id mapping, per-expert load
 ## See Also
 
 - [[ml-systems/transformer-model-internals]] — dense FFN (SwiGLU) that MoE replaces
-- [[ml-systems/pt-moe-architecture]] — Apple's PT-MoE combining parallel tracks with MoE
+- [[ml-systems/pt-moe-architecture]] — PT-MoE combining parallel tracks with MoE
 - [[ml-systems/parallelism-strategies]] — expert parallelism vs tensor parallelism
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE vLLM implementation using FusedMoE + ReplicatedLinear
 - [[ml-systems/attention-mechanics]] — attention is unchanged by MoE
