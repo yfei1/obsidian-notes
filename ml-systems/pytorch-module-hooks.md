@@ -223,17 +223,17 @@ The bypass is silent: no error, identical output shape, hooks simply don't fire.
 
 ### `module.compile()` causes graph breaks on non-traceable hook Python
 
-`module.compile()` sets `_compiled_call_impl` and compiles `_call_impl` itself, tracing through hook dispatch logic. Any non-traceable Python inside a hook — e.g., `.item()` (which forces a GPU→CPU scalar transfer, breaking the static graph that `torch.compile` requires to optimize) — causes a **graph break**: the compiler abandons tracing at that point and falls back to slow Python execution for the remainder.
+`module.compile()` sets `_compiled_call_impl` and compiles `_call_impl` itself — tracing through hook dispatch logic, not just `forward()`. `torch.compile` requires a static computation graph: all control flow and data movement must be traceable ahead of time. Any hook containing `.item()` breaks this because `.item()` forces a GPU→CPU scalar transfer at runtime, which is a dynamic data-dependent operation the tracer cannot represent statically. The compiler hits the `.item()` call, emits a **graph break**, and falls back to slow Python execution for the remainder of that call.
 
 `@torch.compile` applied to `forward()` does not set `_compiled_call_impl`, so hooks remain outside the compiled region entirely — no graph break risk.
 
 ### `@torch.compile` on a single op regresses performance
 
-`torch.compile` gains by fusing multiple small ops into fewer GPU kernels. A single matmul is already one cuBLAS (NVIDIA's GPU linear algebra library) kernel with nothing to fuse — compile overhead produces a slight regression (18.4µs → 19.1µs on A100).
+`torch.compile` gains by fusing multiple small ops into fewer GPU kernels, reducing total kernel launch overhead. A single matmul is already one cuBLAS (NVIDIA's GPU linear algebra library) kernel — there are no adjacent ops to fuse with, so the fusion benefit is zero. Compile overhead (tracing, optimization passes) then exceeds the gain, producing a slight regression (18.4µs → 19.1µs on A100).
 
 ### CUDA graphs and hooks: capture vs. replay
 
-CUDA graphs (`torch.cuda.CUDAGraph`) eliminate CPU dispatch overhead (~4× speedup on LLaMA-7B decode) by recording all kernel launches once (**graph capture**) and replaying the recording without CPU involvement. Hooks fire during capture but are not replayed on each subsequent step — hook side effects (logging, shape checks) run once, not on every decode step.
+CUDA graphs (`torch.cuda.CUDAGraph`) eliminate CPU dispatch overhead (~4× speedup on LLaMA-7B decode) by recording all GPU kernel launches once (**graph capture**) and replaying that recording on subsequent steps without CPU involvement. Hooks are Python callframes, not GPU kernel launches — they execute during capture but are not part of the recorded kernel sequence. On replay, only the kernel sequence runs; the Python hook callframes do not. Hook side effects (logging, shape checks) therefore run once at capture time, not on every decode step.
 
 Full benchmarks, stack traces, and the three-mechanism comparison table: [[ml-systems/torch-compile-cuda-graphs-hook-interaction]].
 
