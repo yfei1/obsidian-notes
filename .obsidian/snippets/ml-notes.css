@@ -1,10 +1,11 @@
 /* ── ml-notes.css ─────────────────────────────────────────────────────────────
-   Optimized for ML systems / distributed systems technical notes.
-   Catppuccin Mocha palette. Improves: code blocks, tables, callouts, wikilinks.
+   Content styling for ML / distributed systems technical notes.
+   Dual-mode: Catppuccin Mocha (dark) + Catppuccin Latte (light).
+   All content rules use var(--ctp-*) so they adapt to the active mode.
    ──────────────────────────────────────────────────────────────────────────── */
 
-/* ── Catppuccin Mocha variables ──────────────────────────────────────────── */
-:root {
+/* ── Catppuccin Mocha (dark) ───────────────────────────────────────────────── */
+.theme-dark {
   --ctp-base:     #1e1e2e;
   --ctp-mantle:   #181825;
   --ctp-crust:    #11111b;
@@ -13,6 +14,7 @@
   --ctp-surface2: #585b70;
   --ctp-overlay1: #7f849c;
   --ctp-text:     #cdd6f4;
+  --ctp-subtext0: #a6adc8;
   --ctp-sapphire: #74c7ec;
   --ctp-sky:      #89dceb;
   --ctp-teal:     #94e2d5;
@@ -25,11 +27,44 @@
   --ctp-red:      #f38ba8;
   --ctp-flamingo: #f2cdcd;
   --ctp-pink:     #f5c2e7;
+  --ctp-stripe:   rgba(49, 50, 68, 0.4);
+  --ctp-row-hover: rgba(116, 199, 236, 0.08);
+  --ctp-bq-bg:   rgba(148, 226, 213, 0.06);
 }
 
+/* ── Catppuccin Latte (light) ──────────────────────────────────────────────── */
+.theme-light {
+  --ctp-base:     #eff1f5;
+  --ctp-mantle:   #e6e9ef;
+  --ctp-crust:    #dce0e8;
+  --ctp-surface0: #ccd0da;
+  --ctp-surface1: #bcc0cc;
+  --ctp-surface2: #acb0be;
+  --ctp-overlay1: #8c8fa1;
+  --ctp-text:     #4c4f69;
+  --ctp-subtext0: #6c6f85;
+  --ctp-sapphire: #209fb5;
+  --ctp-sky:      #04a5e5;
+  --ctp-teal:     #179299;
+  --ctp-green:    #40a02b;
+  --ctp-yellow:   #df8e1d;
+  --ctp-peach:    #fe640b;
+  --ctp-mauve:    #8839ef;
+  --ctp-lavender: #7287fd;
+  --ctp-blue:     #1e66f5;
+  --ctp-red:      #d20f39;
+  --ctp-flamingo: #dd7878;
+  --ctp-pink:     #ea76cb;
+  --ctp-stripe:   rgba(172, 176, 190, 0.25);
+  --ctp-row-hover: rgba(32, 159, 181, 0.08);
+  --ctp-bq-bg:   rgba(23, 146, 153, 0.06);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* All rules below use var(--ctp-*) — they work in BOTH modes automatically  */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
 /* ── Code blocks ─────────────────────────────────────────────────────────── */
-/* surface0 is LIGHTER than base — code blocks elevate above the editor bg   */
-/* so they pop instead of sinking into the background                        */
 .markdown-rendered pre,
 .cm-s-obsidian .HyperMD-codeblock {
   background-color: var(--ctp-surface0) !important;
@@ -75,40 +110,25 @@
 }
 
 .markdown-rendered tr:nth-child(even) td {
-  background-color: rgba(49, 50, 68, 0.4);
+  background-color: var(--ctp-stripe);
 }
 
 .markdown-rendered tr:hover td {
-  background-color: rgba(116, 199, 236, 0.08);
+  background-color: var(--ctp-row-hover);
 }
 
 /* ── Callouts ────────────────────────────────────────────────────────────── */
-.callout[data-callout="info"] {
-  --callout-color: 116, 199, 236;  /* sapphire */
-}
-
-.callout[data-callout="tip"] {
-  --callout-color: 166, 227, 161;  /* green */
-}
-
-.callout[data-callout="warning"] {
-  --callout-color: 249, 226, 175;  /* yellow */
-}
-
-.callout[data-callout="danger"] {
-  --callout-color: 243, 139, 168;  /* red */
-}
-
-.callout[data-callout="note"] {
-  --callout-color: 203, 166, 247;  /* mauve */
-}
+.callout[data-callout="info"]    { --callout-color: var(--ctp-sapphire); }
+.callout[data-callout="tip"]     { --callout-color: var(--ctp-green); }
+.callout[data-callout="warning"] { --callout-color: var(--ctp-yellow); }
+.callout[data-callout="danger"]  { --callout-color: var(--ctp-red); }
+.callout[data-callout="note"]    { --callout-color: var(--ctp-mauve); }
 
 .callout {
   border-radius: 6px;
   padding: 10px 14px;
 }
 
-/* Collapsible callouts — reference material */
 .callout.is-collapsible .callout-title {
   cursor: pointer;
   user-select: none;
@@ -153,7 +173,6 @@
   border-bottom-style: solid;
 }
 
-/* Unresolved / dangling wikilinks */
 .markdown-rendered .internal-link.is-unresolved {
   color: var(--ctp-overlay1);
   border-bottom-color: var(--ctp-overlay1);
@@ -170,7 +189,6 @@
 }
 
 /* ── TL;DR section highlight ─────────────────────────────────────────────── */
-/* Make the first blockquote after ## TL;DR stand out */
 .markdown-rendered h2 + p,
 .markdown-rendered h2 + blockquote {
   font-size: 0.97em;
@@ -184,29 +202,29 @@
   margin: 1.5em 0;
 }
 
-/* ── Bold in running text — use peach for emphasis ───────────────────────── */
+/* ── Bold ────────────────────────────────────────────────────────────────── */
 .markdown-rendered strong {
   color: var(--ctp-peach);
 }
 
-/* ── Blockquotes (checkpoint callouts) ───────────────────────────────────── */
+/* ── Blockquotes ─────────────────────────────────────────────────────────── */
 .markdown-rendered blockquote {
   border-left: 3px solid var(--ctp-teal);
-  background-color: rgba(148, 226, 213, 0.06);
+  background-color: var(--ctp-bq-bg);
   padding: 6px 12px;
   border-radius: 0 4px 4px 0;
   color: var(--ctp-text);
   font-style: normal;
 }
 
-/* ── Reading view: wider content area ───────────────────────────────────── */
+/* ── Reading view ────────────────────────────────────────────────────────── */
 .markdown-preview-view {
   max-width: 900px;
   margin: 0 auto;
   padding: 0 24px;
 }
 
-/* ── Graph view: accent on nodes ────────────────────────────────────────── */
+/* ── Graph view ──────────────────────────────────────────────────────────── */
 .graph-view.color-fill {
   color: var(--ctp-sapphire);
 }

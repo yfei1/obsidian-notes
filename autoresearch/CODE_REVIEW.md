@@ -343,7 +343,7 @@ This happens only in periodic calibration path. Alternatives:
 
 ## Recommendations (Priority Order)
 
-### 🟡 Low Priority (Style Improvement)
+### ~ Low Priority (Style Improvement)
 
 1. **Consolidate sys.path setup** to shared.py (saves 6 lines, improves startup coherence)
    - Move `_init_sys_path()` function to shared.py

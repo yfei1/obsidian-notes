@@ -115,12 +115,12 @@ Durability requires only that the ledger survives process restarts — either pe
 
 | Framework | Morsel-driven? | Notes |
 |---|---|---|
-| **DuckDB** | ＋ | Single-node, in-process |
-| **Daft** | ＋ | Distributed (Ray or standalone) |
-| **Umbra** | ＋ | Research DB from TU Munich (original paper) |
-| **DataFusion** | ⚠️ Partial | Pull-based but with morsel-like partitioning |
-| **Spark** | － | Task-based (one task per partition, static assignment) |
-| **Flink** | － | Operator-based streaming |
+| **DuckDB** | + | Single-node, in-process |
+| **Daft** | + | Distributed (Ray or standalone) |
+| **Umbra** | + | Research DB from TU Munich (original paper) |
+| **DataFusion** | ~ Partial | Pull-based but with morsel-like partitioning |
+| **Spark** | - | Task-based (one task per partition, static assignment) |
+| **Flink** | - | Operator-based streaming |
 
 ---
 

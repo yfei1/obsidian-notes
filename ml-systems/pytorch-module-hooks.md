@@ -208,7 +208,7 @@ TEST: model.forward(x) — calling forward() DIRECTLY
 Calling model.forward(x) directly...
 📍 INSIDE forward()  [4, 512] → [4, 128]
 Output: torch.Size([4, 128])
-⚠️  Notice: NO hooks fired! pre-hook and post-hook were SKIPPED!
+~  Notice: NO hooks fired! pre-hook and post-hook were SKIPPED!
 
 Calling model(x) the correct way...
 🔵 PRE-HOOK  | input  shape: torch.Size([4, 512]) | min: -3.421

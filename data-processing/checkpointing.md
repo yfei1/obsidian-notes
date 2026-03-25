@@ -187,10 +187,10 @@ Column Link approach:
 **Why Lance, not Parquet?** Lance stores columns as separate fragment files. Adding a column = write new fragment + update manifest. Parquet requires rewriting the entire file. See [[data-processing/lance-vs-parquet]] for details.
 
 ### Limitations of Column Link
-- ＋ Works for GroupBy/aggregate (replace with storage read)
-- － Does NOT work for global sort (ordering requires seeing all data)
-- － Does NOT work for repartition (data movement, not aggregation)
-- ⚠️ At extreme scale: manifest updates serialize, S3 prefix throttling (~5500 PUT/s)
+- + Works for GroupBy/aggregate (replace with storage read)
+- - Does NOT work for global sort (ordering requires seeing all data)
+- - Does NOT work for repartition (data movement, not aggregation)
+- ~ At extreme scale: manifest updates serialize, S3 prefix throttling (~5500 PUT/s)
 
 ---
 
@@ -244,7 +244,7 @@ A design for morsel-driven engines (Daft) where map pipelines dominate. See [[da
 | `Map → Map → Sink` (expensive maps) | Hybrid lease + materialize   | Avoid recomputing expensive stage     |
 | `Map → Shuffle(GroupBy) → Map`      | Column Link / Identifier ACK | Only approaches that handle shuffle   |
 | `Map(CPU) → Map(GPU)`               | Materialize at handoff       | Different resources need data handoff |
-| Global Sort                         | － Avoid                      | No good answer in any framework       |
+| Global Sort                         | - Avoid                      | No good answer in any framework       |
 
 ---
 

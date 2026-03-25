@@ -1,96 +1,150 @@
 /* ── focus.css ────────────────────────────────────────────────────────────────
-   Extends Catppuccin Mocha to the full Obsidian UI + focus/layout/mobile.
+   Extends Catppuccin to the full Obsidian UI. Dual-mode: Mocha + Latte.
    ml-notes.css handles content styling — this file handles everything else.
-
-   Design approach: use ONLY Catppuccin Mocha palette colors. No custom palette.
-   Obsidian's syntax highlighting expects certain background brightness levels;
-   staying within the Catppuccin family keeps all color relationships intact.
    ──────────────────────────────────────────────────────────────────────────── */
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
-/* APP-WIDE CATPPUCCIN MOCHA                                                 */
-/* Maps every Obsidian surface/text variable to the Catppuccin Mocha palette  */
+/* DARK MODE — Catppuccin Mocha                                              */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
 .theme-dark {
-  /* Surfaces */
-  --background-primary:           #1e1e2e;  /* base   */
-  --background-primary-alt:       #181825;  /* mantle */
-  --background-secondary:         #181825;  /* mantle */
-  --background-secondary-alt:     #11111b;  /* crust  */
-  --background-modifier-border:   #313244;  /* surface0 */
+  --background-primary:           #1e1e2e;
+  --background-primary-alt:       #181825;
+  --background-secondary:         #181825;
+  --background-secondary-alt:     #11111b;
+  --background-modifier-border:   #313244;
   --background-modifier-form-field: #313244;
   --background-modifier-form-field-highlighted: #45475a;
   --background-modifier-box-shadow: rgba(17, 17, 27, 0.6);
-  --background-modifier-success:  #a6e3a1;  /* green */
-  --background-modifier-error:    #f38ba8;  /* red */
+  --background-modifier-success:  #a6e3a1;
+  --background-modifier-error:    #f38ba8;
   --background-modifier-error-hover: #eba0ac;
   --background-modifier-cover:    rgba(17, 17, 27, 0.8);
 
-  /* Text */
-  --text-normal:                  #cdd6f4;  /* text */
-  --text-muted:                   #a6adc8;  /* subtext0 */
-  --text-faint:                   #585b70;  /* surface2 */
-  --text-on-accent:               #11111b;  /* crust */
+  --text-normal:                  #cdd6f4;
+  --text-muted:                   #a6adc8;
+  --text-faint:                   #585b70;
+  --text-on-accent:               #11111b;
   --text-on-accent-inverted:      #cdd6f4;
   --text-error:                   #f38ba8;
   --text-success:                 #a6e3a1;
   --text-selection:               rgba(137, 180, 250, 0.2);
   --text-highlight-bg:            rgba(249, 226, 175, 0.18);
-  --text-accent:                  #89b4fa;  /* blue */
-  --text-accent-hover:            #b4befe;  /* lavender */
+  --text-accent:                  #89b4fa;
+  --text-accent-hover:            #b4befe;
 
-  /* Interactive */
   --interactive-normal:           #313244;
   --interactive-hover:            #45475a;
-  --interactive-accent:           #74c7ec;  /* sapphire */
-  --interactive-accent-hover:     #89dceb;  /* sky */
+  --interactive-accent:           #74c7ec;
+  --interactive-accent-hover:     #89dceb;
 
-  /* Scrollbar */
   --scrollbar-bg:                 transparent;
   --scrollbar-thumb-bg:           rgba(127, 132, 156, 0.15);
   --scrollbar-active-thumb-bg:    rgba(127, 132, 156, 0.35);
 
-  /* Title bar */
   --titlebar-background:          #11111b;
   --titlebar-background-focused:  #181825;
 
-  /* Tabs */
   --tab-text-color:               #7f849c;
   --tab-text-color-focused:       #cdd6f4;
   --tab-text-color-focused-active: #cdd6f4;
 
-  /* File explorer */
   --nav-item-color:               #a6adc8;
   --nav-item-color-hover:         #cdd6f4;
   --nav-item-color-active:        #74c7ec;
   --nav-item-background-hover:    rgba(116, 199, 236, 0.08);
   --nav-item-background-active:   rgba(116, 199, 236, 0.12);
 
-  /* Tags */
   --tag-background:               #313244;
-  --tag-color:                    #fab387;  /* peach */
+  --tag-color:                    #fab387;
   --tag-background-hover:         #45475a;
 
-  /* Checkboxes */
   --checkbox-color:               #74c7ec;
   --checkbox-color-hover:         #89dceb;
   --checkbox-border-color:        #45475a;
 
-  /* Icons */
   --icon-color:                   #7f849c;
   --icon-color-hover:             #cdd6f4;
   --icon-color-active:            #74c7ec;
   --icon-color-focused:           #a6adc8;
 
-  /* Accent */
   --color-accent:                 #74c7ec;
   --color-accent-1:               #89b4fa;
   --color-accent-2:               #b4befe;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════ */
-/* TYPOGRAPHY                                                                */
+/* LIGHT MODE — Catppuccin Latte                                             */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+.theme-light {
+  --background-primary:           #eff1f5;
+  --background-primary-alt:       #e6e9ef;
+  --background-secondary:         #e6e9ef;
+  --background-secondary-alt:     #dce0e8;
+  --background-modifier-border:   #ccd0da;
+  --background-modifier-form-field: #ccd0da;
+  --background-modifier-form-field-highlighted: #bcc0cc;
+  --background-modifier-box-shadow: rgba(220, 224, 232, 0.6);
+  --background-modifier-success:  #40a02b;
+  --background-modifier-error:    #d20f39;
+  --background-modifier-error-hover: #e64553;
+  --background-modifier-cover:    rgba(220, 224, 232, 0.8);
+
+  --text-normal:                  #4c4f69;
+  --text-muted:                   #6c6f85;
+  --text-faint:                   #9ca0b0;
+  --text-on-accent:               #eff1f5;
+  --text-on-accent-inverted:      #4c4f69;
+  --text-error:                   #d20f39;
+  --text-success:                 #40a02b;
+  --text-selection:               rgba(30, 102, 245, 0.15);
+  --text-highlight-bg:            rgba(223, 142, 29, 0.15);
+  --text-accent:                  #1e66f5;
+  --text-accent-hover:            #7287fd;
+
+  --interactive-normal:           #dce0e8;
+  --interactive-hover:            #ccd0da;
+  --interactive-accent:           #209fb5;
+  --interactive-accent-hover:     #04a5e5;
+
+  --scrollbar-bg:                 transparent;
+  --scrollbar-thumb-bg:           rgba(140, 143, 161, 0.2);
+  --scrollbar-active-thumb-bg:    rgba(140, 143, 161, 0.4);
+
+  --titlebar-background:          #dce0e8;
+  --titlebar-background-focused:  #e6e9ef;
+
+  --tab-text-color:               #8c8fa1;
+  --tab-text-color-focused:       #4c4f69;
+  --tab-text-color-focused-active: #4c4f69;
+
+  --nav-item-color:               #6c6f85;
+  --nav-item-color-hover:         #4c4f69;
+  --nav-item-color-active:        #209fb5;
+  --nav-item-background-hover:    rgba(32, 159, 181, 0.08);
+  --nav-item-background-active:   rgba(32, 159, 181, 0.12);
+
+  --tag-background:               #ccd0da;
+  --tag-color:                    #fe640b;
+  --tag-background-hover:         #bcc0cc;
+
+  --checkbox-color:               #209fb5;
+  --checkbox-color-hover:         #04a5e5;
+  --checkbox-border-color:        #bcc0cc;
+
+  --icon-color:                   #8c8fa1;
+  --icon-color-hover:             #4c4f69;
+  --icon-color-active:            #209fb5;
+  --icon-color-focused:           #6c6f85;
+
+  --color-accent:                 #209fb5;
+  --color-accent-1:               #1e66f5;
+  --color-accent-2:               #7287fd;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* MODE-INDEPENDENT — typography, layout, mobile, focus                      */
 /* ═══════════════════════════════════════════════════════════════════════════ */
 
 body {
@@ -110,254 +164,51 @@ body {
   margin-bottom: 1.1em;
 }
 
-/* Line length: 70ch ≈ 65–70 chars (Baymard 2022; WCAG 1.4.8) */
+/* Line length: 70ch (Baymard 2022; WCAG 1.4.8) */
 .is-readable-line-width .markdown-source-view.mod-cm6 .cm-content,
 .is-readable-line-width .markdown-preview-view {
   max-width: 70ch;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/* APP CHROME — sidebar, tabs, status bar                                    */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-
-/* Sidebar */
-.workspace-drawer,
-.mod-left-split,
-.mod-right-split {
-  background-color: #181825;
-}
-
-.nav-folder-title,
-.nav-file-title {
-  padding: 6px 12px;
-  border-radius: 6px;
-}
-
-.nav-folder-title-content {
-  color: #a6adc8;
-  font-weight: 500;
-}
-
-.nav-file-title.is-active {
-  background-color: rgba(116, 199, 236, 0.12);
-  color: #74c7ec;
-}
-
-/* Tabs */
-.workspace-tab-header {
-  background-color: #181825;
-}
-
-.workspace-tab-header.is-active {
-  background-color: #1e1e2e;
-}
-
-.workspace-tab-header-container {
-  background-color: #11111b;
-  border-bottom: 1px solid #313244;
-}
-
-/* View header */
-.view-header {
-  background-color: #1e1e2e;
-  border-bottom: 1px solid rgba(49, 50, 68, 0.6);
-}
-
-.view-header-title {
-  color: #cdd6f4;
-  font-weight: 600;
-}
-
-/* Status bar */
-.status-bar {
-  background-color: #11111b;
-  border-top: 1px solid #313244;
-  color: #585b70;
-  font-size: 0.8em;
-}
-
-/* Scrollbar — thin */
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-thumb {
-  background-color: rgba(127, 132, 156, 0.15);
-  border-radius: 4px;
-}
-::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(127, 132, 156, 0.35);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/* INTERACTIVE — buttons, inputs, search, modals                             */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-
-button.mod-cta {
-  background-color: #74c7ec;
-  color: #11111b;
-  font-weight: 600;
-  border-radius: 6px;
-}
-
-button.mod-cta:hover {
-  background-color: #89dceb;
-}
-
-input[type="text"],
-input[type="search"],
-textarea {
-  background-color: #313244;
-  border: 1px solid #45475a;
-  color: #cdd6f4;
-  border-radius: 6px;
-}
-
-input[type="text"]:focus,
-input[type="search"]:focus,
-textarea:focus {
-  border-color: #74c7ec;
-  box-shadow: 0 0 0 2px rgba(116, 199, 236, 0.15);
-}
-
-/* Search */
-.search-result-file-title {
-  color: #89b4fa;
-  font-weight: 600;
-}
-
-.search-result-file-matched-text {
-  background-color: rgba(249, 226, 175, 0.2);
-  color: #f9e2af;
-}
-
-/* Tooltip */
-.tooltip {
-  background-color: #313244;
-  color: #cdd6f4;
-  border-radius: 6px;
-  box-shadow: 0 4px 12px rgba(17, 17, 27, 0.5);
-}
-
-/* Modals */
-.modal-container .modal {
-  background-color: #1e1e2e;
-  border: 1px solid #313244;
-  border-radius: 10px;
-  box-shadow: 0 16px 48px rgba(17, 17, 27, 0.7);
-}
-
-.modal-container .modal-close-button { color: #7f849c; }
-
-/* Quick switcher */
-.prompt {
-  background-color: #1e1e2e;
-  border: 1px solid #313244;
-  border-radius: 10px;
-  box-shadow: 0 16px 48px rgba(17, 17, 27, 0.7);
-}
-
-.prompt-input {
-  background-color: #181825;
-  border: 1px solid #45475a;
-  border-radius: 6px;
-  color: #cdd6f4;
-}
-
-.suggestion-item.is-selected {
-  background-color: rgba(116, 199, 236, 0.1);
-  color: #cdd6f4;
-}
-
-/* Checkboxes */
-.markdown-rendered .task-list-item-checkbox:checked {
-  background-color: #74c7ec;
-  border-color: #74c7ec;
-}
-
-.markdown-rendered .task-list-item.is-checked {
-  color: #585b70;
-  text-decoration: line-through;
-  text-decoration-color: #45475a;
-}
-
-/* Embeds */
-.markdown-embed {
-  border: 1px solid #313244;
-  border-radius: 8px;
-  background-color: #181825;
-  padding: 12px 16px;
-}
-
-.markdown-embed-title {
-  color: #89b4fa;
-  font-weight: 600;
-}
-
 /* Active line */
 .cm-editor .cm-activeLine {
-  background-color: rgba(116, 199, 236, 0.04);
+  background-color: var(--text-selection);
 }
 
 /* Selection */
 ::selection {
-  background: rgba(137, 180, 250, 0.25);
+  background: var(--text-selection);
 }
 
 /* Cursor */
 .cm-editor .cm-cursor {
-  border-left-color: #74c7ec;
+  border-left-color: var(--interactive-accent);
   border-left-width: 2px;
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/* MOBILE                                                                    */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-
-.is-mobile {
-  --font-text-size: 17px;
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-bg);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-active-thumb-bg);
 }
 
-.is-mobile .nav-file-title,
-.is-mobile .nav-folder-title {
-  padding: 10px 14px;
-  font-size: 15px;
+/* Checkboxes */
+.markdown-rendered .task-list-item-checkbox:checked {
+  background-color: var(--interactive-accent);
+  border-color: var(--interactive-accent);
 }
 
-.is-mobile .workspace-drawer { background-color: #181825; }
-
-.is-mobile .workspace-drawer-header {
-  background-color: #11111b;
-  border-bottom: 1px solid #313244;
+.markdown-rendered .task-list-item.is-checked {
+  color: var(--text-faint);
+  text-decoration: line-through;
+  text-decoration-color: var(--background-modifier-border);
 }
 
-.is-mobile .mobile-navbar {
-  background-color: #11111b;
-  border-top: 1px solid #313244;
-}
-
-.is-mobile .mobile-navbar-action { color: #7f849c; }
-.is-mobile .mobile-navbar-action.is-active { color: #74c7ec; }
-
-.is-mobile .view-header {
-  background-color: #1e1e2e;
-  padding: 4px 8px;
-}
-
-.is-mobile .markdown-preview-view,
-.is-mobile .cm-content {
-  padding: 8px 18px;
-}
-
-.is-mobile .status-bar { display: none; }
-
-/* Dim chrome — focus on content */
-.is-mobile .view-header-title-container-after,
-.is-mobile .view-header-nav-buttons {
-  opacity: 0.5;
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════ */
-/* FOCUS POLISH                                                              */
-/* ═══════════════════════════════════════════════════════════════════════════ */
-
+/* Transitions */
 .nav-file-title,
 .nav-folder-title,
 .workspace-tab-header,
@@ -376,6 +227,28 @@ button, input, textarea, a {
 .markdown-rendered h2 { margin-top: 2em; }
 .markdown-rendered h3 { margin-top: 1.5em; }
 
-/* Empty state */
-.empty-state { color: #45475a; }
-.empty-state-title { color: #585b70; }
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* MOBILE                                                                    */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+.is-mobile {
+  --font-text-size: 17px;
+}
+
+.is-mobile .nav-file-title,
+.is-mobile .nav-folder-title {
+  padding: 10px 14px;
+  font-size: 15px;
+}
+
+.is-mobile .markdown-preview-view,
+.is-mobile .cm-content {
+  padding: 8px 18px;
+}
+
+.is-mobile .status-bar { display: none; }
+
+.is-mobile .view-header-title-container-after,
+.is-mobile .view-header-nav-buttons {
+  opacity: 0.5;
+}

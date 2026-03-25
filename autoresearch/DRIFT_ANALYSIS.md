@@ -399,14 +399,14 @@ The ensemble has **good diversity**:
 
 | Scenario | Likelihood | Canary Exists? | Health Metric? | Will Catch It? |
 |----------|-----------|---|---|---|
-| **1. Scope narrowing** | **WILL happen** | No (missing prerequisite validator) | No (notes stay short) | － No |
-| **2. Link proliferation** | **WILL happen** | No (missing saturation check) | No (Coherence improves) | － No |
-| **3. Structural homogenization** | Likely (forces notes into templates) | No (template diversity) | No (structure score improves) | － No |
-| **4. Conciseness spiral** | **WILL happen** | No (missing 3-sec validator) | No (clarity is subjective) | － No |
-| **5. AI-ism whack-a-mole** | **WILL happen** | No (static banned list) | No (densify removes known ones) | － No |
-| **6. Systematize bloat** | Likely (notes <280 line threshold) | No (overhead ratio check) | No (coherence improves) | － No |
-| **7. Identity stagnation** | **EXPECTED** (local max) | Maybe (judge correlation) | Implicit (plateau visible) | ＋ Yes (by design) |
-| **8. Judge consensus** | Possible (shared training) | No (consensus metric weak) | No (judges still disagree on specifics) | － Unlikely |
+| **1. Scope narrowing** | **WILL happen** | No (missing prerequisite validator) | No (notes stay short) | - No |
+| **2. Link proliferation** | **WILL happen** | No (missing saturation check) | No (Coherence improves) | - No |
+| **3. Structural homogenization** | Likely (forces notes into templates) | No (template diversity) | No (structure score improves) | - No |
+| **4. Conciseness spiral** | **WILL happen** | No (missing 3-sec validator) | No (clarity is subjective) | - No |
+| **5. AI-ism whack-a-mole** | **WILL happen** | No (static banned list) | No (densify removes known ones) | - No |
+| **6. Systematize bloat** | Likely (notes <280 line threshold) | No (overhead ratio check) | No (coherence improves) | - No |
+| **7. Identity stagnation** | **EXPECTED** (local max) | Maybe (judge correlation) | Implicit (plateau visible) | + Yes (by design) |
+| **8. Judge consensus** | Possible (shared training) | No (consensus metric weak) | No (judges still disagree on specifics) | - Unlikely |
 
 ---
 
