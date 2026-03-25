@@ -3,7 +3,7 @@
 
 ## TL;DR
 
-**Ray Compiled Graph was introduced to eliminate per-step `ray.remote()` overhead (~1-5 ms) in multi-GPU vLLM deployments.** The investigation shows it fails on its own terms: CG's control-plane dispatch is *slower* than MessageQueue (O(TP) sequential channel writes vs O(1) shared ring buffer), its PP data-plane path adds a CUDA stream sync bubble that MultiprocExecutor avoids, and TP/EP communication are 100% independent of CG regardless. The 10-15% Anyscale benchmark was measured before async scheduling existed — once async scheduling hides dispatch latency behind GPU compute, CG's dispatch overhead becomes a net negative.
+**Ray Compiled Graph was introduced to eliminate per-step `ray.remote()` overhead (~1-5 ms) in multi-GPU vLLM deployments.** The investigation shows it fails on its own terms: CG's scheduling dispatch (the per-step CPU work of telling workers what to run) is *slower* than MessageQueue (O(TP) sequential channel writes vs O(1) shared ring buffer), its PP data-plane path adds a CUDA stream sync bubble that MultiprocExecutor avoids, and TP/EP communication are 100% independent of CG regardless. The 10-15% Anyscale benchmark was measured before async scheduling existed — once async scheduling hides dispatch latency behind GPU compute, CG's dispatch overhead becomes a net negative.
 
 Prerequisites: [[ml-systems/vllm-executor-architecture]], [[ml-systems/ray-compiled-graph-in-vllm]]
 
@@ -13,7 +13,7 @@ Prerequisites: [[ml-systems/vllm-executor-architecture]], [[ml-systems/ray-compi
 
 **The problem CG was meant to solve**: every decode step with a naive Ray executor calls `ray.remote()` per worker — ~1-5 ms of Python/RPC overhead that dominates short decode steps. CG replaces this with pre-compiled DAG channels and pickle-over-SHM dispatch, targeting sub-millisecond control-plane cost.
 
-**Why it underdelivers**: CG writes to each worker's channel sequentially (O(TP) writes), while MultiprocExecutor writes once to a shared ring buffer all workers read from (O(1)). For TP=4, CG costs ~300 us-1 ms vs MessageQueue's ~100-300 us — and both are dominated by pickle serialization anyway. The PP path adds a `stream.synchronize()` bubble (~5-15 us) that MultiprocExecutor's async `irecv` avoids. Async scheduling (v0.15.0) then hid dispatch latency behind GPU compute entirely, making CG's remaining overhead a pure cost with no benefit.
+**Why it underdelivers**: CG writes to each worker's channel sequentially (O(TP) writes), while MultiprocExecutor writes once to a shared ring buffer (a circular fixed-size queue in shared memory) all workers read from (O(1)). For TP=4, CG costs ~300 us-1 ms vs MessageQueue's ~100-300 us — and both are dominated by pickle serialization anyway. The PP path adds a `stream.synchronize()` bubble (~5-15 us) that MultiprocExecutor's async `irecv` avoids. Async scheduling (v0.15.0) then hid dispatch latency behind GPU compute entirely, making CG's remaining overhead a pure cost with no benefit.
 
 Running example throughout: **Llama 70B, PP=2, TP=4, 8 H100s, batch_size=128.**
 
@@ -45,9 +45,9 @@ CG dispatch is O(TP) sequential writes (~300 us-1 ms); MQ is O(1) (~100-300 us) 
 
 **Why this matters**: If PP activation tensors flow through CG's channels, CG provides real data-plane value for pipeline parallelism. If the model sends them directly via NCCL, CG only handles dispatch and PP is unaffected by CG removal.
 
-**Answer: Inside.** The model forward returns `IntermediateTensors` with zero send/recv calls — `LlamaModel.forward()` (`llama.py:430-432`) simply returns the tensors. CG intercepts them and routes them to the next pipeline stage using its NCCL channel (`ray_executor.py:607-611`).
+**Answer: Inside.** The model forward returns `IntermediateTensors` with zero send/recv calls — `LlamaModel.forward()` (`llama.py:430-432`) simply returns the tensors. CG intercepts them and routes them via `RayPPCommunicator` — see [[ml-systems/ray-compiled-graph-in-vllm#How PP Tensors Actually Move (NCCL Call Stack)]] for the full trace. The underlying NCCL call is identical to MultiprocExecutor's.
 
-Under the hood, CG delegates to vLLM's existing PP NCCL group (`ray_communicator.py:72`), so the GPU-to-GPU transfer is identical to MultiprocExecutor's. One difference: `RayPPCommunicator.recv()` (`ray_communicator.py:212`) does a full CUDA stream sync (~5-15 us bubble), while MultiprocExecutor's non-blocking `irecv_tensor_dict` avoids this.
+**Unique finding**: `RayPPCommunicator.recv()` at `ray_communicator.py:212` does a full CUDA stream sync (~5-15 us bubble per step) that MultiprocExecutor's non-blocking `irecv_tensor_dict` avoids — a structural overhead CG adds on top of the same NCCL transfer.
 
 ---
 

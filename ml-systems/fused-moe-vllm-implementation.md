@@ -10,6 +10,12 @@ This note covers how vLLM implements MoE layers in practice: why the router uses
 
 ---
 
+## Core Intuition
+
+**MoE layers create three implementation problems that standard parallel layers don't solve.** First, the router must produce identical top-k decisions on every tensor-parallel rank — standard column-parallel sharding breaks this because each rank sees only a subset of expert scores. Second, the gate and up projections inside each expert's SwiGLU FFN must be packed into a single buffer so the fused CUDA kernel can dispatch all experts in one launch rather than looping per-expert. Third, checkpoint weight names (`hidden_transform.linear_0`) don't map to vLLM's internal fused-buffer layout (`w13_weight[expert_id, :intermediate_size, :]`), so a per-parameter `weight_loader` callable handles the translation at load time.
+
+---
+
 ## Mental Model
 
 FusedMoE implementation has three distinct concerns:
