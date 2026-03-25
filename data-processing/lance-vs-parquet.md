@@ -46,13 +46,13 @@ manifest.lance  ← central metadata file listing which fragments exist and thei
 
 | Operation | Parquet | Lance |
 |---|---|---|
-| Full scan | ✅ Fast (columnar) | ✅ Fast (columnar) |
-| Add column | ❌ Rewrite entire file O(table) | ✅ New fragment + manifest update O(column) |
-| Random row access | ❌ Scan row groups (fixed-size horizontal slices, typically 128 MB) | ✅ Index-based O(1) |
-| Update/delete rows | ❌ Rewrite file | ✅ **Deletion vector** (a bitset — a compact boolean array — marking which rows are deleted) + new fragment for inserts |
-| Append rows | ⚠️ New file per append (small-file problem: many tiny files degrade scan throughput) | ✅ New fragment, compaction later |
-| Ecosystem support | ✅ Everything (Spark, Trino, DuckDB, etc.) | ⚠️ Growing (Lance ecosystem) |
-| S3 compatibility | ✅ Native | ✅ Native |
+| Full scan | ＋ Fast (columnar) | ＋ Fast (columnar) |
+| Add column | － Rewrite entire file O(table) | ＋ New fragment + manifest update O(column) |
+| Random row access | － Scan row groups (fixed-size horizontal slices, typically 128 MB) | ＋ Index-based O(1) |
+| Update/delete rows | － Rewrite file | ＋ **Deletion vector** (a bitset — a compact boolean array — marking which rows are deleted) + new fragment for inserts |
+| Append rows | ⚠️ New file per append (small-file problem: many tiny files degrade scan throughput) | ＋ New fragment, compaction later |
+| Ecosystem support | ＋ Everything (Spark, Trino, DuckDB, etc.) | ⚠️ Growing (Lance ecosystem) |
+| S3 compatibility | ＋ Native | ＋ Native |
 
 ---
 

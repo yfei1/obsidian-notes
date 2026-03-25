@@ -156,8 +156,8 @@ L1 subtracts a **fixed amount** (0.0001) regardless of weight magnitude, so the 
 | Weight outcome | uniformly small | sparse (many = 0) | uniform magnitude |
 | Gradient | `2w` (smooth) | `sign(w)` (constant) | only at argmax index |
 | Updates per step | all weights | all weights | only largest weight |
-| Feature selection | ❌ | ✅ | ❌ |
-| Practical use | ✅ very common | ✅ common | ❌ almost never |
+| Feature selection | － | ＋ | － |
+| Practical use | ＋ very common | ＋ common | － almost never |
 
 ---
 

@@ -12,13 +12,13 @@ Seven parallelism strategies exist for distributing LLM workloads across GPUs. M
 
 | Strategy | What It Shards | Scope | Training | Inference |
 |---|---|---|---|---|
-| **Data Parallelism (DP)** | Input data (replicate entire model) | Across GPU groups | ✅ | ✅ (trivially) |
-| **ZeRO / FSDP** | Optimizer states, gradients, and/or parameters across DP replicas | Across DP replicas | ✅ | ❌ |
-| **Tensor Parallelism (TP)** | Individual weight matrices (column/row split) | Within a node | ✅ | ✅ |
-| **Sequence Parallelism (SP)** | LayerNorm/Dropout activations along sequence dim | Within a node (with TP) | ✅ | ✅ |
-| **Pipeline Parallelism (PP)** | Model layers across GPUs | Across nodes | ✅ | ✅ |
-| **Expert Parallelism (EP)** | MoE experts assigned to specific GPUs | Across GPUs | ✅ | ✅ |
-| **Context Parallelism (CP)** | Sequence length across GPUs | Within/across nodes | ✅ | ✅ |
+| **Data Parallelism (DP)** | Input data (replicate entire model) | Across GPU groups | ＋ | ＋ (trivially) |
+| **ZeRO / FSDP** | Optimizer states, gradients, and/or parameters across DP replicas | Across DP replicas | ＋ | － |
+| **Tensor Parallelism (TP)** | Individual weight matrices (column/row split) | Within a node | ＋ | ＋ |
+| **Sequence Parallelism (SP)** | LayerNorm/Dropout activations along sequence dim | Within a node (with TP) | ＋ | ＋ |
+| **Pipeline Parallelism (PP)** | Model layers across GPUs | Across nodes | ＋ | ＋ |
+| **Expert Parallelism (EP)** | MoE experts assigned to specific GPUs | Across GPUs | ＋ | ＋ |
+| **Context Parallelism (CP)** | Sequence length across GPUs | Within/across nodes | ＋ | ＋ |
 
 ---
 
@@ -221,13 +221,13 @@ vLLM and SGLang are **inference-only** engines. They do not perform backward pas
 
 | Strategy | vLLM | SGLang | Megatron-LM | DeepSpeed | PyTorch Native |
 |---|---|---|---|---|---|
-| **DP** | ✅ (replicas behind LB) | ✅ | ✅ | ✅ | ✅ (DDP) |
-| **ZeRO/FSDP** | ❌ (inference-only) | ❌ | ❌ / via Megatron-DeepSpeed | ✅ (ZeRO) | ✅ (FSDP) |
-| **TP** | ✅ | ✅ | ✅ (pioneered it) | ✅ (via Megatron) | ✅ (DTensor) |
-| **SP** | ✅ (implicit with TP) | ✅ | ✅ (pioneered it) | ✅ | ✅ |
-| **PP** | ✅ | ✅ | ✅ | ✅ | ✅ (PipelineStage) |
-| **EP** | ✅ | ✅ | ✅ | ✅ | 🟡 (manual) |
-| **CP** | 🟡 (emerging) | 🟡 (emerging) | ✅ | 🟡 | ✅ (torch CP) |
+| **DP** | ＋ (replicas behind LB) | ＋ | ＋ | ＋ | ＋ (DDP) |
+| **ZeRO/FSDP** | － (inference-only) | － | － / via Megatron-DeepSpeed | ＋ (ZeRO) | ＋ (FSDP) |
+| **TP** | ＋ | ＋ | ＋ (pioneered it) | ＋ (via Megatron) | ＋ (DTensor) |
+| **SP** | ＋ (implicit with TP) | ＋ | ＋ (pioneered it) | ＋ | ＋ |
+| **PP** | ＋ | ＋ | ＋ | ＋ | ＋ (PipelineStage) |
+| **EP** | ＋ | ＋ | ＋ | ＋ | 🟡 (manual) |
+| **CP** | 🟡 (emerging) | 🟡 (emerging) | ＋ | 🟡 | ＋ (torch CP) |
 
 ---
 

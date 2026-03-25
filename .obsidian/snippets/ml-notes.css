@@ -28,9 +28,11 @@
 }
 
 /* ── Code blocks ─────────────────────────────────────────────────────────── */
+/* surface0 is LIGHTER than base — code blocks elevate above the editor bg   */
+/* so they pop instead of sinking into the background                        */
 .markdown-rendered pre,
 .cm-s-obsidian .HyperMD-codeblock {
-  background-color: var(--ctp-mantle) !important;
+  background-color: var(--ctp-surface0) !important;
   border: 1px solid var(--ctp-surface1);
   border-radius: 6px;
 }
@@ -38,13 +40,13 @@
 .markdown-rendered pre code {
   font-size: 0.88em;
   line-height: 1.6;
-  color: var(--ctp-text);
+  color: var(--ctp-text) !important;
 }
 
 /* Inline code */
 .markdown-rendered code,
 .cm-inline-code {
-  background-color: var(--ctp-surface0);
+  background-color: var(--ctp-surface1);
   color: var(--ctp-sapphire);
   border-radius: 3px;
   padding: 0.1em 0.35em;

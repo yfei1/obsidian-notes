@@ -67,7 +67,7 @@ Side-by-side — same physical weight, two naming conventions:
 
 For consecutive linear layers `Y = f(XA) · B` (e.g., gate_up → SiluAndMul → down), four TP pairings are possible. Only Column→Row requires a single communication. Full walkthrough with Qwen3-0.6B shapes (tp=2, hidden=1024, intermediate=3072):
 
-**Design 1: Col→Row ✅ (1 communication)**
+**Design 1: Col→Row ＋ (1 communication)**
 
 ```
 Initial: both GPUs have x [N, 1024]
@@ -93,10 +93,10 @@ Total: 1 communication
 gate_up (Col): same as above → GPU0: [N,1536], GPU1: [N,1536]
 
 down (Col): W [1024,3072] split dim=0 → each GPU has [512,3072]
-  ❌ needs full [N,3072] input, but each GPU only has [N,1536]
+  － needs full [N,3072] input, but each GPU only has [N,1536]
   🔴 all-gather → [N,3072] on both GPUs
   GPU0: [N,3072] @ W_0.T → [N,512]    GPU1: [N,3072] @ W_1.T → [N,512]
-  ❌ next layer needs [N,1024]
+  － next layer needs [N,1024]
   🔴 all-gather → [N,1024]
 
 Total: 2 communications
@@ -137,10 +137,10 @@ Total: 2 communications + memory waste
 
 | Design | Comms | Intermediate per GPU | Winner? |
 |---|---|---|---|
-| **Col→Row** | **1** | [N, 1536] (sharded) | ✅ |
-| Col→Col | 2 | [N, 1536] → all-gather | ❌ |
-| Row→Row | 2 | [N, 3072] (full, wasted) | ❌ |
-| Row→Col | 2 | [N, 3072] (full, wasted) | ❌ |
+| **Col→Row** | **1** | [N, 1536] (sharded) | ＋ |
+| Col→Col | 2 | [N, 1536] → all-gather | － |
+| Row→Row | 2 | [N, 3072] (full, wasted) | － |
+| Row→Col | 2 | [N, 3072] (full, wasted) | － |
 
 Column-splitting produces sharded output; row-splitting consumes sharded input. The output format of one matches the input format of the other, eliminating the intermediate sync. This is why every other pairing requires two collectives instead of one.
 

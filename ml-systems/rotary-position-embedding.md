@@ -117,7 +117,7 @@ R(mθ) · [x₁, x₂]ᵀ  =  [[cos(mθ), −sin(mθ)],   [x₁]
 = Re[q · conj(k) · e^(i(m−n)θ)]
 ```
 
-The result depends only on `(m − n)`. ✅
+The result depends only on `(m − n)`. ＋
 
 Note: `Re[·]` extracts the real part — necessary because attention scores must be scalars, and complex dot products have an imaginary component that must be discarded.
 
@@ -156,7 +156,7 @@ R(m)ᵀ · R(n) = block_diag(R(mθ₀)ᵀ·R(nθ₀), …)
               = R(n−m)
 ```
 
-Therefore `(R(m)·q)ᵀ · (R(n)·k) = qᵀ · R(n−m) · k`, which depends only on `(n−m)`. ✅
+Therefore `(R(m)·q)ᵀ · (R(n)·k) = qᵀ · R(n−m) · k`, which depends only on `(n−m)`. ＋
 
 ---
 
