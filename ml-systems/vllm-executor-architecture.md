@@ -15,7 +15,7 @@ Running example throughout: **Llama 70B, PP=2, TP=4, 8 H100 GPUs, batch_size=128
 
 You have a scheduler that decides "run these 128 tokens through the model." You have 8 GPU workers that need to execute this. How does the scheduler's decision — a Python object called `SchedulerOutput` (~32 KB for bs=128) — reach all 8 workers quickly enough that the GPUs aren't sitting idle?
 
-This is the **control plane** problem — delivering instructions from scheduler to workers. It is separate from the **data plane** — GPU-to-GPU tensor transfers during the model forward (NCCL allreduce to combine partial results across GPUs, NCCL send/recv to pass activations between pipeline stages). See [[ml-systems/vllm-distributed-groups]] for the data plane.
+This is the **control plane** problem — delivering instructions from scheduler to workers. It is separate from the **data plane** — GPU-to-GPU tensor transfers during the model forward. Data plane examples: NCCL allreduce (summing partial results across GPUs that share the same layers via [[ml-systems/tensor-parallelism|tensor parallelism]]) and NCCL send/recv (passing activations between pipeline stages — sequential groups of layers, each assigned to different GPUs via [[ml-systems/parallelism-strategies|pipeline parallelism]]). See [[ml-systems/vllm-distributed-groups]] for the data plane.
 
 ### Two Layers of Communication
 

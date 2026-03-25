@@ -115,7 +115,7 @@ flow through the pipeline one after another) to fill the bubble:
   GPU-2: [ ][ ][F0][F1][F2][F3][B3][B2][ ][ ]
   GPU-3: [ ][ ][ ][F0][F1][F2/B2][F3/B3][ ][ ][ ]
 
-More micro-batches → smaller bubble fraction. Bubble size = (p-1) stages regardless of batch count; micro-batches fill those idle slots, so bubble fraction = (p-1)/(p-1+m) for m micro-batches.
+Bubble fraction = (p-1)/(p-1+m) for p stages and m micro-batches — more micro-batches amortize the fixed (p-1) idle slots.
 ```
 
 ### Communication and inference behavior
@@ -157,7 +157,7 @@ For each token:
 | GPU utilization | Every GPU does work for every token | Only GPUs with activated experts work |
 | Sweet spot | Dense models | Sparse MoE models |
 
-EP outperforms TP for MoE because TP forces all GPUs to compute partial results for all 64 experts even though each token activates only 2 — 62/64 of that work is wasted. EP routes tokens only to GPUs holding the activated experts, so only 2 GPUs do work per token.
+EP outperforms TP for MoE because TP forces all GPUs to compute partial results for every expert even though each token activates only 2 of 64 — 62/64 of that compute is wasted. EP routes tokens via All-to-All only to GPUs holding the activated experts, so 2 GPUs do work per token instead of all GPUs doing partial work for all experts.
 
 ### Load balancing (training)
 
@@ -253,7 +253,7 @@ PT-MoE (parallel tracks):
   Each track has its own set of MoE layers.
 ```
 
-### Why it matters for parallelism
+### PT-MoE Eliminates the PP Bubble
 
 ```
 Standard PP (sequential dependency — has pipeline bubble):
@@ -268,9 +268,8 @@ PT-MoE (parallel tracks — no bubble):
 ```
 
 Track independence maps directly to hardware:
-- Each track runs on a separate GPU (or group of GPUs) with no inter-track communication until the merge point — tracks share no activations mid-block.
+- Each track runs on a separate GPU (or group of GPUs) with no inter-track communication until the merge point — tracks share no activations mid-block, so each GPU starts computing immediately without waiting on another stage.
 - Within each track, TP and EP still apply for the MoE layers.
-- Eliminates the PP pipeline bubble because GPU-0 never waits on GPU-1's output: tracks share no activations mid-block, so each GPU starts computing its track immediately.
 
 ---
 

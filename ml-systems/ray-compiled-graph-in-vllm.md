@@ -3,7 +3,7 @@
 
 ## TL;DR
 
-**Ray Compiled Graph (CG)** pre-compiles a fixed execution pipeline between Ray actors, replacing per-step `actor.method.remote()` + `ray.get()` calls with a single `dag.execute()` that pushes data through pre-allocated shared memory channels. vLLM uses CG to send the scheduling decision (`SchedulerOutput`) to GPU workers and to route intermediate tensors between pipeline stages — groups of model layers split across GPUs. CG is being removed (RFC #35848) because async scheduling makes its dispatch optimization irrelevant, and the tensor routing is replaceable by direct NCCL send/recv.
+**Ray Compiled Graph (CG)** pre-compiles a fixed execution pipeline between Ray actors, replacing per-step `actor.method.remote()` + `ray.get()` calls with a single `dag.execute()` that pushes data through pre-allocated shared memory channels. vLLM uses CG to send the scheduling decision (`SchedulerOutput`) to GPU workers and to route intermediate tensors between pipeline stages — groups of model layers split across GPUs. CG is being removed (RFC #35848) because **async scheduling** — where the engine schedules batch N+1 while the GPU executes batch N, hiding dispatch latency — makes CG's speed advantage irrelevant. The tensor routing is replaceable by direct NCCL send/recv.
 
 Prerequisites: [[ml-systems/vllm-executor-architecture]], [[ml-systems/parallelism-strategies]]
 
@@ -13,7 +13,7 @@ Prerequisites: [[ml-systems/vllm-executor-architecture]], [[ml-systems/paralleli
 
 ### The Problem CG Solves
 
-**Regular Ray actors** work like RPC: call `worker.execute_model.remote(data)`, Ray serializes arguments, ships them through its object store, schedules the task, returns an `ObjectRef`. Each `.remote()` call pays ~1-5 ms: Python → Ray scheduler → object store → actor queue → result fetch. For inference serving, this happens every decode step — at 100 steps/second, 1-5 ms overhead means the GPU idles 10-50% of the time waiting for instructions.
+First, what is a Ray actor? **Ray** is a distributed computing framework. A **Ray actor** is a worker process managed by Ray's runtime — you create one, then call its methods remotely. Calling `actor.method.remote(data)` is like an RPC: Ray serializes the arguments, routes them through a central scheduler and shared-memory **object store** (Ray's buffer for passing data between processes), executes the method on the actor, and returns an **ObjectRef** (a future-like handle to the result). Each `.remote()` call pays ~1-5 ms of this scheduling overhead. For inference serving, this happens every decode step — at 100 steps/second, 1-5 ms overhead means the GPU idles 10-50% of the time waiting for instructions.
 
 **Compiled Graph** eliminates this by wiring the call pattern once at startup. Instead of Ray's dynamic task scheduler, CG creates **fixed shared memory channels** — one per worker — that the driver writes to directly.
 
@@ -40,9 +40,11 @@ Regular Ray (per step):                 Compiled Graph (per step):
 
 ## How vLLM Builds the Compiled DAG
 
-Running example: **Llama 70B, PP=2, TP=4** (8 workers, 4 per pipeline stage).
+Running example: **Llama 70B, PP=2, TP=4** (8 workers, 4 per pipeline stage — see [[ml-systems/parallelism-strategies]] for PP/TP concepts).
 
 ### DAG Construction (`ray_executor.py:547-640`)
+
+The DAG must do two things: (1) broadcast the SchedulerOutput to all TP=4 workers in stage 0, and (2) route each worker's intermediate output tensors to the matching stage-1 worker so the next set of layers can continue the computation.
 
 ```python
 # ray_executor.py:580-613 (simplified)
