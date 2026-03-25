@@ -169,9 +169,11 @@ for ranks in group_ranks:
         self.rank_in_group = ranks.index(self.rank)
 ```
 
+Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must enter it even for groups they don't belong to.
+
 Resources held:
-- `device_group` — NCCL process group (GPU collectives: all-reduce, broadcast over NVLink/PCIe — NVLink and PCIe are the physical interconnects between GPUs on a node)
-- `cpu_group` — Gloo process group (CPU-side coordination, e.g. barrier synchronization)
+- `device_group` — NCCL process group for GPU collectives (all-reduce, broadcast over NVLink/PCIe — the physical GPU-to-GPU interconnects). Used for weight sharding and activation exchange during the forward pass.
+- `cpu_group` — Gloo process group for CPU-side coordination (e.g., barrier synchronization). Separate from NCCL because Gloo runs on CPU and doesn't require a GPU context — needed for control-plane operations that happen before or after GPU kernels.
 - `device_communicator` — custom comm buffers (optional)
 - `mq_broadcaster` — message queue for weight broadcasting (optional)
 
@@ -179,17 +181,17 @@ Must call `.destroy()` before discarding — NCCL holds internal GPU memory and 
 
 ### Rank vs. Group Position Attributes
 
-| Attribute | Meaning | Example (rank 12, TP group [12,13,14,15]) |
-|-----------|---------|------------------------------------------|
-| `rank` | Global rank | 12 |
-| `local_rank` | Physical GPU slot on node (0-indexed, set by the process launcher) | 4 (if node has GPUs 8-15) |
-| `rank_in_group` | Position within this group | 0 |
-| `world_size` | Group size | 4 |
-| `ranks` | All global ranks in group | [12, 13, 14, 15] |
+Three rank-like values coexist because each answers a different question:
 
-`local_rank` is the physical GPU slot on this machine, set by the process launcher (e.g. `torchrun` — PyTorch's multi-GPU launch utility that assigns each process a unique rank and local_rank). `rank_in_group` is the logical position within one communication group, computed from the rank list. They diverge whenever a group doesn't start at rank 0 — e.g., rank 12 in TP group [12,13,14,15] has `local_rank=4` but `rank_in_group=0`.
+| Attribute | Question answered | Example (rank 12, TP group [12,13,14,15], node has GPUs 8–15) |
+|-----------|------------------|---------------------------------------------------------------|
+| `rank` | Which process globally? | 12 |
+| `local_rank` | Which physical GPU on this node? (set by `torchrun`) | 4 |
+| `rank_in_group` | Which position within this group? (computed from rank list) | 0 |
+| `world_size` | How many ranks in this group? | 4 |
+| `ranks` | All global ranks in this group | [12, 13, 14, 15] |
 
-In the running example (32 GPUs, 8 tracks of 4): rank 12 sits on node 1 (GPUs 8–15), so `local_rank=4`. After PT-MoE rebuild, rank 12 belongs to TP group [12,13,14,15], giving `rank_in_group=0`. The cross-track group for GPU slot 0 of each track is [0,4,8,12,16,20,24,28]; rank 12 has `rank_in_group=3` in that group → **track index = 3**. PT-MoE uses `rank_in_group` of the cross-track group as the track index.
+`local_rank` and `rank_in_group` diverge whenever a group doesn't start at rank 0 — rank 12 in TP group [12,13,14,15] has `local_rank=4` (physical slot on its node) but `rank_in_group=0` (first in the TP group). This distinction matters for PT-MoE: the cross-track group for GPU slot 0 of each track is [0,4,8,12,16,20,24,28], so rank 12 has `rank_in_group=3` in that group. PT-MoE uses this value as the **track index** — which independent model replica this rank belongs to.
 
 ---
 
