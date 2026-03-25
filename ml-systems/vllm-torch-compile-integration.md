@@ -1,6 +1,10 @@
 # vLLM torch.compile Integration
 #ml-systems #interview-prep
 
+**Scope**: How vLLM's `@support_torch_compile` decorator opts a model class into `torch.compile`, how vLLM detects its presence at startup, and where to place it in the model class hierarchy.
+
+**Prerequisites**: [[ml-systems/transformer-model-internals]] (ForCausalLM/inner model structure), [[ml-systems/torch-compile-graph-breaks]] (graph breaks, Dynamo tracing), [[ml-systems/vllm-model-integration]] (model registration and loading path)
+
 ## TL;DR
 
 vLLM's `@support_torch_compile` decorator is the opt-in switch for torch.compile. Without it, vLLM runs your model eagerly even if `compilation_config.mode = VLLM_COMPILE`. The decorator wraps the model's `__init__` and `__call__`, incrementing a global counter that vLLM checks after model construction. Convention: decorate the **inner** model class (e.g., `LlamaModel`), not the outer `ForCausalLM` wrapper.
@@ -164,5 +168,5 @@ Dynamic input marking (`decorators.py:381-418`) tells Dynamo which tensor dimens
 - [[ml-systems/torch-compile-cuda-graphs-hook-interaction]] — `@torch.compile` vs `module.compile()`, CUDA graph mechanics, kernel fusion benchmarks
 - [[ml-systems/vllm-model-integration]] — how to register a custom model in vLLM's plugin system
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE integration where cross-track `all_reduce` creates piecewise compilation
-- [[ml-systems/lora-vllm-serving]]
-- [[ml-systems/pytorch-module-hooks.md]] — How `nn.Module.__call__` dispatches hooks and how `@torch.compile` / `module.compile()` interact with that dispatch path
+- [[ml-systems/lora-vllm-serving]] — LoRA adapter serving; compile interaction matters when adapters modify the forward path
+- [[ml-systems/pytorch-module-hooks]] — How `nn.Module.__call__` dispatches hooks and how `@torch.compile` / `module.compile()` interact with that dispatch path
