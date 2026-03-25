@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP`. Each group is a `GroupCoordinator` holding NCCL (GPU collective communication library) + Gloo (CPU collective library) process groups. Groups can be destroyed and rebuilt at runtime — PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** (one independent model replica within a PT-MoE deployment, running its own forward pass in parallel with other tracks) without forking vLLM.
+vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP` — where **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). Each group is a `GroupCoordinator` holding NCCL (NVIDIA's GPU collective communication library) + Gloo (Meta's CPU collective library) process groups — a **collective** is an operation like all-reduce or broadcast that all ranks in a group execute together. Groups can be destroyed and rebuilt at runtime — PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** (one independent model replica within a PT-MoE deployment, running its own forward pass in parallel with other tracks) without forking vLLM.
 
 ---
 
@@ -149,7 +149,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 | `_TP`  | parallel_state.py:1213 | IS TP | `all_ranks.view(-1, tp_size)` |
 | `_DCP` | parallel_state.py:1221 | Subdivides TP | `all_ranks.reshape(-1, dcp_size)` |
 | `_PCP` | parallel_state.py:1230 | Sibling of TP (same level, different axis) | `transpose(3,4).reshape(-1, pcp_size)` |
-| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP | `transpose(1,2).reshape(-1, dp*pcp*tp)` |
+| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP | `transpose(1,2).reshape(-1, dp*pcp*tp)` | <!-- EP = expert parallel: routes tokens to different expert sub-networks across GPUs -->
 | `_PP`  | parallel_state.py:1233 | Above TP (crosses TP boundaries) | `transpose(2,4).reshape(-1, pp_size)` |
 | `_DP`  | parallel_state.py:1240 | Above TP (crosses TP boundaries) | `transpose(1,4).reshape(-1, dp_size)` |
 
@@ -170,7 +170,7 @@ for ranks in group_ranks:
 ```
 
 Resources held:
-- `device_group` — NCCL process group (GPU collectives: all-reduce, broadcast over NVLink/PCIe)
+- `device_group` — NCCL process group (GPU collectives: all-reduce, broadcast over NVLink/PCIe — NVLink and PCIe are the physical interconnects between GPUs on a node)
 - `cpu_group` — Gloo process group (CPU-side coordination, e.g. barrier synchronization)
 - `device_communicator` — custom comm buffers (optional)
 - `mq_broadcaster` — message queue for weight broadcasting (optional)
@@ -182,12 +182,12 @@ Must call `.destroy()` before discarding — NCCL holds internal GPU memory and 
 | Attribute | Meaning | Example (rank 12, TP group [12,13,14,15]) |
 |-----------|---------|------------------------------------------|
 | `rank` | Global rank | 12 |
-| `local_rank` | Physical GPU slot on node | 4 (if node has GPUs 8-15) |
+| `local_rank` | Physical GPU slot on node (0-indexed, set by the process launcher) | 4 (if node has GPUs 8-15) |
 | `rank_in_group` | Position within this group | 0 |
 | `world_size` | Group size | 4 |
 | `ranks` | All global ranks in group | [12, 13, 14, 15] |
 
-`local_rank` is the physical GPU slot on this machine, set by the launcher (e.g. torchrun). `rank_in_group` is the logical position within one communication group, computed from the rank list. They diverge whenever a group doesn't start at rank 0 — e.g., rank 12 in TP group [12,13,14,15] has `local_rank=4` but `rank_in_group=0`.
+`local_rank` is the physical GPU slot on this machine, set by the process launcher (e.g. `torchrun` — PyTorch's multi-GPU launch utility that assigns each process a unique rank and local_rank). `rank_in_group` is the logical position within one communication group, computed from the rank list. They diverge whenever a group doesn't start at rank 0 — e.g., rank 12 in TP group [12,13,14,15] has `local_rank=4` but `rank_in_group=0`.
 
 In the running example (32 GPUs, 8 tracks of 4): rank 12 sits on node 1 (GPUs 8–15), so `local_rank=4`. After PT-MoE rebuild, rank 12 belongs to TP group [12,13,14,15], giving `rank_in_group=0`. The cross-track group for GPU slot 0 of each track is [0,4,8,12,16,20,24,28]; rank 12 has `rank_in_group=3` in that group → **track index = 3**. PT-MoE uses `rank_in_group` of the cross-track group as the track index.
 
@@ -203,7 +203,7 @@ init_model_parallel_group(
 )
 ```
 
-Returns a `GroupCoordinator` scoped to whichever group the current rank belongs to. All ranks must call this collectively because `torch.distributed.new_group` is a barrier — every rank must enter it, even for groups it doesn't belong to.
+Returns a `GroupCoordinator` scoped to whichever group the current rank belongs to. All ranks must call this collectively because `torch.distributed.new_group` is a **barrier** (a synchronization point where every rank must arrive before any rank proceeds) — every rank must enter it, even for groups it doesn't belong to.
 
 ---
 
@@ -273,6 +273,7 @@ assert max(1, 1 //  4) == 1   # 1 KV head: same result either way
 Empirical evidence (captured on cluster):
 ```
 hf_config.num_attention_heads = 32   ← inflated, correct on original
+# hf_config = HuggingFace model config object (loaded from model card JSON)
 model_arch_config.total_num_attention_heads = 4  ← raw, on Pydantic copy
 id(self) differs from original ModelConfig → confirmed: Pydantic created a copy
 ```
@@ -321,4 +322,4 @@ Memory profiling and scheduling happen after model init, so they see correct sta
 - [[ml-systems/python-import-binding]] — import binding behavior for accessing rebuilt process groups
 ## Connections
 
-- [[ml-systems/pt-moe-vllm-implementation]] — uses the `GroupCoordinator` `new_group` loop to scope `_PT` all-reduces to the correct cross-track group per rank
+- [[ml-systems/pt-moe-vllm-implementation]] — uses the `GroupCoordinator` `new_group` loop to scope `_TP` all-reduces to the correct cross-track group per rank
