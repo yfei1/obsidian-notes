@@ -6,15 +6,13 @@
 
 ## Core Intuition
 
-Writing K/V vectors into the cache on every decode step is on the critical path — any per-thread address arithmetic adds latency across thousands of tokens. nano-vLLM solves this by having the CPU pre-compute a flat slot index per token (`slot_mapping`), so the GPU kernel does a single multiply and write with zero division or modulo. The kernel is written in **Triton** — a Python-embedded DSL that compiles to CUDA, where `tl.program_id(0)` identifies the current thread block and `tl.load`/`tl.store` move data between memory and registers. This works because each per-layer cache slice is memory-contiguous, making flat 1D addressing equivalent to structured `[block, position, head, dim]` indexing.
+**Every decode step must write one token's K/V vectors (512 floats × 28 layers) into the cache before attention can proceed.** The naive write requires converting a logical `(block_id, position_in_block)` pair into a physical memory offset — which means integer division and modulo on the GPU, each costing ~20 cycles per thread. At batch=256 with 28 layers, that arithmetic runs on tens of thousands of thread blocks per step, on the critical path. nano-vLLM eliminates this by having the CPU pre-compute a flat `slot` index per token before kernel launch, so the GPU kernel does one multiply (`slot * D`) and one write — zero division, zero modulo. This works because each per-layer cache slice is memory-contiguous, making flat 1D addressing equivalent to structured `[block, position, head, dim]` indexing. The kernel is written in **Triton** — a Python-embedded DSL that compiles to CUDA, where `tl.program_id(0)` identifies the current thread block and `tl.load`/`tl.store` move data between memory and registers.
 
 See [[ml-systems/kv-cache-internals]] for the 6-D tensor layout, cache sizing, and per-layer slice assignment that this kernel operates on.
 
 ---
 
 ## Triton Kernel: Flat 1D Addressing via slot_mapping
-
-GPU integer division costs ~20 cycles; with 512 floats × 28 layers per token, per-thread address arithmetic would dominate decode throughput. The CPU scheduler knows each token's physical location before kernel launch, so it pre-computes a flat slot index — the kernel receives one integer per token and does zero address arithmetic.
 
 The Triton kernel `store_kvcache` writes one token's K and V vectors per CUDA thread block. It treats the cache as a **flat 1D array** — no awareness of blocks, layers, or heads.
 
