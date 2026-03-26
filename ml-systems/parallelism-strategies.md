@@ -57,7 +57,7 @@ DP runs as N independent model replicas behind a load balancer. No synchronizati
 
 ## 2. ZeRO / FSDP (Training Only)
 
-Vanilla DP redundantly stores full optimizer states (Adam keeps fp32 copies of params, gradients, momentum — an exponential moving average of past gradients — and variance — an exponential moving average of past squared gradients — totaling 4× model size in bytes), gradients, and parameters on every GPU. For a 7B model with Adam in fp32, that's 112 GB per GPU (fp32 params + fp32 gradients + fp32 momentum + fp32 variance = 4 × 7B × 4 bytes), duplicated across every replica. ZeRO and FSDP eliminate this by sharding those states across DP replicas in three progressive stages: optimizer states only (Stage 1), plus gradients (Stage 2), plus parameters (Stage 3). Both are **training-only** because inference has no optimizer states or gradients to shard.
+Vanilla DP redundantly stores full optimizer states (Adam keeps fp32 copies of params, gradients, momentum — an exponential moving average of past gradients — and variance — an exponential moving average of past squared gradients — totaling 4× model size in bytes), gradients, and parameters on every GPU. For a 7B model with Adam in fp32, that's 112 GB per GPU (fp32 params + fp32 gradients + fp32 momentum + fp32 variance = 4 × 7B × 4 bytes/param for fp32), duplicated across every replica. ZeRO and FSDP eliminate this by sharding those states across DP replicas in three progressive stages: optimizer states only (Stage 1), plus gradients (Stage 2), plus parameters (Stage 3). Both are **training-only** because inference has no optimizer states or gradients to shard.
 
 ZeRO (Zero Redundancy Optimizer, DeepSpeed/Microsoft) and FSDP (Fully Sharded Data Parallel, PyTorch/Meta) are conceptually identical — competing implementations of the same idea. Pick one; using both simultaneously is redundant and unsupported by any framework.
 
@@ -73,7 +73,7 @@ The standard pattern is **Col→Row pairing**. **Column-parallel** splits the we
 
 Full details — naming conventions, all four pairing designs with worked Qwen3-0.6B shapes, NCCL collective reference, and the TP memory model: [[ml-systems/tensor-parallelism]]
 
-**Bandwidth constraint**: `all_reduce` after every transformer block (the repeated attention + feed-forward unit) requires NVLink-class bandwidth (~900 GB/s within a node). InfiniBand (~50 GB/s across nodes) makes cross-node TP communication-bound — the 18× bandwidth gap means inter-node `all_reduce` latency dominates compute time, not FLOPS. Megatron-LM (NVIDIA's 2019 large-scale training framework) pioneered this pattern; vLLM and SGLang use it for inference.
+**Bandwidth constraint**: `all_reduce` after every transformer block (the repeated attention + feed-forward unit) requires NVLink-class bandwidth (~900 GB/s within a node). InfiniBand (~50 GB/s across nodes) makes cross-node TP **communication-bound** — meaning `all_reduce` latency dominates total step time, not FLOPS — because the 18× bandwidth gap means each `all_reduce` takes 18× longer across nodes than within a node. Megatron-LM (NVIDIA's 2019 large-scale training framework) pioneered this pattern; vLLM and SGLang use it for inference.
 
 ---
 
@@ -115,7 +115,7 @@ flow through the pipeline one after another) to fill the bubble:
   GPU-2: [ ][ ][F0][F1][F2][F3][B3][B2][ ][ ]
   GPU-3: [ ][ ][ ][F0][F1][F2/B2][F3/B3][ ][ ][ ]
 
-Bubble fraction = (p-1)/(p-1+m) for p stages and m micro-batches — more micro-batches amortize the fixed (p-1) idle slots.
+Bubble fraction = (p-1)/(p-1+m), where p = number of pipeline stages and m = number of micro-batches — more micro-batches amortize the fixed (p-1) idle slots at pipeline startup and teardown.
 ```
 
 ### Why PP Uses InfiniBand (Not NVLink) and Behaves Differently in Inference
@@ -173,11 +173,11 @@ SP and CP solve different activation memory problems that TP alone leaves unaddr
 
 TP shards weight matrices but leaves non-TP ops — LayerNorm and Dropout — unsharded, running on the full sequence on every GPU. Because those ops don't participate in TP's weight sharding, each TP rank stores a full-sequence activation for them even though it holds only a fraction of the weights. SP eliminates this redundancy by splitting the sequence dimension across TP ranks, so each GPU stores only its 1/N sequence slice for those ops — activation memory drops by ~30–40% because N identical full-sequence copies collapse to N non-overlapping partial-sequence copies.
 
-SP is always paired with TP because it reuses the same TP process group and the same two collectives TP already issues — **all-gather** (each GPU broadcasts its sequence shard so every GPU reconstructs the full sequence before a weight-parallel op) and **reduce-scatter** (each GPU contributes a partial result; the sum is split so each GPU receives only its sequence slice after the op). SP swaps the *placement* of these collectives around the non-TP ops rather than adding new ones, so there is no extra communication cost.
+SP is always paired with TP because it reuses the same TP process group and the same two collectives TP already issues — **all-gather** (each GPU broadcasts its sequence shard so every GPU reconstructs the full sequence before a TP weight op) and **reduce-scatter** (each GPU contributes a partial result; the sum is split so each GPU receives only its sequence slice after the op). SP repositions these collectives to bracket the non-TP ops (LayerNorm, Dropout) rather than adding new ones, so there is no extra communication cost.
 
 ### CP: Fitting Long Sequences That Exceed a Single GPU
 
-SP reduces redundant copies but cannot reduce the size of one GPU's required working set — if a 128K-token sequence's attention state is too large for a single GPU, SP offers no relief because each GPU still holds a full attention state for its sequence slice. CP solves this by partitioning the sequence across GPUs at the attention level via **Ring Attention**: each GPU holds a contiguous slice of the sequence and passes its key/value tensors to the next GPU in a logical ring, computing its local attention contribution before receiving the next chunk. One full ring rotation completes the attention for that layer. CP composes with both TP and SP.
+SP reduces redundant copies but cannot reduce the peak memory a single GPU must allocate — if a 128K-token sequence's attention state (the keys and values for every token in the sequence) is too large for one GPU, SP offers no relief because each GPU still holds a full attention state for its own sequence slice. CP solves this by partitioning the sequence across GPUs at the attention level via **Ring Attention**: each GPU holds a contiguous slice of the sequence and passes its **key/value tensors** (the per-token representations that attention queries against — see [[ml-systems/attention-mechanics]]) to the next GPU in a logical ring, computing its local attention contribution before receiving the next chunk. One full ring rotation completes the attention for that layer. CP composes with both TP and SP.
 
 Full mechanism, worked diagrams, SP–TP collective swap, Ring Attention rounds, and the SP vs CP vs TP comparison table: [[ml-systems/sequence-and-context-parallelism]]
 
@@ -257,7 +257,7 @@ PT-MoE (parallel tracks):
         → [Track C: small transformer] ──→ ↑
 
   Tracks process tokens INDEPENDENTLY.
-  Synchronization only at input/output boundaries of each track block.
+  Synchronization only at input/output boundaries of each track block (a group of parallel tracks that merge before the next block).
   Each track has its own set of MoE layers.
 ```
 
