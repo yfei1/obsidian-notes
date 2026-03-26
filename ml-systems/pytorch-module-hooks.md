@@ -223,7 +223,9 @@ The bypass is silent: no error, identical output shape, hooks simply don't fire.
 
 ### `module.compile()` causes graph breaks on non-traceable hook Python
 
-`module.compile()` sets `_compiled_call_impl` and compiles `_call_impl` itself — tracing through hook dispatch logic, not just `forward()`. `torch.compile` requires a static computation graph: all control flow and data movement must be traceable ahead of time. Any hook containing `.item()` breaks this because `.item()` forces a GPU→CPU scalar transfer at runtime, which is a dynamic data-dependent operation the tracer cannot represent statically. The compiler hits the `.item()` call, emits a **graph break**, and falls back to slow Python execution for the remainder of that call.
+`module.compile()` sets `_compiled_call_impl` and compiles `_call_impl` itself — tracing through hook dispatch logic, not just `forward()`. This matters because `torch.compile` works by tracing the entire call into a static computation graph ahead of time; anything it cannot represent statically forces a **graph break** — the compiler abandons the trace at that point and falls back to slow Python execution for the rest of that call, negating the compile speedup.
+
+Hook code is the common source of graph breaks here. `.item()` is the canonical example: it forces a GPU→CPU scalar transfer at runtime, which is a dynamic data-dependent operation the tracer cannot represent statically. The compiler hits `.item()`, emits a graph break, and the remainder of that call runs as unoptimized Python.
 
 `@torch.compile` applied to `forward()` does not set `_compiled_call_impl`, so hooks remain outside the compiled region entirely — no graph break risk.
 
