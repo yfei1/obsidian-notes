@@ -6,7 +6,9 @@
 
 ## Core Intuition
 
-During decode, the GPU forward pass takes ~0.1ms but Python kernel launch overhead takes ~1.5ms — the GPU idles >90% of the time waiting for dispatch. CUDA graphs eliminate this by recording the execution sequence once and replaying it with a single call (~0.005ms overhead). The companion problem: a recorded graph hardcodes the physical memory addresses of its tensors at capture time, so it cannot be redirected to read from new tensors each step — feeding new per-step data (block tables, slot mappings — per-step arrays that describe which KV cache memory blocks belong to each sequence) requires copying into those fixed addresses via pinned memory (RAM the OS cannot swap to disk, so the GPU can read it directly) and Unified Virtual Addressing — UVA — (a hardware feature that maps CPU memory into the GPU's address space; see [[ml-systems/gpu-memory-hierarchy]]).
+During decode, the GPU forward pass takes ~0.1ms but Python kernel launch overhead takes ~1.5ms — the GPU idles >90% of the time waiting for dispatch. CUDA graphs fix this by recording the full execution sequence once and replaying it with a single call (~0.005ms overhead).
+
+The companion problem: a recorded graph hardcodes the physical memory addresses of its tensors at capture time, so it cannot be redirected to read from new tensors each step. Feeding new per-step data — block tables and slot mappings (arrays that describe which KV cache memory blocks belong to each sequence) — requires copying into those fixed addresses each step. Doing that copy efficiently requires pinned memory (RAM the OS cannot swap to disk, so the GPU can read it directly without a staging copy) and optionally UVA — Unified Virtual Addressing — (a hardware feature that maps pinned CPU memory into the GPU's address space, eliminating the explicit transfer entirely; see [[ml-systems/gpu-memory-hierarchy]]).
 
 ---
 
@@ -37,7 +39,7 @@ A CUDA graph records a sequence of GPU instructions once, compiles them into a s
 
 Three phases:
 
-1. **Pre-allocation**: Graph memory shapes cannot change after recording, so input/output tensors must be statically sized before capture (e.g., `block_tables = torch.zeros(max_batch_size, max_model_len // block_size)` where `block_size` is the fixed number of token slots per KV cache block). Sizing to `max_model_len` guarantees the buffer is large enough for any sequence the engine will process.
+1. **Pre-allocation**: Graph memory shapes cannot change after recording, so input/output tensors must be statically sized before capture. `max_model_len` is the maximum sequence length the engine supports (e.g., 8192 tokens); `block_size` is the fixed number of token slots per KV cache block. Example: `block_tables = torch.zeros(max_batch_size, max_model_len // block_size)`. Sizing to `max_model_len` guarantees the buffer is large enough for any sequence the engine will process.
 2. **Capture**: Run exactly one forward pass using the static tensors. PyTorch records the execution sequence.
 3. **Replay**: Each inference step, copy dynamic data into the static tensors and call `graph.replay()`.
 
@@ -61,7 +63,7 @@ Engines store static tensors in a class attribute (e.g., `self.graph_vars = dict
 
 CUDA graphs require fixed tensor shapes. For decode, this works well:
 - **Compute shapes are predictable**: Every sequence processes exactly 1 token, so the matrix shape into linear/MLP layers is `[batch_size, 1, hidden_dim]`. Zero wasted compute.
-- **Memory padding is cheap**: The `block_table` is padded with `-1` entries, but FlashAttention (a memory-efficient attention kernel that accepts explicit sequence lengths) respects `context_lens` as a read boundary. Padded entries are never accessed.
+- **Memory padding is cheap**: The `block_table` is padded with `-1` entries, but FlashAttention (a memory-efficient attention kernel that accepts explicit per-sequence lengths via a `context_lens` argument) uses those lengths as a read boundary — padded entries are never accessed.
 
 For prefill, fixed shapes are impractical:
 - The compute matrix shape is `[prompt_len, hidden_dim]`, which varies per request.
@@ -74,7 +76,7 @@ For prefill, fixed shapes are impractical:
 
 ## CPU → GPU Memory Transfer
 
-In a [[ml-systems/llm-inference-engines|continuous batching]] engine, the scheduler rebuilds metadata arrays (`block_tables`, `slot_mappings` — see [[ml-systems/kv-cache-internals]]) every step. These must cross the PCIe bus (the hardware link connecting CPU RAM to GPU VRAM) before the CUDA graph can replay — and the transfer strategy determines whether the CPU stalls waiting for the transfer, allocates a temporary VRAM buffer, or neither.
+In a [[ml-systems/llm-inference-engines|continuous batching]] engine, the scheduler rebuilds metadata arrays (`block_tables`, `slot_mappings` — see [[ml-systems/kv-cache-internals]]) every step. These arrays live in CPU RAM and must cross the PCIe bus (the hardware link connecting CPU RAM to GPU VRAM) before the CUDA graph can replay. The transfer strategy determines whether the CPU stalls waiting for the transfer, whether a temporary VRAM buffer is allocated, or neither.
 
 ### 1. Naive (standard PyTorch)
 
@@ -85,7 +87,7 @@ cpu_tensor = torch.tensor(data)
 gpu_tensor = cpu_tensor.cuda()
 ```
 
-Pageable memory can be swapped to disk by the OS, so the GPU's DMA controller (the hardware unit that moves data across PCIe without stalling the CPU) cannot read it directly — the driver must first copy it into a temporary pinned staging buffer, then transfer across PCIe. This makes `.cuda()` synchronous: the CPU stalls until the transfer completes.
+Pageable memory can be swapped to disk by the OS at any time. The GPU's DMA controller — the hardware unit that moves data across PCIe without stalling the CPU — requires a stable physical address, so it cannot read pageable memory directly. Instead, the driver copies the data into a temporary pinned staging buffer first, then transfers it across PCIe. This double-copy makes `.cuda()` synchronous: the CPU stalls until both copies complete.
 
 ### 2. Pinned memory (nano-vLLM)
 
@@ -109,7 +111,7 @@ self.cpu_buf = torch.zeros(size, pin_memory=True)
 self.uva = get_accelerator_view_from_cpu_tensor(self.cpu_buf)
 ```
 
-UVA maps the pinned CPU buffer into the GPU's address space at startup, so no explicit transfer is needed at runtime. During inference: the scheduler writes into `self.cpu_buf`, calls `graph.replay()`, and the FlashAttention kernel reads from `self.uva` — the GPU pulls data across PCIe directly into its streaming multiprocessors (SMs, the GPU's compute units) during computation. Zero temporary VRAM allocations, zero explicit transfer commands, zero CPU stalls.
+UVA maps the pinned CPU buffer into the GPU's address space at startup — the GPU gets a pointer it can dereference directly, without any explicit transfer command. During inference: the scheduler writes into `self.cpu_buf`, calls `graph.replay()`, and the FlashAttention kernel reads from `self.uva`. The GPU pulls data across PCIe directly into its streaming multiprocessors (SMs — the GPU's compute units) on demand during computation. Zero temporary VRAM allocations, zero explicit transfer commands, zero CPU stalls.
 
 See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of pageable vs pinned vs UVA memory.
 
