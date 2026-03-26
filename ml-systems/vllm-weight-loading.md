@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pairs → **remap names** (checkpoint convention → PyTorch module hierarchy) → call each parameter's `weight_loader` (a callable vLLM attaches to each `nn.Parameter` at model construction time, not a PyTorch built-in) which handles **TP sharding** — tensor parallelism: splitting weight matrices across multiple GPUs so each GPU holds only its slice — transparently. Same code works for TP=1 (single GPU) and TP=8 (eight-way split).
+vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pairs → **remap names** (translate checkpoint naming conventions to PyTorch module paths) → call each parameter's `weight_loader` (a callable vLLM attaches to each `nn.Parameter` at model construction time, not a PyTorch built-in) which handles **TP sharding** — splitting weight matrices across multiple GPUs so each GPU holds only its slice — transparently. Same code works for TP=1 (single GPU) and TP=8 (eight-way split).
 
 **Interview talking points:**
 - **Name remapping**: training and inference frameworks evolve independently, so checkpoint names diverge from PyTorch module paths; `load_weights()` bridges via regex + suffix-map (e.g. `transformer.tamm_model.layers.segment_0.layer_0.attention.qkv_transform.fused_linear.weight` → `model.layers.0.self_attn.qkv_proj.weight`).
@@ -16,7 +16,7 @@ vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pai
 
 ## The Problem: Two Naming Worlds
 
-**A checkpoint tensor and its corresponding `nn.Parameter` can have completely different names** — because training frameworks and inference frameworks evolve independently, accumulating divergent naming conventions. Without translation, `params_dict[ckpt_name]` raises `KeyError` for every tensor: the checkpoint's names simply don't exist in the PyTorch module tree. `load_weights()` exists to bridge this gap: remap every checkpoint name to its PyTorch equivalent, then dispatch to the parameter's `weight_loader`. The remapping is the hard part; everything else is bookkeeping.
+**A checkpoint tensor and its corresponding `nn.Parameter` can have completely different names** — training frameworks and inference frameworks evolve independently, accumulating divergent naming conventions. `params_dict` (a dict from parameter name → `nn.Parameter`, built from `self.named_parameters()`) uses PyTorch module paths as keys; checkpoint names don't match those paths, so every lookup raises `KeyError` without translation. `load_weights()` bridges this gap: remap every checkpoint name to its PyTorch equivalent, then dispatch to the parameter's `weight_loader`. The remapping is the hard part; everything else is bookkeeping.
 
 For example, in the AFM v9 3B model (TAMM — internal codename):
 
@@ -39,7 +39,7 @@ def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
 
 **Output**: A `set[str]` of model parameter names that were successfully loaded. Used for validation (e.g., asserting all 562 tensors loaded).
 
-**Who calls it**: vLLM's model loader, after `__init__` has fully constructed the model — `self.named_parameters()` returns the complete parameter tree only after all submodules are registered. Calling before `__init__` completes would miss parameters from submodules not yet registered.
+**Who calls it**: vLLM's model loader (the engine component that constructs the model and loads its weights before serving begins), after `__init__` has fully constructed the model — `self.named_parameters()` returns the complete parameter tree only after all submodules are registered. Calling before `__init__` completes would miss parameters from submodules not yet registered.
 
 ---
 
@@ -102,7 +102,7 @@ weight_loader(param, tensor)
 
 | Layer Type | What weight_loader Does |
 |---|---|
-| `QKVParallelLinear` | Split the fused QKV weight into separate Q (query), K (key), V (value) sections — the three projection matrices that compute attention similarity — then shard each section across TP ranks |
+| `QKVParallelLinear` | The fused QKV weight packs Q (query), K (key), and V (value) projections into one matrix; `weight_loader` splits them apart, then shards each across TP ranks |
 | `ColumnParallelLinear` | Slice output dimension by TP rank |
 | `RowParallelLinear` | Slice input dimension by TP rank |
 | `VocabParallelEmbedding` | Slice vocab dimension by TP rank |
@@ -179,7 +179,7 @@ TAMM's 56 layers span two segments. Segment 0 (layers 0–34) computes full QKV 
 
 ## PT-MoE 150B: Track-Parallel Weight Loading
 
-PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks packed into one model yield 8 diverse outputs from a single inference pass. The tracks train jointly in one job and are exported into a single checkpoint, so the checkpoint stores all 8 tracks' weights concatenated on dim 0. This creates a loading problem the standard loop can't handle: a shared weight like the embedding has no track dimension, but a per-track weight like `gate_proj` has shape `[8, 2048, 5888]` — passing that full tensor to `weight_loader` would produce wrong shapes and silent corruption. `load_weights()` must detect which tensors are per-track, slice dim 0 to extract this GPU's track, then delegate to the standard `weight_loader` machinery.
+PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks train jointly in one job and are exported into a single checkpoint; the checkpoint stores all 8 tracks' weights concatenated on dim 0. This creates a loading problem the standard loop can't handle: a shared weight like the embedding has no track dimension, but a per-track weight like `gate_proj` has shape `[8, 2048, 5888]` — passing that full tensor to `weight_loader` would produce wrong shapes and silent corruption. `load_weights()` must detect which tensors are per-track, slice dim 0 to extract this GPU's track, then delegate to the standard `weight_loader` machinery.
 
 ### Checkpoint Shape Convention
 
@@ -219,7 +219,7 @@ After slicing and transposing, the tensor is shape-compatible with a single-trac
 
 ### Why Transpose? (150B only)
 
-The 150B checkpoint stores linear weights in `[in, out]` order — an artifact of its export pipeline — while PyTorch's `nn.Linear` stores weight as `[out, in]`. PyTorch's convention matches the `y = xW^T` computation, where `W` is stored as `[out, in]`. Storing `W` already transposed means the matmul reads `W`'s rows sequentially in memory (row-major layout — data for each output neuron is contiguous), avoiding a runtime transpose on the hot path. The 3B checkpoint is already `[out, in]`, so no transpose is needed.
+The 150B checkpoint stores linear weights in `[in, out]` order — an artifact of its export pipeline — while PyTorch's `nn.Linear` stores weight as `[out, in]`. PyTorch's `[out, in]` layout matches the `y = xW^T` computation (the standard linear layer formula): `W` rows correspond to output neurons, so the matmul reads each row sequentially in memory (row-major layout — data for each output neuron is contiguous), avoiding a runtime transpose on the hot path. The 3B checkpoint is already `[out, in]`, so no transpose is needed.
 
 ```
 150B gate_proj: [8, 2048, 5888] → slice → [2048, 5888] = [in, out] → .t() → [5888, 2048] = [out, in]
@@ -234,7 +234,7 @@ def needs_transpose(name: str) -> bool:
 
 ### Expert Weight Loading (FusedMoE)
 
-Expert weights are 3D after track slicing: `[300, 2048, 768]`. In a gated expert MLP, each expert applies three projections: gate (controls information flow via element-wise multiply), up (expands the input), and down (projects back to model dimension). `FusedMoE` packs all 300 experts into two fused weight matrices: `w13` concatenates each expert's gate and up projections along the output dimension, and `w2` holds each expert's down projection. This layout lets a single **batched GEMM** (one large matrix multiply covering all experts simultaneously) replace 300 separate matmuls. Iterating per-expert lets `weight_loader` place each `[2048, 768]` slice at the correct offset in the fused buffer.
+Expert weights are 3D after track slicing: `[300, 2048, 768]`. In a gated expert MLP, each expert applies three projections: gate (controls information flow via element-wise multiply), up (expands the input), and down (projects back to model dimension). `FusedMoE` packs all 300 experts into two fused weight matrices: `w13` concatenates each expert's gate and up projections along the output dimension, and `w2` holds each expert's down projection. This layout lets a single **batched GEMM** — one large matrix multiply that covers all experts simultaneously, replacing 300 separate matmuls — execute on the GPU. Iterating per-expert lets `weight_loader` place each `[2048, 768]` slice at the correct offset in the fused buffer.
 
 ```python
 # After track slice: [300, 2048, 768]
@@ -267,7 +267,7 @@ Source: `weights/afm-text-150b-instruct-20250915/tensor_shapes.txt`
 
 ### Global NoPE in Checkpoint
 
-**RoPE** (Rotary Position Embedding) encodes token position into the Q and K vectors before scoring, so the dot-product similarity between any two tokens varies with their relative distance. **Global NoPE** (No Positional Encoding) layers omit RoPE entirely, so the attention score between any two tokens is position-independent — useful for attending across arbitrarily distant context without the score penalty that RoPE applies as token distance grows. They use a different checkpoint name for QKV (`qkv_transform_global_nope.fused_linear` instead of `qkv_transform.fused_linear`) but map to the same model parameter (`self_attn.qkv_proj`) because the weight shape is identical — only the training objective differs. The `_SUFFIX_MAP` handles both:
+Attention scores between tokens are computed as dot products of their Q and K vectors. **RoPE** (Rotary Position Embedding) rotates Q and K vectors by an angle proportional to token position before scoring, so the dot product between two tokens decreases as their distance grows. **Global NoPE** (No Positional Encoding) layers omit RoPE entirely, so the attention score between any two tokens is position-independent — useful for attending across arbitrarily distant context without the distance penalty RoPE applies. They use a different checkpoint name for QKV (`qkv_transform_global_nope.fused_linear` instead of `qkv_transform.fused_linear`) but map to the same model parameter (`self_attn.qkv_proj`) because the weight shape is identical — only the training objective differs. The `_SUFFIX_MAP` handles both:
 
 ```python
 ("attention.qkv_transform.fused_linear.", "self_attn.qkv_proj."),
