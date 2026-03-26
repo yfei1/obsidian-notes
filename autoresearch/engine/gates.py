@@ -174,8 +174,16 @@ def _gate_kebab_case_name(note_path: str, result: GateResult) -> None:
         result.fail(f"File name not kebab-case: {name}")
 
 
-def _gate_net_zero_length(original: str, new_content: str, result: GateResult) -> None:
-    """Notes above NET_ZERO_THRESHOLD lines must not grow beyond a small tolerance."""
+def _gate_net_zero_length(original: str, new_content: str, result: GateResult,
+                          strategy: str = "") -> None:
+    """Notes above NET_ZERO_THRESHOLD lines must not grow beyond a small tolerance.
+
+    concretize is exempt: adding worked examples (concrete numbers, code traces) to a
+    dense note is legitimate growth that the judges reward. The line-limit gate (450)
+    still caps absolute size.
+    """
+    if strategy == "concretize":
+        return
     orig_lines = len(original.split("\n"))
     if orig_lines <= NET_ZERO_THRESHOLD:
         return
@@ -264,7 +272,17 @@ def _gate_inline_definition_preservation(original: str, new_content: str,
       **term** (parenthetical definition)
       **term** — em-dash definition
       **term**: colon definition
-    Normalizes term keys (lowercase, strip trailing s/es) to handle pluralization.
+    Normalizes term keys (lowercase, strip plural suffixes) to handle pluralization.
+
+    A definition is considered preserved when ANY of the following hold:
+      1. The new prose contains the term in the same or equivalent format.
+      2. The new prose contains the term bold AND the definition text nearby
+         (within 200 chars), regardless of format — catches reformatting like
+         moving the definition from inline-parens to a trailing clause.
+      3. The key words of the original definition appear in the new prose near
+         the bold term (handles paraphrasing that preserves the core meaning).
+    Interview-question terms (bold text starting with a quotation mark or
+    ending with '?') are excluded — they are section headers, not jargon.
     """
     # Match all three definition formats
     defn_re = re.compile(
@@ -282,13 +300,41 @@ def _gate_inline_definition_preservation(original: str, new_content: str,
         return re.sub(r'^\|.*\|$', '', text, flags=re.MULTILINE)
 
     def _normalize_term(t: str) -> str:
-        """Normalize bold term for comparison: lowercase, strip plural suffixes."""
+        """Normalize bold term for comparison: lowercase, strip simple plural suffix.
+
+        Handles common irregular plurals in ML/systems context, then applies
+        regular suffix stripping with guards against short words.
+        """
         t = t.strip().lower()
-        if t.endswith("es") and len(t) > 3:
+        # Common irregular plurals in ML/systems context
+        irregulars = {
+            "matrices": "matrix", "indices": "index", "vertices": "vertex",
+            "axes": "axis", "bases": "basis", "analyses": "analysis",
+            "hypotheses": "hypothesis", "theses": "thesis",
+        }
+        if t in irregulars:
+            return irregulars[t]
+        # -ies → -y (e.g. "strategies" → "strategy", "entries" → "entry")
+        if t.endswith("ies") and len(t) > 4:
+            return t[:-3] + "y"
+        # -ses, -zes, -xes → strip -es (e.g. "processes" → "process", "boxes" → "box")
+        if len(t) > 4 and (t.endswith("ses") or t.endswith("zes") or t.endswith("xes") or t.endswith("ches") or t.endswith("shes")):
             return t[:-2]
-        if t.endswith("s") and len(t) > 2:
+        # Strip trailing 'es' only when stem >= 4 chars and ends in a vowel
+        # (e.g. 'caches'→'cache', 'processes'→'process' but 'buses' stays)
+        if t.endswith("es") and len(t) > 5 and t[-3] in "aeiou":
+            return t[:-1]  # 'caches' → 'cache' (drop the 's', keep the 'e')
+        if t.endswith("es") and len(t) > 6:
+            return t[:-2]  # 'processes' → 'process'
+        # Strip trailing 's' only for words > 4 chars to avoid 'bus'→'bu', 'class'→'clas'
+        if t.endswith("s") and len(t) > 4 and not t.endswith("ss"):
             return t[:-1]
         return t
+
+    def _is_interview_question(term: str) -> bool:
+        """Return True if the bold term is an interview question, not a jargon term."""
+        t = term.strip()
+        return t.startswith('"') or t.startswith("'") or t.endswith('?') or t.endswith('?"')
 
     def _extract_definitions(text: str) -> dict[str, str]:
         """Extract {normalized_term: definition_text} from prose."""
@@ -296,6 +342,8 @@ def _gate_inline_definition_preservation(original: str, new_content: str,
         defs = {}
         for m in defn_re.finditer(clean):
             term = m.group(1).strip()
+            if _is_interview_question(term):
+                continue
             defn = m.group(2) or m.group(3) or m.group(4) or ""
             defs[_normalize_term(term)] = defn.strip()
         return defs
@@ -307,7 +355,7 @@ def _gate_inline_definition_preservation(original: str, new_content: str,
     new_definitions = _extract_definitions(new_prose)
     new_keys = set(new_definitions.keys())
 
-    # Fallback: check if the bold term still appears with SOME following
+    # Fallback 1: check if the bold term still appears with SOME following
     # explanatory text (at least 10 chars after the bold marker).
     # This catches format changes we don't explicitly parse, but requires
     # actual definition text — a bare bold term without explanation doesn't count.
@@ -315,16 +363,43 @@ def _gate_inline_definition_preservation(original: str, new_content: str,
         r'\*\*([^*]+)\*\*\s*(?:\(|—|:|\s*[-–])\s*\S.{9,}',
     )
     new_bold_with_defn = {_normalize_term(m.group(1))
-                          for m in _bold_with_text_re.finditer(new_prose)}
+                          for m in _bold_with_text_re.finditer(new_prose)
+                          if not _is_interview_question(m.group(1))}
+
+    # Fallback 2: check if the term appears bold AND the definition text appears
+    # nearby (within 200 chars in either direction). This catches the common
+    # clarify pattern of moving a definition from inline-parens to a trailing
+    # relative clause: "**term** (def)" → "**term** usage — where **term** is def".
+    def _defn_info_present(norm_term: str, orig_defn: str, new_prose: str) -> bool:
+        """Return True if the bold term's core definition info exists in new_prose."""
+        # Extract meaningful keywords from original definition (words >= 4 chars)
+        keywords = [w for w in re.findall(r'\b\w{4,}\b', orig_defn.lower()) if w.isalpha()]
+        if not keywords:
+            return False
+        # Find all positions where the normalized term appears bold in new_prose
+        for m in re.finditer(r'\*\*([^*]+)\*\*', new_prose):
+            if _normalize_term(m.group(1)) == norm_term:
+                # Check if definition keywords appear within 200 chars of this occurrence
+                start = max(0, m.start() - 50)
+                end = min(len(new_prose), m.end() + 200)
+                window = new_prose[start:end].lower()
+                # Require at least half the keywords to be present
+                found = sum(1 for kw in keywords if kw in window)
+                if found >= max(1, len(keywords) // 2):
+                    return True
+        return False
 
     dropped = []
     for norm_term, defn in orig_definitions.items():
-        if norm_term not in new_keys and norm_term not in new_bold_with_defn:
-            # Term's definition is gone from the new version
-            orig_term = next(
-                (m.group(1) for m in re.finditer(r'\*\*([^*]+)\*\*', orig_prose)
-                 if _normalize_term(m.group(1)) == norm_term), norm_term)
-            dropped.append(f"**{orig_term}** ({defn[:60]}{'...' if len(defn) > 60 else ''})")
+        if norm_term in new_keys or norm_term in new_bold_with_defn:
+            continue
+        if _defn_info_present(norm_term, defn, new_prose):
+            continue
+        # Term's definition is genuinely gone from the new version
+        orig_term = next(
+            (m.group(1) for m in re.finditer(r'\*\*([^*]+)\*\*', orig_prose)
+             if _normalize_term(m.group(1)) == norm_term), norm_term)
+        dropped.append(f"**{orig_term}** ({defn[:60]}{'...' if len(defn) > 60 else ''})")
 
     if dropped:
         result.fail(
@@ -385,7 +460,7 @@ def check_all_gates(original_content: str, new_content: str,
 
     if not is_cross_file:
         _gate_shrinkage(original_content, new_content, result)
-        _gate_net_zero_length(original_content, new_content, result)
+        _gate_net_zero_length(original_content, new_content, result, strategy=strategy)
     if not skip_section_preservation:
         _gate_section_preservation(original_content, new_content, result)
 

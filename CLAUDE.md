@@ -240,12 +240,12 @@ Decision-oriented points are more valuable in ML systems interviews. Always incl
 
 This repo includes an `autoresearch/` directory with automated note quality scoring and improvement:
 
-- `autoresearch/score.py` — Scores on 9 dimensions + 2 prerequisite gates (see `autoresearch/rubric.md`)
-- Targeting priority: Interview Readiness (3x), Clarity/KD/Conciseness (2x), others (1-1.5x)
+- `autoresearch/score.py` — Scores on 9 dimensions + 2 prerequisite gates
+- Targeting priority: Clarity/KD (2x), Structure/Examples/Coherence/Uniqueness/Conciseness (1.5x), others (1x)
 - Gates: Naming & Structure (template compliance), Length Budget (<=400 lines)
-- `autoresearch/improve.py` — Autonomous loop: score → pick weakest → improve → re-score → keep/discard
-- `autoresearch/program.md` — Agent instructions for the improvement loop
+- `autoresearch/engine/loop.py` — Residual-GRPO evolution loop: generate deltas → rank with multi-judge ensemble → gate → adopt or rollback
+- `autoresearch/constitution.md` — Quality standards loaded at runtime and passed to LLM strategy prompts
 - **Modifiable files**: Only notes (`*.md` in topic dirs) and `CLAUDE.md` may be modified by the loop
-- **Fixed files**: `autoresearch/rubric.md`, `autoresearch/score.py` are not modified by the loop
+- **Fixed files**: `autoresearch/score.py` is not modified by the loop
 - Run scoring: `python autoresearch/score.py`
-- Run improvement loop: `python autoresearch/improve.py`
+- Run GRPO loop: `cd autoresearch && PYTHONPATH="$PWD:$PYTHONPATH" PYTHONUNBUFFERED=1 python engine/loop.py --max-gen 100`

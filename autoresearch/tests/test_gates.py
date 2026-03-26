@@ -260,6 +260,132 @@ def build_test_cases() -> list[tuple]:
         "ml-systems/test-note.md", "simplify_code", True, ""
     ))
 
+    # =====================================================================
+    # FIX 4: Inline definition — format conversion should pass (not false negative)
+    # =====================================================================
+
+    # 16. Clarify moves inline def from parens to em-dash ("where X is...") — MUST PASS
+    # Before: **block-table** (per-sequence array mapping logical block index → physical block number) lookups
+    # After:  **block-table** lookups — where **block-table** is the per-sequence array mapping logical...
+    paren_def_note = (
+        "# Test Note\n#test #interview-prep\n\n"
+        "## TL;DR\nSummary because reasons.\n\n"
+        "## Core Intuition\n\n"
+        "FlashAttention requires aligned **block-table** (per-sequence array mapping "
+        "logical block index to physical block number) lookups. This happens because "
+        "misaligned entries break coalesced access because the warp reads odd strides.\n\n"
+        "## See Also\n[[ml-systems/attention-mechanics]]\n"
+    )
+    em_dash_def_note = (
+        "# Test Note\n#test #interview-prep\n\n"
+        "## TL;DR\nSummary because reasons.\n\n"
+        "## Core Intuition\n\n"
+        "FlashAttention requires aligned **block-table** lookups — where **block-table** "
+        "is the per-sequence array mapping logical block index to physical block number. "
+        "This happens because misaligned entries break coalesced access because the warp "
+        "reads odd strides.\n\n"
+        "## See Also\n[[ml-systems/attention-mechanics]]\n"
+    )
+    cases.append((
+        "inline_def_paren_to_emdash_MUST_PASS",
+        paren_def_note, em_dash_def_note,
+        "ml-systems/test-note.md", "clarify", True, None
+    ))
+
+    # 17. Inline def genuinely removed (term still bold but no definition anywhere) — MUST VETO
+    removed_def_note = (
+        "# Test Note\n#test #interview-prep\n\n"
+        "## TL;DR\nSummary because reasons.\n\n"
+        "## Core Intuition\n\n"
+        "FlashAttention requires aligned **block-table** lookups. "
+        "This happens because misaligned entries break coalesced access because "
+        "the warp reads odd strides.\n\n"
+        "## See Also\n[[ml-systems/attention-mechanics]]\n"
+    )
+    cases.append((
+        "inline_def_genuinely_removed_MUST_VETO",
+        paren_def_note, removed_def_note,
+        "ml-systems/test-note.md", "clarify", False, "Inline definition"
+    ))
+
+    # 18. Interview question in bold — must NOT be treated as a jargon term — MUST PASS
+    interview_q_note = (
+        "# Test Note\n#test #interview-prep\n\n"
+        "## TL;DR\nSummary because reasons.\n\n"
+        "## Core Intuition\n\nSome prose because context.\n\n"
+        "## Interview Talking Points\n\n"
+        '1. **"Why use blocks?"** (Blocks reduce fragmentation because they allow '
+        "non-contiguous allocation.)\n"
+        '2. **"What breaks if block_size < 256?"** (FlashAttention alignment '
+        "fails because it requires 256-element alignment.)\n\n"
+        "## See Also\n[[ml-systems/attention-mechanics]]\n"
+    )
+    # Rewrite condenses the interview section — question text reformatted but info kept
+    interview_q_condensed = (
+        "# Test Note\n#test #interview-prep\n\n"
+        "## TL;DR\nSummary because reasons.\n\n"
+        "## Core Intuition\n\nSome prose because context.\n\n"
+        "## Interview Talking Points\n\n"
+        "1. **Why use blocks?** — Reduces fragmentation; non-contiguous allocation "
+        "becomes possible because block IDs are indirected.\n"
+        "2. **What breaks if block_size < 256?** — FlashAttention alignment fails "
+        "because it needs 256-element stride.\n\n"
+        "## See Also\n[[ml-systems/attention-mechanics]]\n"
+    )
+    cases.append((
+        "interview_question_bold_not_jargon_MUST_PASS",
+        interview_q_note, interview_q_condensed,
+        "ml-systems/test-note.md", "section_rewrite", True, None
+    ))
+
+    # =====================================================================
+    # FIX 5: Net-zero — concretize strategy exempt from growth limit
+    # =====================================================================
+
+    # 19. concretize adds worked examples to a >300-line note — MUST PASS
+    grown_310_concretize = base_310 + "\n".join(["Concrete example because x = 42."] * 15)
+    cases.append((
+        "netzero_concretize_exempt_MUST_PASS",
+        base_310, grown_310_concretize,
+        "ml-systems/test-note.md", "concretize", True, None
+    ))
+
+    # 20. Non-concretize strategy on >300-line note, same growth — MUST VETO
+    cases.append((
+        "netzero_clarify_not_exempt_MUST_VETO",
+        base_310, grown_310_concretize,
+        "ml-systems/test-note.md", "clarify", False, "Net-zero"
+    ))
+
+    # =====================================================================
+    # FIX 7: Pluralization — short words must not be over-stripped
+    # =====================================================================
+
+    # 21. "buses" should not be stripped to "bu" — term with 's' ending passes
+    buses_note = (
+        "# Test Note\n#test #interview-prep\n\n"
+        "## TL;DR\nSummary because reasons.\n\n"
+        "## Core Intuition\n\n"
+        "The system uses **buses** (shared communication channels that carry data "
+        "between components) to transfer tensors because point-to-point is slower.\n\n"
+        "## See Also\n[[ml-systems/attention-mechanics]]\n"
+    )
+    # Rewrite keeps the term bold and the definition present but slightly rephrased
+    buses_rephrased = (
+        "# Test Note\n#test #interview-prep\n\n"
+        "## TL;DR\nSummary because reasons.\n\n"
+        "## Core Intuition\n\n"
+        "Tensors move over **buses** — shared communication channels that carry data "
+        "between components — because point-to-point links are slower and harder to "
+        "scale.\n\n"
+        "## See Also\n[[ml-systems/attention-mechanics]]\n"
+    )
+    cases.append((
+        "pluralization_buses_not_over_stripped_MUST_PASS",
+        buses_note, buses_rephrased,
+        "ml-systems/test-note.md", "clarify", True, None
+    ))
+
     return cases
 
 

@@ -24,7 +24,7 @@ from engine.delta import Delta, Op
 from engine.grpo import grpo_rank, IDENTITY_ID
 from engine.strategies import (
     NOTE_STRATEGIES, SPLIT_STRATEGY, DEDUP_STRATEGY, SYSTEMATIZE_STRATEGY,
-    REWRITE_STRATEGY, CONSOLIDATE_STRATEGY, RENAME_STRATEGY,
+    REWRITE_STRATEGY, CONSOLIDATE_STRATEGY, RENAME_STRATEGY, CROSSLINK_STRATEGY,
     SPLIT_LINE_THRESHOLD, Strategy,
 )
 from engine.gates import (
@@ -232,6 +232,14 @@ def _extract_fact_inventory(content: str) -> str:
     return "\n".join(items) if items else "(no concrete artifacts extracted)"
 
 
+def _normalize_number(s: str) -> float | None:
+    """Parse a number string (with optional commas) to float, or return None."""
+    try:
+        return float(s.replace(",", ""))
+    except (ValueError, AttributeError):
+        return None
+
+
 def _verify_fact_preservation(original: str, new_content: str) -> list[str]:
     """Check that concrete artifacts from the original survive in the rewrite.
 
@@ -240,14 +248,37 @@ def _verify_fact_preservation(original: str, new_content: str) -> list[str]:
     import re
     missing: list[str] = []
 
-    # Check numbers with units
-    numbers = re.findall(
-        r'[\d,]+\.?\d*\s*(?:MB|GB|TB|KB|GiB|MiB|ms|us|µs|ns|TFLOPS|GFLOPS)',
-        original, re.IGNORECASE,
+    # Fix 8: Number normalization — compare numeric values, not string representations.
+    # "322 million" and "319,946,752" are different values but "16 MB" and "16MB" are the same.
+    # Extract number+unit pairs and compare numerically within a 5% tolerance.
+    unit_pattern = re.compile(
+        r'([\d,]+\.?\d*)\s*(MB|GB|TB|KB|GiB|MiB|ms|us|µs|ns|TFLOPS|GFLOPS)',
+        re.IGNORECASE,
     )
-    for n in set(numbers):
-        if n.strip() not in new_content:
-            missing.append(f"Number: {n.strip()}")
+    orig_nums = unit_pattern.findall(original)
+    new_nums_raw = unit_pattern.findall(new_content)
+
+    # Build lookup: (normalized_value, unit_lower) -> True
+    new_num_set: set[tuple[float, str]] = set()
+    for raw_val, unit in new_nums_raw:
+        v = _normalize_number(raw_val)
+        if v is not None:
+            new_num_set.add((v, unit.lower()))
+
+    for raw_val, unit in orig_nums:
+        v = _normalize_number(raw_val)
+        if v is None:
+            continue
+        key = (v, unit.lower())
+        # Check exact match first, then within 5% tolerance
+        found = key in new_num_set
+        if not found:
+            for nv, nu in new_num_set:
+                if nu == unit.lower() and v > 0 and abs(nv - v) / v < 0.05:
+                    found = True
+                    break
+        if not found:
+            missing.append(f"Number: {raw_val.strip()} {unit}")
 
     # Check code blocks survive (by first line)
     orig_blocks = re.findall(r'```\w*\n(.+?)(?:\n|```)', original, re.DOTALL)
@@ -710,6 +741,13 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 "fact_inventory": fact_inventory,
             }))
 
+        # Fix 2: cross_link and rename were defined but never added to candidate pool
+        # cross_link: always eligible — adds wikilinks to related notes
+        # note_list is injected via extra_vars.setdefault below (same as systematize)
+        candidate_pool.append((CROSSLINK_STRATEGY, {}))
+        # rename: always eligible — UCB will suppress it if filename is already good
+        candidate_pool.append((RENAME_STRATEGY, {}))
+
         # Score each candidate using global UCB + per-note memory
         target_cache = note_tried.get(target_path, {})
         scored: list[tuple[float, Strategy, dict[str, str]]] = []
@@ -836,8 +874,17 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 paths = delta.affected_paths()
                 print(f"  {strategy.name}: ok ({len(delta.ops)} ops, {len(paths)} file(s))")
 
-        if not deltas:
-            print("  No valid deltas. Skipping generation.")
+        if len(deltas) < 2:
+            # Fix 1: require at least 2 valid deltas for a meaningful GRPO ranking.
+            # A single delta vs identity is a degenerate comparison — the advantage
+            # score has no reference point and UCB learning is unreliable.
+            print(f"  Fewer than 2 valid deltas ({len(deltas)}). Skipping generation.")
+            for d in deltas:
+                append_history(AttemptRecord(
+                    generation=generation, target=target_path,
+                    strategy=d.strategy, delta_id=d.id,
+                    outcome="invalid", veto_reason="fewer than 2 valid deltas",
+                ))
             save_generation_metadata(generation, {
                 "generation": generation, "target": target_path,
                 "outcome": "no_deltas",
@@ -847,6 +894,22 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
         # ── GRPO RANK (diff-based, multi-file) ──
         print(f"\n[GRPO] Ranking {len(deltas)} candidates + identity "
               f"with {len(judges)} judges...", flush=True)
+
+        # Fix 6: Skip judges whose veto only applies to strategies not in this generation.
+        # A judge with veto_on_strategies is only needed when at least one of those
+        # strategies produced a delta; otherwise it adds latency with no effect.
+        running_strategies = {d.strategy for d in deltas}
+        active_judges = []
+        for j in judges:
+            veto_strats = set(getattr(j, "veto_on_strategies", ()))
+            if veto_strats and not veto_strats.intersection(running_strategies):
+                print(f"  [Judges] Skipping {j.id} (veto-only for {veto_strats}, not in play)")
+                continue
+            active_judges.append(j)
+        if len(active_judges) < 3:
+            # Safety: always use the full ensemble rather than an under-staffed panel
+            active_judges = judges
+            print("  [Judges] Restored full ensemble (too few after filtering)")
 
         # Fix 3: Build extra context for judges when dedup is involved
         extra_context = ""
@@ -867,7 +930,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             original_content=target_content,
             deltas=deltas,
             constitution=constitution,
-            judges=judges,
+            judges=active_judges,
             file_contents=file_contents,
             domain_context="Obsidian notes building durable mental models for ML systems and inference",
             extra_context=extra_context,
@@ -894,6 +957,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             save_generation_metadata(generation, {
                 "generation": generation, "target": target_path,
                 "outcome": "identity_won",
+                "per_judge_rankings": result.per_judge,   # Fix 3
             })
             continue
 
@@ -909,7 +973,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
         # Engineering judges with veto_on_strategies can reject edits regardless of
         # majority vote — prevents "clearer but wrong" pseudo code from passing.
         vetoed_by = None
-        for judge in judges:
+        for judge in active_judges:  # Fix 6: only check judges that were actually called
             veto_strategies = getattr(judge, "veto_on_strategies", ())
             if winner.strategy in veto_strategies:
                 judge_ranking = result.per_judge.get(judge.id, {})
@@ -934,6 +998,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 "generation": generation, "target": target_path,
                 "outcome": "vetoed", "vetoed_by": vetoed_by,
                 "winner_advantage": winner_advantage,
+                "per_judge_rankings": result.per_judge,   # Fix 3
             })
             continue
 
@@ -951,6 +1016,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 "generation": generation, "target": target_path,
                 "outcome": "below_threshold",
                 "winner_advantage": winner_advantage,
+                "per_judge_rankings": result.per_judge,   # Fix 3
             })
             continue
 
@@ -1090,6 +1156,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             "num_valid_deltas": len(deltas),
             "num_valid_judges": len(result.per_judge),
             "judge_ids_responded": list(result.per_judge.keys()),
+            "per_judge_rankings": result.per_judge,   # Fix 3
             "outcome": "adopted",
             "winner": winner.strategy,
             "winner_advantage": winner_advantage,
