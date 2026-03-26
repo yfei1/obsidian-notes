@@ -2,8 +2,6 @@
 
 #ml-systems #distributed-systems #interview-prep
 
-**Prerequisites**: [[ml-systems/parallelism-strategies]] (TP/PP/DP concepts), [[ml-systems/tensor-parallelism]] (shard/all-reduce mechanics), [[ml-systems/pt-moe-architecture]] (track concept), [[ml-systems/vllm-executor-architecture]] (engine startup sequence)
-
 ## TL;DR
 
 vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP` — where **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). A **collective** is an operation — like all-reduce (sum a tensor across all ranks, give every rank the result) or broadcast — that every rank in a group executes together. Each group is a `GroupCoordinator` holding two process groups: one backed by NCCL (NVIDIA's GPU collective library, runs kernels over NVLink/PCIe) and one backed by Gloo (Meta's CPU collective library, used for control-plane barriers where no GPU context is needed). Groups can be destroyed and rebuilt at runtime — PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** (one independent model replica within a PT-MoE deployment, running its own forward pass in parallel with other tracks) without forking vLLM.
@@ -165,11 +163,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-Created by `init_model_parallel_group()` (parallel_state.py:1146). A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves.
-
-Each coordinator holds two process groups — one NCCL, one Gloo — because GPU collectives and CPU coordination require different backends. NCCL requires an active GPU context and issues kernels over NVLink/PCIe; it cannot run before GPU initialization. Gloo runs entirely on CPU, so it handles control-plane barriers that occur before or after GPU kernels where no GPU context exists. Splitting them means neither blocks the other.
-
-The constructor (parallel_state.py:316-395) creates both backends for every group rank list, then stores only the group the current rank belongs to:
+Created by `init_model_parallel_group()` (parallel_state.py:1146). A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. The constructor (line 316-395) iterates ALL group rank lists, creates torch process groups for each, then stores only the one the current rank belongs to:
 
 ```python
 for ranks in group_ranks:
@@ -181,14 +175,14 @@ for ranks in group_ranks:
         self.rank_in_group = ranks.index(self.rank)
 ```
 
-Every rank iterates every group — including groups it doesn't belong to — because `torch.distributed.new_group` is a collective barrier: all ranks must arrive before any rank proceeds. Skipping a group would deadlock the ranks that do participate.
+Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must enter it even for groups they don't belong to.
 
 Resources held per coordinator:
 
 | Field | Backend | Purpose |
 |-------|---------|--------|
-| `device_group` | NCCL | GPU collectives (all-reduce, broadcast) over NVLink or PCIe |
-| `cpu_group` | Gloo | CPU-side barriers and control-plane sync (no GPU context needed) |
+| `device_group` | NCCL | GPU collectives (all-reduce, broadcast over NVLink/PCIe — the physical GPU-to-GPU interconnects). Used for weight sharding and activation exchange during the forward pass. |
+| `cpu_group` | Gloo | CPU-side coordination (e.g., barrier synchronization). Separate from NCCL because Gloo runs on CPU and doesn't require a GPU context — needed for control-plane operations that happen before or after GPU kernels. |
 | `device_communicator` | — | Custom comm buffers (optional) |
 | `mq_broadcaster` | — | Message queue for weight broadcasting (optional) |
 
@@ -196,7 +190,7 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 
 ### Rank vs. Group Position Attributes
 
-Three rank-like values coexist because a rank's global identity, its physical GPU slot, and its position within a specific group are all different things — and code at different layers needs each:
+Three rank-like values coexist because each answers a different question:
 
 | Attribute | Question answered | Example (rank 12, TP group [12,13,14,15], node has GPUs 8–15) |
 |-----------|------------------|---------------------------------------------------------------|
@@ -285,7 +279,7 @@ assert max(1, 1 //  4) == 1   # 1 KV head: same result either way
 
 ### Pydantic Config Copy Pitfall
 
-`VllmConfig` is a Pydantic dataclass — Pydantic (a Python validation library that reconstructs objects from serialized primitives, not live references) re-runs `__init__` on nested dataclasses. When constructing `VllmConfig(model_config=mc)`, Pydantic serializes `mc` to primitives and reconstructs a new `ModelConfig`, re-running `__post_init__` and recomputing `model_arch_config` via `ModelArchConfigConvertorBase.get_total_num_attention_heads()`. If the original config **inflated** `num_attention_heads` to account for tracks (e.g., stored `num_heads * num_tracks = 32` instead of the true per-track value 4), the Pydantic copy resolves to the raw value (4) — because `hf_text_config` on the copy points to a differently-resolved config object.
+`VllmConfig` is a Pydantic dataclass — Pydantic (a Python validation library that constructs objects from serialized fields rather than passing live objects through) re-runs `__init__` on nested dataclasses when constructing a parent. When constructing `VllmConfig(model_config=mc)`, Pydantic serializes `mc` to its primitive fields and reconstructs a new `ModelConfig` from those primitives. The copy runs `__post_init__` again, recomputing `model_arch_config` via `ModelArchConfigConvertorBase.get_total_num_attention_heads()`. If the original config inflated `num_attention_heads` in `__init__` (e.g., `num_heads * num_tracks = 32`), the copy resolves to the raw value (4) instead of the inflated value (32) — because `hf_text_config` on the copy points to a differently-resolved config object.
 
 Empirical evidence (captured on cluster):
 ```
@@ -329,18 +323,18 @@ Memory profiling and scheduling happen after model init, so they see correct sta
 ## See Also
 
 - [[ml-systems/parallelism-strategies]] — TP, PP, EP fundamentals
-- [[ml-systems/tensor-parallelism]] — shard/all-reduce mechanics underlying TP group collectives
-- [[ml-systems/pt-moe-vllm-implementation]] — uses the `GroupCoordinator` `new_group` loop to scope `_TP` all-reduces to the correct cross-track group; applies the config-divergence fix
-- [[ml-systems/parallel-track-architecture]] — track concept and PT-MoE deployment model
-- [[ml-systems/pt-moe-architecture]] — MoE layer structure that motivates the TP rebuild pattern
+- [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE process group setup that uses this rebuild pattern
 - [[ml-systems/vllm-model-integration]] — model registration and loading
 - [[ml-systems/vllm-weight-loading]] — weight loading uses `rank_in_group` for track slicing
-- [[ml-systems/kv-cache-internals]] — KV head allocation affected by config divergence after rebuild
 - [[ml-systems/validating-parallelism-at-scale]]
+- [[ml-systems/parallel-track-architecture]]
+- [[ml-systems/tensor-parallelism]]
+- [[ml-systems/kv-cache-internals]]
 - [[ml-systems/python-import-binding]] — import binding behavior for accessing rebuilt process groups
 
 ## Connections
 
-- [[ml-systems/vllm-executor-architecture]] — engine startup sequence determines when group rebuild is safe
+- [[ml-systems/pt-moe-vllm-implementation]] — uses the `GroupCoordinator` `new_group` loop to scope `_TP` all-reduces to the correct cross-track group per rank
 - [[ml-systems/ray-compiled-graph-in-vllm]]
 - [[ml-systems/vllm-cg-investigation-findings]]
+- [[ml-systems/vllm-executor-architecture]]

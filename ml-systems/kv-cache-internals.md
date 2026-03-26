@@ -2,10 +2,6 @@
 
 #ml-systems #inference #interview-prep
 
-**Scope**: KV cache allocation, sizing, and write path as implemented in nano-vLLM (Qwen3-0.6B reference). Covers the 6-D tensor layout, warmup-based VRAM sizing, per-layer view assignment, flat 1D Triton write path, and prefill/decode cache usage. For the attention math that consumes the cache, see [[ml-systems/attention-mechanics]]. For vLLM's production paged memory manager, see [[ml-systems/llm-inference-engines]].
-
-**Prerequisites**: [[ml-systems/attention-mechanics]] (K/V projections, prefill vs. decode), [[ml-systems/gpu-memory-hierarchy]] (VRAM layout, warp coalescing), [[ml-systems/transformer-model-internals]] (decoder layer structure).
-
 ## TL;DR
 
 **Problem**: autoregressive generation recomputes K and V for every prior token at every step — O(N²) total compute. **Fix**: store each token's K and V the first time they're computed and reuse them. nano-vLLM allocates the cache as a single 6-D tensor `[2, layers, blocks, block_size, kv_heads, head_dim]`, sized by running a warmup forward pass and measuring remaining VRAM. Each Attention module receives a **view** (not copy) of its layer's slice. A **Triton** kernel (Triton: a GPU programming language that compiles Python-like code to PTX, OpenAI 2021) writes new K/V vectors into the cache using **flat 1D addressing**: each token is pre-assigned a physical slot index (`slot_mapping`) by the CPU, and the kernel writes directly to `slot * D` in the flat array — no block/position math on the GPU. The **BlockManager** is the CPU-side component that tracks which 256-token blocks are free or in use and pre-computes `slot_mapping`.
@@ -24,7 +20,7 @@ The KV cache eliminates this by storing each token's K and V the first time they
 
 ## What Does the 6-D Tensor Look Like?
 
-Every layer needs its own K and V storage. Fragmented per-layer allocations would cause memory overhead and slow down the **BlockManager** (CPU-side component defined in the TL;DR) — so nano-vLLM allocates one giant tensor upfront and hands each layer a view into it.
+Every layer needs its own K and V storage. Fragmented per-layer allocations would cause memory overhead and slow down the **BlockManager** — the CPU-side component that tracks which 256-token blocks are free or in use and pre-computes `slot_mapping` before each kernel launch — so nano-vLLM allocates one giant tensor upfront and hands each layer a view into it.
 
 ```python
 # model_runner.py:112
@@ -184,7 +180,7 @@ if k_cache.numel() and v_cache.numel():
 
 ## Triton Kernel and Cache Read/Write
 
-The `store_kvcache` Triton kernel (see [[ml-systems/gpu-kernel-stack]] for Triton internals) uses **flat 1D addressing** driven by `slot_mapping` — a per-token integer pre-computed by the CPU, giving each token a physical slot index in the flat cache array. Each CUDA thread block (a group of threads executing in parallel on the GPU) handles one token: it reads **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector) from the new K or V and writes them to `slot * D` in the flat array, where `D = 512`. For a 5-token prefill, the kernel dispatches 5 thread blocks writing to offsets `{10752×512, 10753×512, 10754×512, 10755×512, 10756×512}` — each a contiguous 512-element write of **1,024 bytes** (512 elements × 2 bytes/fp16). The 5-token prefill writes `5 × 1,024 = 5,120 bytes` of K vectors (and identically 5,120 bytes of V vectors) per layer, across all 28 layers: `28 × 2 × 5,120 = 286,720 bytes = 280 KiB` total cache writes per prefill. No block or position math runs on the GPU — the CPU already resolved the mapping.
+Triton (a GPU programming language that compiles Python-like code to PTX) lets the kernel express the write pattern without CUDA boilerplate. The `store_kvcache` Triton kernel uses **flat 1D addressing** driven by `slot_mapping` — a per-token integer pre-computed by the CPU, giving each token a physical slot index in the flat cache array. Each CUDA thread block (a group of threads executing in parallel on the GPU) handles one token: it reads **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector) from the new K or V and writes them to `slot * D` in the flat array, where `D = 512`. For a 5-token prefill, the kernel dispatches 5 thread blocks writing to offsets `{10752×512, 10753×512, 10754×512, 10755×512, 10756×512}` — each a contiguous 512-element write of **1,024 bytes** (512 elements × 2 bytes/fp16). The 5-token prefill writes `5 × 1,024 = 5,120 bytes` of K vectors (and identically 5,120 bytes of V vectors) per layer, across all 28 layers: `28 × 2 × 5,120 = 286,720 bytes = 280 KiB` total cache writes per prefill. No block or position math runs on the GPU — the CPU already resolved the mapping.
 
 Prefill writes all N tokens to the cache as a side effect, but attention during prefill reads from the local Q/K/V tensors computed in the same forward pass, not from the cache. Decode writes 1 new token to the cache, then reads all prior token history from the cache via **`block_tables`** — a per-sequence lookup table mapping logical block index → physical block number in the cache tensor — to attend over the full context.
 
@@ -275,7 +271,6 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-gr
 - [[ml-systems/prefix-caching]] — hash-based block reuse, when block_tables is set during prefill
 - [[ml-systems/transformer-model-internals]] — where KV cache fits in the decoder layer data flow
 - [[ml-systems/vllm-distributed-groups]] — full startup lifecycle showing when cache is allocated relative to group rebuild
-- [[ml-systems/flashinfer-vllm-integration]] — FlashInfer kernel integration replacing the Triton path in production vLLM
-- [[ml-systems/prefix-caching-hash-table-leak]] — BlockManager hash-table memory leak when prefix caching is enabled
-- [[ml-systems/kv-cache-kernel-and-addressing]] — full Triton kernel code, slot_mapping computation, and prefill/decode call-site details
+- [[ml-systems/flashinfer-vllm-integration]]
+- [[ml-systems/prefix-caching-hash-table-leak]]
 - [[ml-systems/cuda-graph-inference-optimization]]

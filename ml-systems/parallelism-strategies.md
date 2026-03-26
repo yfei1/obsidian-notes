@@ -171,19 +171,15 @@ SP and CP solve different activation memory problems that TP alone leaves unaddr
 
 ### SP: Eliminating Redundant Activations Within a TP Group
 
-TP shards weight matrices but leaves non-TP ops — LayerNorm and Dropout — unsharded. Because those ops don't participate in TP's weight sharding, each TP rank must store a **full-sequence activation** for them even though it holds only a 1/N slice of the weights — producing N identical copies of the same tensor across the TP group. SP eliminates this redundancy by splitting the sequence dimension across TP ranks for those ops, so each GPU stores only its 1/N sequence slice. Activation memory drops ~30–40%.
+TP shards weight matrices but leaves non-TP ops — LayerNorm and Dropout — unsharded, running the full sequence on every GPU. Because those ops don't participate in TP's weight sharding, each TP rank stores a full-sequence activation for them even though it holds only a fraction of the weights — N identical copies of the same activation tensor, one per TP rank. SP eliminates this by splitting the sequence dimension across TP ranks, so each GPU stores only its 1/N slice for those ops. Activation memory drops ~30–40%.
 
-SP is always paired with TP — not by convention, but because it reuses TP's existing **process group** (the set of GPUs that participate in a given collective operation) and the two collectives TP already issues:
-- **all-gather**: each GPU broadcasts its sequence shard so every GPU reconstructs the full sequence before a TP weight op (which needs the full sequence to compute its weight shard's contribution)
-- **reduce-scatter**: each GPU contributes a partial result; the collective sums them and splits the result so each GPU receives only its 1/N sequence slice
-
-SP repositions these collectives to bracket the non-TP ops rather than adding new ones — no extra communication cost.
+SP is always paired with TP because it reuses the same TP process group and the same two collectives TP already issues — **all-gather** (each GPU broadcasts its sequence shard so every GPU reconstructs the full sequence before a TP weight op) and **reduce-scatter** (each GPU contributes a partial result; the sum is split so each GPU receives only its sequence slice after the op). SP repositions these collectives to bracket the non-TP ops rather than adding new ones, so there is no extra communication cost.
 
 ### CP: Fitting Long Sequences That Exceed a Single GPU
 
-SP reduces redundant copies but does not reduce peak attention memory. Even with SP, each GPU must hold keys and values for every token in its sequence slice to compute attention — at 128K tokens, that KV state alone can exceed 80 GB on a single GPU, making SP insufficient regardless of TP degree.
+SP reduces redundant copies but does not reduce the peak memory a single GPU must allocate for attention. Each GPU still holds a full attention state — keys and values for every token in its sequence slice — for its own slice. At 128K tokens, that state alone can exceed 80 GB, making SP insufficient regardless of how many TP ranks exist.
 
-CP solves this by partitioning the sequence at the attention computation itself. Each GPU holds a contiguous sequence slice and never materializes the full sequence's KV state. The mechanism is **Ring Attention**: GPUs form a logical ring; each GPU computes attention for its own query (Q) slice against the current **key/value tensors** (the per-token representations that attention queries against — see [[ml-systems/attention-mechanics]]) it holds, then passes those KV tensors to the next GPU in the ring. Q stays fixed on each GPU throughout; only KV tensors rotate. After one full rotation, every GPU's Q slice has attended over every KV chunk, so attention is complete — no single GPU ever holds the full sequence's KV state simultaneously. CP composes with both TP and SP.
+CP solves this by partitioning the sequence across GPUs at the attention computation itself via **Ring Attention**: each GPU holds a contiguous sequence slice and passes its **key/value tensors** (the per-token representations that attention queries against — see [[ml-systems/attention-mechanics]]) to the next GPU in a logical ring. Each GPU computes its local attention contribution against the current KV chunk, then receives the next chunk from the ring. One full rotation completes attention for that layer — no single GPU ever holds the full sequence's KV state. CP composes with both TP and SP.
 
 Full mechanism, worked diagrams, SP–TP collective swap, Ring Attention rounds, and the SP vs CP vs TP comparison table: [[ml-systems/sequence-and-context-parallelism]]
 
