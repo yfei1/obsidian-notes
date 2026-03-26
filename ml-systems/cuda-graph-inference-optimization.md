@@ -74,7 +74,7 @@ For prefill, fixed shapes are impractical:
 
 ## CPU → GPU Memory Transfer
 
-In a [[ml-systems/llm-inference-engines|continuous batching]] engine, the scheduler rebuilds metadata arrays (`block_tables`, `slot_mappings` — see [[ml-systems/kv-cache-internals]]) every step. These must cross the PCIe bus before the CUDA graph can run.
+In a [[ml-systems/llm-inference-engines|continuous batching]] engine, the scheduler rebuilds metadata arrays (`block_tables`, `slot_mappings` — see [[ml-systems/kv-cache-internals]]) every step. These must cross the PCIe bus before the CUDA graph can replay — and the transfer strategy determines whether the CPU blocks, allocates temporary VRAM, or gets out of the way entirely.
 
 ### 1. Naive (standard PyTorch)
 
@@ -84,6 +84,8 @@ cpu_tensor = torch.tensor(data)
 # PCIe bus blocks CPU until transfer is completely finished.
 gpu_tensor = cpu_tensor.cuda()
 ```
+
+Pageable memory can be swapped to disk by the OS, so the GPU's DMA controller cannot read it directly — the driver must first copy it into a temporary pinned staging buffer, then transfer across PCIe. This makes `.cuda()` synchronous: the CPU stalls until the transfer completes.
 
 ### 2. Pinned memory (nano-vLLM)
 
@@ -96,7 +98,7 @@ gpu_tensor = cpu_tensor.cuda(non_blocking=True)
 static_inbox.copy_(gpu_tensor)
 ```
 
-**Problem:** This allocates a wasteful, temporary `gpu_tensor` in VRAM every step just to immediately copy its contents into the static inbox.
+Pinned memory is page-locked, so the DMA controller can read it directly — eliminating the staging copy and allowing `non_blocking=True`. But a temporary `gpu_tensor` is still allocated in VRAM every step just to immediately copy its contents into the static inbox, wasting one allocation and one VRAM-to-VRAM copy per step.
 
 ### 3. Unified Virtual Addressing (vLLM)
 
@@ -107,11 +109,7 @@ self.cpu_buf = torch.zeros(size, pin_memory=True)
 self.uva = get_accelerator_view_from_cpu_tensor(self.cpu_buf)
 ```
 
-How it works during inference:
-- The scheduler writes data sequentially into `self.cpu_buf`.
-- It calls `graph.replay()`.
-- The FlashAttention kernel on the GPU reads from `self.uva`. Because of UVA, the GPU itself reaches across the PCIe bus and pulls data directly into its SMs during computation.
-- Zero CPU copying, zero temporary GPU tensors, zero explicit PCIe transfer commands.
+UVA maps the pinned CPU buffer into the GPU's address space at startup, so no explicit transfer is needed at runtime. During inference: the scheduler writes into `self.cpu_buf`, calls `graph.replay()`, and the FlashAttention kernel reads from `self.uva` — the GPU pulls data across PCIe directly into its SMs during computation. Zero temporary VRAM allocations, zero explicit transfer commands, zero CPU stalls.
 
 See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of pageable vs pinned vs UVA memory.
 
