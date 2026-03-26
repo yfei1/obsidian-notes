@@ -167,7 +167,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 Created by `init_model_parallel_group()` (parallel_state.py:1146). A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves.
 
-Two separate process groups are needed per coordinator because GPU collectives and CPU coordination require different backends. The constructor (line 316-395) creates both for every group rank list, then stores only the one the current rank belongs to:
+Each coordinator holds two process groups because GPU collectives and CPU coordination cannot share a backend: NCCL requires an active GPU context and issues kernels over NVLink/PCIe, while Gloo runs entirely on CPU — used for control-plane barriers that occur before or after GPU kernels, where no GPU context exists. The constructor (line 316-395) creates both for every group rank list, then stores only the one the current rank belongs to:
 
 ```python
 for ranks in group_ranks:
@@ -179,15 +179,18 @@ for ranks in group_ranks:
         self.rank_in_group = ranks.index(self.rank)
 ```
 
-Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must arrive before any proceed, even for groups they don't belong to.
+Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must arrive before any rank proceeds, even for groups they don't belong to.
 
-Resources held:
-- `device_group` — NCCL process group for GPU collectives (all-reduce, broadcast). Transfers data over NVLink (high-bandwidth GPU interconnect) or PCIe (the CPU-GPU bus, slower). Used for weight sharding and activation exchange during the forward pass.
-- `cpu_group` — Gloo process group for CPU-side coordination (e.g., barrier synchronization). Runs on CPU with no GPU context — needed for control-plane operations that happen before or after GPU kernels, where NCCL cannot be used.
-- `device_communicator` — custom comm buffers (optional)
-- `mq_broadcaster` — message queue for weight broadcasting (optional)
+Resources held per coordinator:
 
-Must call `.destroy()` before discarding — NCCL holds internal GPU memory and thread resources until explicitly released, so leaked communicators cause OOM and can hang collective operations.
+| Field | Backend | Purpose |
+|-------|---------|--------|
+| `device_group` | NCCL | GPU collectives (all-reduce, broadcast) over NVLink or PCIe |
+| `cpu_group` | Gloo | CPU-side barriers and control-plane sync (no GPU context needed) |
+| `device_communicator` | — | Custom comm buffers (optional) |
+| `mq_broadcaster` | — | Message queue for weight broadcasting (optional) |
+
+Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU memory and thread resources until explicitly released, so leaked communicators cause OOM and can deadlock subsequent collective operations.
 
 ### Rank vs. Group Position Attributes
 
