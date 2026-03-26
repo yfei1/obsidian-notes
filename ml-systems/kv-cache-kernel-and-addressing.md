@@ -25,7 +25,7 @@ def store_kvcache_kernel(key_ptr, key_stride, value_ptr, value_stride,
                           k_cache_ptr, v_cache_ptr, slot_mapping_ptr, D):
     idx = tl.program_id(0)                      # which token am I?
     slot = tl.load(slot_mapping_ptr + idx)       # where should I write?
-    if slot == -1: return                         # prefix-cached token (K/V already in cache) → skip
+    if slot == -1: return                         # prefix-cached token (K/V already in cache) → skip; see [[ml-systems/prefix-caching]]
 
     key = tl.load(key_ptr + idx * key_stride + tl.arange(0, D))
     value = tl.load(value_ptr + idx * value_stride + tl.arange(0, D))
@@ -131,7 +131,7 @@ Prefill computes K,V for all N input tokens at once — those tensors are alread
 store_kvcache(k, v, k_cache, v_cache, slot_mapping)   # write all N tokens to cache
 
 # Normal prefill: K,V were just computed — read them directly
-o = flash_attn_varlen_func(q, k, v, ...)               # FlashAttention (fused attention kernel) — local k, v, NOT the cache
+o = flash_attn_varlen_func(q, k, v, ...)               # FlashAttention (fused attention kernel, see [[ml-systems/attention-mechanics]]) — local k, v, NOT the cache
 
 # Prefix cache hit: K,V for the prefix are already in cache
 if block_tables is not None:
