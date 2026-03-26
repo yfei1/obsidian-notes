@@ -179,11 +179,13 @@ TAMM's 56 layers span two segments. Segment 0 (layers 0–34) computes full QKV 
 
 ## PT-MoE 150B: Track-Parallel Weight Loading
 
-PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks train jointly in one job and are exported into a single checkpoint; the checkpoint stores all 8 tracks' weights concatenated on dim 0. This creates a loading problem the standard loop can't handle: a shared weight like the embedding has no track dimension, but a per-track weight like `gate_proj` has shape `[8, 2048, 5888]` — passing that full tensor to `weight_loader` would produce wrong shapes and silent corruption. `load_weights()` must detect which tensors are per-track, slice dim 0 to extract this GPU's track, then delegate to the standard `weight_loader` machinery.
+PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks train jointly in one job and are exported as a single checkpoint, with per-track weights concatenated on dim 0.
+
+This breaks the standard loading loop. A shared weight like the embedding has shape `[153600, 2048]` — no track dimension. A per-track weight like `gate_proj` has shape `[8, 2048, 5888]`. Passing that full tensor to `weight_loader` would feed it a tensor 8× too large, producing wrong shapes and silent corruption. The fix: detect whether a tensor is per-track, slice dim 0 to extract this GPU's track, then delegate to the standard `weight_loader` machinery unchanged.
 
 ### Checkpoint Shape Convention
 
-The dim-0 heuristic works because the export pipeline is consistent: every per-track tensor has `num_tracks` (8 for V9) as dim 0, and every shared tensor does not. This makes `tensor.shape[0] == num_tracks` a reliable discriminator:
+Detection uses a dim-0 heuristic: the export pipeline consistently stores every per-track tensor with `num_tracks` (8 for V9) as dim 0, and every shared tensor with a different leading dimension. So `tensor.shape[0] == num_tracks` reliably discriminates the two cases:
 
 ```
 Per-track linear:     [8, in_dim, out_dim]     e.g. gate_proj [8, 2048, 5888]
@@ -192,7 +194,7 @@ Per-track expert:     [8, num_experts, d1, d2]  e.g. expert gate [8, 300, 2048, 
 Shared (no track):    [vocab, hidden]           e.g. embedding [153600, 2048]
 ```
 
-Slice dim 0 for per-track tensors before loading; load shared tensors directly. After slicing, the tensor is shape-equivalent to a single-track model and the rest of the loading path is unchanged.
+After slicing dim 0, the tensor is shape-equivalent to a single-track model — the rest of the loading path (name remapping, `weight_loader` dispatch, TP sharding) is unchanged.
 
 ### The Extra Step: Slice, Then Delegate
 
