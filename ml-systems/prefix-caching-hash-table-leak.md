@@ -105,7 +105,7 @@ The system is **correct** but accumulates hash keys for prefixes never queried a
 
 ## Why a Naive Fix in `_allocate_block` Is Wrong
 
-The obvious fix: when `_allocate_block` recycles a block, delete the old hash entry. This fails because `hash_to_block_id` maps a hash to *the most recently written block holding that content* — not exclusively to the block being recycled. Two blocks can transiently hold identical content: if requests share a prefix, both get filled with the same tokens and the map points to the newer copy while the older copy remains live until recycled.
+`_allocate_block` knows which block it is recycling, but `hash_to_block_id` maps a hash to *the most recently written block* with that content — not exclusively to the block being recycled. These diverge because two blocks can legitimately hold identical content: two requests sharing a prefix each get their own block filled with the same tokens, so the map is updated to point to the newer block while the older one remains live. Deleting the map entry when recycling the older block would silently remove the valid pointer to the newer one.
 
 The naive fix:
 
@@ -118,14 +118,14 @@ def _allocate_block(self, block_id):
     ...
 ```
 
-This breaks when another block legitimately holds the same hash:
+This breaks because the block's `.hash` field records what *this block* last held, not what the map currently points to. Concretely:
 
 1. Block 5, hash `0xABC`, deallocated → `hash_to_block_id[0xABC] = 5`
-2. A new request with identical prefix tokens fills block 7 → `hash_to_block_id[0xABC] = 7` (valid)
+2. A new request with identical prefix fills block 7 → `hash_to_block_id[0xABC] = 7` (valid; map now points to block 7)
 3. Block 5 is grabbed from the free list for different content
 4. Naive fix runs `hash_to_block_id.pop(0xABC)` → **deletes the valid entry for block 7**
 
-Block 5's `.hash` field is stale, but `hash_to_block_id[0xABC]` now belongs to block 7. The fix deletes a live entry because it checks the *block's* hash without verifying the *map* still points to this block.
+The fix checks the *block's* stale hash without first verifying the *map* still points to this block — so it purges a live entry.
 
 ---
 
