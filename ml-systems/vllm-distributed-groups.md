@@ -165,7 +165,9 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-Created by `init_model_parallel_group()` (parallel_state.py:1146). A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. The constructor (line 316-395) iterates ALL group rank lists, creates torch process groups for each, then stores only the one the current rank belongs to:
+Created by `init_model_parallel_group()` (parallel_state.py:1146). A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves.
+
+Two separate process groups are needed per coordinator because GPU collectives and CPU coordination require different backends. The constructor (line 316-395) creates both for every group rank list, then stores only the one the current rank belongs to:
 
 ```python
 for ranks in group_ranks:
@@ -177,11 +179,11 @@ for ranks in group_ranks:
         self.rank_in_group = ranks.index(self.rank)
 ```
 
-Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must enter it even for groups they don't belong to.
+Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must arrive before any proceed, even for groups they don't belong to.
 
 Resources held:
-- `device_group` — NCCL process group for GPU collectives (all-reduce, broadcast over NVLink/PCIe — the physical GPU-to-GPU interconnects). Used for weight sharding and activation exchange during the forward pass.
-- `cpu_group` — Gloo process group for CPU-side coordination (e.g., barrier synchronization). Separate from NCCL because Gloo runs on CPU and doesn't require a GPU context — needed for control-plane operations that happen before or after GPU kernels.
+- `device_group` — NCCL process group for GPU collectives (all-reduce, broadcast over NVLink/PCIe). Used for weight sharding and activation exchange during the forward pass.
+- `cpu_group` — Gloo process group for CPU-side coordination (e.g., barrier synchronization). Gloo runs on CPU and requires no GPU context — needed for control-plane operations that happen before or after GPU kernels, where NCCL cannot be used.
 - `device_communicator` — custom comm buffers (optional)
 - `mq_broadcaster` — message queue for weight broadcasting (optional)
 
@@ -189,7 +191,7 @@ Must call `.destroy()` before discarding — NCCL holds internal GPU memory and 
 
 ### Rank vs. Group Position Attributes
 
-Three rank-like values coexist because each answers a different question:
+Three rank-like values coexist because a rank's global identity, its physical GPU slot, and its position within a specific group are all different things — and code at different layers needs each:
 
 | Attribute | Question answered | Example (rank 12, TP group [12,13,14,15], node has GPUs 8–15) |
 |-----------|------------------|---------------------------------------------------------------|
