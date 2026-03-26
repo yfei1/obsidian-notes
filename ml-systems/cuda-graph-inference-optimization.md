@@ -2,9 +2,11 @@
 
 #ml-systems #inference #cuda #performance
 
+**Prerequisites**: [[ml-systems/gpu-memory-hierarchy]] (pageable vs pinned vs UVA memory), [[ml-systems/llm-inference-engines]] (continuous batching, the decode step loop), [[ml-systems/kv-cache-internals]] (block tables, slot mappings)
+
 ## Core Intuition
 
-During decode, the GPU forward pass takes ~0.1ms but Python kernel launch overhead takes ~1.5ms — the GPU idles >90% of the time waiting for dispatch. CUDA graphs eliminate this by recording the execution sequence once and replaying it with a single call (~0.005ms overhead). The companion problem: feeding new per-step data (block tables, slot mappings) into a graph whose tensor addresses are hardwired at record time, solved by pinned memory and Unified Virtual Addressing.
+During decode, the GPU forward pass takes ~0.1ms but Python kernel launch overhead takes ~1.5ms — the GPU idles >90% of the time waiting for dispatch. CUDA graphs eliminate this by recording the execution sequence once and replaying it with a single call (~0.005ms overhead). The companion problem: feeding new per-step data (block tables, slot mappings) into a graph whose tensor addresses are hardwired at record time, solved by pinned memory and Unified Virtual Addressing (see [[ml-systems/gpu-memory-hierarchy]]).
 
 ---
 
@@ -72,7 +74,7 @@ For prefill, fixed shapes are impractical:
 
 ## CPU → GPU Memory Transfer
 
-In a continuous batching engine, the scheduler rebuilds metadata arrays (`block_tables`, `slot_mappings`) every step. These must cross the PCIe bus before the CUDA graph can run.
+In a [[ml-systems/llm-inference-engines|continuous batching]] engine, the scheduler rebuilds metadata arrays (`block_tables`, `slot_mappings` — see [[ml-systems/kv-cache-internals]]) every step. These must cross the PCIe bus before the CUDA graph can run.
 
 ### 1. Naive (standard PyTorch)
 
@@ -121,3 +123,5 @@ See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of p
 - [[ml-systems/gpu-memory-hierarchy]] — pageable vs pinned vs UVA memory at the hardware level; tiling vs split-K kernels
 - [[ml-systems/torch-compile-cuda-graphs-hook-interaction]] — how `torch.compile` interacts with CUDA graph capture
 - [[ml-systems/attention-mechanics]] — FlashAttention kernels that run inside the recorded graph
+- [[ml-systems/kv-cache-internals]] — block tables and slot mappings that must be fed into the graph each step
+- [[ml-systems/vllm-torch-compile-integration]] — how vLLM's compile pipeline interacts with CUDA graph capture
