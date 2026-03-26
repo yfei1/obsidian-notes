@@ -58,6 +58,10 @@ Visually, for one segment (4 layers):
 
 12 segments × 1 sync = 12 total sync points. Compare to 48 layers × 2 syncs = 96 for standard TP.
 
+Sync operation shapes: `[8, seq, 2048] → mean(dim=0) → [seq, 2048]`. At seq=512 (decode batch), each sync moves 8 × 512 × 2048 × 2 bytes = 16 MB across the reduction; the result broadcast back is 2 MB — 8× smaller than the input tensor.
+
+<!-- verify: 8*512*2048*2/1024**2 == 16.0 and 512*2048*2/1024**2 == 2.0 -->
+
 ---
 
 ## 150B Model Configuration
