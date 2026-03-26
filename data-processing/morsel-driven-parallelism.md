@@ -143,3 +143,4 @@ Leis et al., "Morsel-Driven Parallelism: A NUMA-Aware Query Evaluation Framework
 ## See Also
 
 - [[data-processing/checkpointing]]
+- [[distributed-systems/chandy-lamport]]

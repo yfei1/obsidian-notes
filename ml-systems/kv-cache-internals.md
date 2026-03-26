@@ -278,3 +278,4 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-gr
 - [[ml-systems/flashinfer-vllm-integration]] — FlashInfer kernel integration replacing the Triton path in production vLLM
 - [[ml-systems/prefix-caching-hash-table-leak]] — BlockManager hash-table memory leak when prefix caching is enabled
 - [[ml-systems/kv-cache-kernel-and-addressing]] — full Triton kernel code, slot_mapping computation, and prefill/decode call-site details
+- [[ml-systems/cuda-graph-inference-optimization]]

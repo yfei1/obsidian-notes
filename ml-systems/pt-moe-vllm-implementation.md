@@ -233,3 +233,4 @@ The merge operation matters: a plain sum scales activation magnitude by track co
 - [[ml-systems/python-import-binding]] — import binding gotcha for the `_PT` graph_capture monkey-patch
 - [[ml-systems/vllm-torch-compile-integration]]
 - [[ml-systems/fused-moe-vllm-implementation]]
+- [[ml-systems/kv-cache-internals]]

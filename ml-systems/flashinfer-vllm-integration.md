@@ -313,3 +313,5 @@ assert total_mb == 768
 - [[ml-systems/mixture-of-experts]] -- MoE architecture and FusedMoE kernel details
 - [[ml-systems/attention-mechanics]] -- attention variants including MHA, GQA, MQA, MLA
 - [[ml-systems/kv-cache-internals]] -- paged KV cache layout that FlashInfer reads natively
+- [[ml-systems/kv-cache-kernel-and-addressing]]
+- [[ml-systems/prefix-caching]]

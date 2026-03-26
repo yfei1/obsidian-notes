@@ -344,3 +344,4 @@ All assertions passed.
 - [[ml-systems/vllm-distributed-groups]] — how vLLM manages process groups for PT and TP communication
 - [[ml-systems/llm-inference-engines]] — how the serving engine orchestrates PT at runtime
 - [[ml-systems/attention-mechanics]] — multi-head attention; PT reduces heads-per-track, trading per-track capacity for fewer syncs
+- [[ml-systems/kv-cache-internals]]

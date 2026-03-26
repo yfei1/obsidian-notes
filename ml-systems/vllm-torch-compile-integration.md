@@ -170,3 +170,4 @@ Dynamic input marking (`decorators.py:381-418`) tells Dynamo which tensor dimens
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE integration where cross-track `all_reduce` creates piecewise compilation
 - [[ml-systems/lora-vllm-serving]] — LoRA adapter serving; compile interaction matters when adapters modify the forward path
 - [[ml-systems/pytorch-module-hooks]] — How `nn.Module.__call__` dispatches hooks and how `@torch.compile` / `module.compile()` interact with that dispatch path
+- [[ml-systems/cuda-graph-inference-optimization]]

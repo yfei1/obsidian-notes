@@ -290,3 +290,4 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/pt-moe-architecture]] — MoE expert parallelism combines with TP; understanding TP is prerequisite for reading that note
 - [[ml-systems/fused-moe-vllm-implementation]]
 - [[ml-systems/vllm-executor-architecture]]
+- [[ml-systems/kv-cache-internals]]
