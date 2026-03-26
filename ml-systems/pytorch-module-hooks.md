@@ -238,7 +238,7 @@ Hooks compiled via `module.compile()` break the graph when they contain operatio
 
 ### CUDA graphs and hooks: capture vs. replay
 
-CUDA graphs (`torch.cuda.CUDAGraph`) eliminate CPU dispatch overhead (~4× speedup on LLaMA-7B decode) by recording all GPU kernel launches once (**graph capture**) and replaying that recording on subsequent steps without CPU involvement. Hooks are Python callframes — not GPU kernel launches — so they execute during capture but are not recorded into the kernel sequence. On replay, only the kernel sequence runs; hook callframes do not execute. Hook side effects (logging, shape checks) therefore run once at capture time, not on every decode step.
+CUDA graphs (`torch.cuda.CUDAGraph`) eliminate CPU dispatch overhead (~4× speedup on LLaMA-7B decode) by recording the sequence of GPU kernel launches once (**graph capture** — a dry run where every kernel call is logged but not yet executed). On subsequent steps (**replay**), the GPU re-executes that fixed kernel sequence directly, with no CPU involvement. Hooks are Python function calls — not GPU kernel launches — so they run during capture but are not part of the recorded kernel sequence. On replay, only the kernel sequence executes; hook code does not run. Hook side effects (logging, shape checks) therefore fire once at capture time, not on every decode step.
 
 Full benchmarks, stack traces, and the three-mechanism comparison table: [[ml-systems/torch-compile-cuda-graphs-hook-interaction]].
 
