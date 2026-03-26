@@ -37,6 +37,14 @@ GPU forward pass → ModelRunnerOutput
 
 The executor handles only the top arrow. The bottom arrow (NCCL) is identical regardless of executor — it goes through [[ml-systems/vllm-distributed-groups|vLLM's distributed groups]].
 
+### One Step, End to End
+
+1. **Engine** produces a `SchedulerOutput` (~32 KB) describing which requests to run (`core.py:378`).
+2. **Executor** serializes it via pickle and dispatches to all workers — either one SHM write (MultiprocExecutor, `multiproc_executor.py:363`) or TP sequential channel writes (Ray CG, `ray_executor.py:469`).
+3. **Each worker** deserializes the SchedulerOutput and calls `model_runner.execute_model()` (`gpu_worker.py:762`). TP allreduce and PP send/recv happen inside the GPU forward pass via NCCL.
+4. **One designated worker** (last PP stage, TP rank 0) sends `ModelRunnerOutput` back to the engine via a response MessageQueue.
+5. **Engine** processes the output (updates scheduler state, emits tokens).
+
 ---
 
 ## How MultiprocExecutor Works

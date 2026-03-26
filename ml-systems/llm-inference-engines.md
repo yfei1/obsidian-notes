@@ -88,22 +88,17 @@ For a given prompt: prefill happens **exactly once** (unless preempted), decode 
 
 ### Prefill mechanics (compute-bound)
 
-Prefill only happens once because the KV cache retains the context. No need to resend the full prompt for subsequent tokens.
+Prefill takes the entire prompt (e.g., 40 tokens) simultaneously, computing all 40 Key and Value vectors in parallel via matrix multiplication. Because all input tokens are present at once, the GPU can fill its tensor cores with a large, dense matrix — this is why prefill is compute-bound. All 40 K/V vectors are inserted into newly allocated KV cache blocks in one shot, and the KV cache retains them for every subsequent decode step. No need to resend the prompt again.
 
-1. Takes the entire prompt (e.g., 40 tokens) simultaneously.
-2. Computes all 40 Key and Value vectors in parallel via matrix multiplication.
-3. Inserts all 40 vectors into newly allocated KV cache blocks at once.
-4. **Metric**: Time To First Token (TTFT) measures prefill speed.
+**Metric**: Time To First Token (TTFT) measures prefill latency.
 
 ### Decode mechanics (memory-bound)
 
-1. Takes only the single newly generated token.
-2. Computes its single Key and Value vector.
-3. Performs attention by reading all previous K/V vectors from GPU HBM (the 40 prior entries).
-4. Inserts the new K and V into the next available cache slot.
-5. **Metric**: Time Per Output Token (TPOT) measures decode throughput.
+Decode takes only the single newly generated token, computes its K/V pair, then performs attention by reading all prior K/V vectors from GPU HBM — 40 entries in this example, growing by 1 each step. Because the compute per step is tiny (one token) but the memory read is large (entire KV cache), the GPU's tensor cores sit mostly idle waiting for HBM bandwidth. This is why decode is memory-bound and why throughput scales with HBM bandwidth, not FLOPS.
 
-The Python engine separates these phases because the underlying CUDA kernels configure GPU SRAM differently for each. See [[ml-systems/gpu-memory-hierarchy]] for the tiling vs split-K deep dive.
+**Metric**: Time Per Output Token (TPOT) measures decode throughput.
+
+The Python engine separates these phases because the underlying CUDA kernels configure GPU SRAM differently for each — tiling for compute-bound prefill vs split-K for memory-bound decode. See [[ml-systems/gpu-memory-hierarchy]] for the tiling vs split-K deep dive.
 
 ### Decode starvation problem
 

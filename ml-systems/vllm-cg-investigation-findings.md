@@ -13,9 +13,44 @@ Prerequisites: [[ml-systems/vllm-executor-architecture]], [[ml-systems/ray-compi
 
 **The problem CG was meant to solve**: every decode step with a naive Ray executor calls `ray.remote()` per worker — ~1-5 ms of Python/RPC overhead that dominates short decode steps. CG replaces this with pre-compiled DAG channels and pickle-over-SHM dispatch, targeting sub-millisecond control-plane cost.
 
-**Why it underdelivers**: CG writes to each worker's channel sequentially (O(TP) writes), while MultiprocExecutor's MessageQueue (a circular fixed-size queue in shared memory) lets all workers read from a single write (O(1)). For TP=4, CG costs ~300 us–1 ms vs MessageQueue's ~100-300 us — and both are dominated by pickle serialization anyway. The PP path adds a `stream.synchronize()` bubble (~5-15 us) that MultiprocExecutor's async `irecv` avoids. Async scheduling (added in v0.15.0, overlaps CPU dispatch with ongoing GPU compute) then hid dispatch latency behind GPU compute entirely, making CG's remaining overhead a pure cost with no benefit.
+**Why it underdelivers**: CG writes to each worker's channel sequentially (O(TP) writes), while MultiprocExecutor's MessageQueue (a circular fixed-size queue in shared memory) lets all workers read from a single write (O(1)). For TP=4, CG costs ~300 us-1 ms vs MessageQueue's ~100-300 us — and both are dominated by pickle serialization anyway.
+
+**Why CG can't broadcast like MessageQueue**: Ray's compiled DAG channel abstraction is **per-edge** — each edge in the DAG gets its own independent shared memory buffer (`CompositeChannel`, `shared_memory_channel.py:648`). When the DAG fans out the same SchedulerOutput to 4 workers, it creates 4 edges, each with a separate buffer, and `SynchronousWriter` (`common.py:617`) serializes and writes to each one in a loop. MessageQueue was purpose-built for broadcast: one POSIX SHM region, one `memcpy`, N readers on the same mapped memory. This is a Ray architectural choice (general-purpose DAGs where each edge may carry different data), not a bug — but it's a fundamental mismatch with vLLM's broadcast pattern.
+
+The PP path adds a second overhead: `stream.synchronize()` (~5-15 us) on every recv. Async scheduling (v0.15.0) then hid dispatch latency behind GPU compute, making CG's remaining overhead a pure cost with no benefit.
 
 Running example throughout: **Llama 70B, PP=2, TP=4, 8 H100s, batch_size=128.**
+
+### Architecture Reference
+
+```
+engine.step_with_batch_queue()                         [core.py:449]
+  |
+  |── executor.sample_tokens()                         [ray_executor.py:457]
+  |     |
+  |     └── forward_dag.execute()                      [ray_executor.py:469]
+  |           |
+  |           ├── SynchronousWriter.write() x TP=4     [common.py:617]
+  |           |     pickle SchedulerOutput (~32 KB)     ← BLOCKS ~300 us-1 ms
+  |           |     4 sequential per-worker SHM writes
+  |           |
+  |           ├── Stage 0 workers (0-3): GPU forward
+  |           |     returns IntermediateTensors [128, 8192] bf16
+  |           |
+  |           ├── CG routes IT via NCCL                 [ray_communicator.py:178]
+  |           |     RayPPCommunicator → vLLM pynccl     4 MiB, ~15 us NVLink
+  |           |     recv() does stream.synchronize()    ← 5-15 us bubble
+  |           |
+  |           └── Stage 1 workers (4-7): GPU forward → ModelRunnerOutput
+```
+
+### One CG Step, End to End
+
+1. Engine calls `forward_dag.execute((sched_out, grammar_out))` — CG's `SynchronousWriter` serializes the SchedulerOutput via pickle and writes to 4 SHM channels **sequentially** (~300 us-1 ms total, O(TP)).
+2. Stage-0 workers read from their channels, run the first half of the model. Output: `IntermediateTensors` (GPU tensors, 4 MiB).
+3. CG splits the return tuple: GPU tensors route via NCCL (`RayPPCommunicator` → vLLM's pynccl), CPU metadata via SHM.
+4. Stage-1 workers receive tensors (with a `stream.synchronize()` stall), run the second half, produce `ModelRunnerOutput`.
+5. Engine later calls `future.result()` to collect the output.
 
 ---
 
@@ -47,7 +82,7 @@ CG dispatch is O(TP) sequential writes (~300 us-1 ms); MQ is O(1) (~100-300 us) 
 
 **Answer: Inside.** The model forward returns `IntermediateTensors` with zero send/recv calls — `LlamaModel.forward()` (`llama.py:430-432`) simply returns the tensors. CG intercepts them and routes them via `RayPPCommunicator` — see [[ml-systems/ray-compiled-graph-in-vllm#How PP Tensors Actually Move (NCCL Call Stack)]] for the full trace. The underlying NCCL call is identical to MultiprocExecutor's.
 
-**Unique finding**: `RayPPCommunicator.recv()` at `ray_communicator.py:212` does a full CUDA stream sync (~5-15 us bubble per step) that MultiprocExecutor's non-blocking `irecv_tensor_dict` avoids — a structural overhead CG adds on top of the same NCCL transfer.
+**Unique finding — the `synchronize()` bubble**: `RayPPCommunicator.recv()` at `ray_communicator.py:212` does a full CUDA stream sync (~5-15 us stall per step). The comment in source explains why: "Buffer values are undefined if NCCL ops are aborted. Therefore, we need to synchronize here and check that the channel is still open." CG must verify the sender actor didn't die mid-transfer before returning the buffer — if it did, the buffer contains garbage. The `TODO(swang): Avoid CUDA synchronization` confirms this is a conservative error-handling choice, not an NCCL requirement. MultiprocExecutor avoids it because it detects worker death through a separate mechanism (death pipe monitoring), allowing non-blocking `irecv_tensor_dict` that fires the NCCL recv and returns immediately.
 
 ---
 

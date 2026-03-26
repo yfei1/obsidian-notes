@@ -95,61 +95,57 @@ The compiled DAG topology (built once at startup, reused every step):
 
 ### How CG Splits CPU Data from GPU Tensors
 
-`with_tensor_transport()` tells CG to **split** each worker's return value into two paths. By default (`VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE="auto"`), CG uses NCCL for GPU-to-GPU tensor transfers and shared memory for CPU-only data:
+Each stage-0 worker returns a tuple: `(SchedulerOutput, GrammarOutput, IntermediateTensors)` — a mix of CPU Python objects and GPU tensors. CG cannot send both through the same channel because GPU tensors need GPU-direct NCCL while Python objects need CPU-side pickle serialization. The `with_tensor_transport()` annotation (from the DAG construction above) tells CG's runtime to split automatically: GPU tensors travel via NCCL, CPU data via shared memory. The splitting logic is in `TorchTensorAcceleratorChannel` (`torch_tensor_accelerator_channel.py:215-277`).
+
+On TPU/XPU where NCCL is unavailable, `channel_type` is forced to `"shm"` (`ray_executor.py:84`) — GPU tensors get copied GPU→CPU→SHM→CPU→GPU, adding ~100x overhead for large tensors.
+
+### Why CG's NCCL Is the Same as MultiprocExecutor's
+
+A key question for CG removal: does CG use its own NCCL, or vLLM's existing one? If it's the same, removing CG loses no data-plane capability.
+
+With `VLLM_USE_RAY_WRAPPED_PP_COMM=True` (default), CG delegates to vLLM's existing PP NCCL group. The call stack:
 
 ```
-Worker 0 returns: (SchedulerOutput, GrammarOutput, IntermediateTensors)
-                         |                              |
-              SHM channel (CPU pickle)       NCCL channel (GPU direct)
-              ~10-30 us                      ~10-18 us (NVLink, 4 MiB)
-                         |                              |
-                         v                              v
-                   Worker 4 receives both, reassembles into input tuple
+CG channel write (stage 0 output)                 [torch_tensor_accelerator_channel.py:586]
+  -> RayPPCommunicator.send(tensor)               [ray_communicator.py:178]
+    -> self._comm.send(buf, peer_rank)             self._comm = vLLM's PP group communicator
+      -> pynccl.send()                             [same NCCL as MultiprocExecutor]
+
+CG channel read (stage 1 input)
+  -> RayPPCommunicator.recv(shape, dtype, rank)    [ray_communicator.py:206]
+    -> self._comm.recv(...)                         vLLM's PP group NCCL recv
+    -> current_stream().synchronize()               [line 212] ← blocks CPU until recv done
 ```
 
-The splitting logic lives in `TorchTensorAcceleratorChannel` (`torch_tensor_accelerator_channel.py:215-277`). On TPU/XPU where NCCL is unavailable, `channel_type` is forced to `"shm"` (`ray_executor.py:84`) — GPU tensors get copied through CPU, which is slower but functional.
-
-### How PP Tensors Actually Move (NCCL Call Stack)
-
-With `VLLM_USE_RAY_WRAPPED_PP_COMM=True` (default), CG delegates to vLLM's existing NCCL:
-
-```
-TorchTensorAcceleratorChannel.write()   [torch_tensor_accelerator_channel.py:586]
-  -> RayPPCommunicator.send(tensor)     [ray_communicator.py:178]
-    -> self._comm.send(buf, peer_rank)  [ray_communicator.py:72 grabs vLLM's PP group]
-      -> pynccl.send()                  [same NCCL as MultiprocExecutor uses]
-
-TorchTensorAcceleratorChannel.read()
-  -> RayPPCommunicator.recv(...)        [ray_communicator.py:206]
-    -> self._comm.recv(...)
-    -> current_stream().synchronize()   [ray_communicator.py:212] ← CUDA sync bubble
-```
-
-The GPU-to-GPU NCCL transfer is identical under both executors. CG only orchestrates timing. The `synchronize()` at line 212 creates a ~5-15 us pipeline stall that MultiprocExecutor's async `irecv_tensor_dict` avoids.
+**The `synchronize()` at line 212 is a structural overhead unique to CG** — it blocks the CPU thread until the NCCL receive completes on the GPU (~5-15 us stall). MultiprocExecutor uses non-blocking `irecv_tensor_dict` (fires the NCCL recv kernel and returns immediately), avoiding this stall.
 
 ---
 
 ## The Per-Step Execution Path
 
+**The question**: where does CG's O(TP) dispatch overhead come from, and why can't async scheduling fully hide it?
+
+The key insight upfront: `forward_dag.execute()` uses a `SynchronousWriter` — it writes to each worker's channel **one at a time in a loop**, blocking until all writes complete. With TP=4, that's 4 serial pickle+SHM writes (~300 us-1 ms total). MultiprocExecutor writes once to shared memory (~10-20 us). This dispatch cost is paid inline every step.
+
+**Detailed call chain** (terms: `COMPLETED_NONE_FUTURE` is a pre-resolved Future containing `None` — used to defer work; `CompiledDAGRef` is a future-like handle whose `.get()` blocks until the worker produces output):
+
 ```
 engine.step_with_batch_queue()                            [core.py:449]
   -> executor.execute_model(sched_out, non_block=True)    [ray_executor.py:430]
-       stores sched_out, returns COMPLETED_NONE_FUTURE (no work yet)
+       stores sched_out, returns COMPLETED_NONE_FUTURE    (defers real work to sample_tokens)
   -> executor.sample_tokens(grammar_out, non_block=True)  [ray_executor.py:457]
        -> _execute_dag()                                  [ray_executor.py:469]
             -> forward_dag.execute((sched_out, grammar))
                  -> SynchronousWriter.write()             [common.py:617]
                       for each of TP=4 channels:          ← O(TP), sequential, BLOCKING
-                        pickle5 serialize → SHM write     [shared_memory_channel.py:443]
-                 -> returns CompiledDAGRef objects
+                        pickle serialize → SHM write      [shared_memory_channel.py:443]
+                 -> returns CompiledDAGRef objects         (workers now executing on GPU)
        -> returns FutureWrapper(refs[0])                  [ray_executor.py:479]
   -> batch_queue.appendleft(future)                       [core.py:475]
   -> if queue not full: return to schedule next batch      [core.py:481]
-     ... later ...
+     ... GPU computing ...
   -> future.result() → refs[0].get() → blocks for output  [core.py:497]
 ```
-
-**The blocking point**: `SynchronousWriter.write()` iterates over all input channels **sequentially** — one per first-stage TP worker. With TP=4: 4 serial pickle+SHM writes, ~300 us-1 ms total. Compare with MultiprocExecutor's single SHM write (~10-20 us).
 
 ---
 
