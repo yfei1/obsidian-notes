@@ -6,7 +6,7 @@
 
 ## Core Intuition
 
-During decode, the GPU forward pass takes ~0.1ms but Python kernel launch overhead takes ~1.5ms — the GPU idles >90% of the time waiting for dispatch. CUDA graphs eliminate this by recording the execution sequence once and replaying it with a single call (~0.005ms overhead). The companion problem: a recorded graph hardcodes the physical memory addresses of its tensors at capture time, so it cannot be redirected to read from new tensors each step — feeding new per-step data (block tables, slot mappings) requires copying into those fixed addresses via pinned memory and Unified Virtual Addressing (see [[ml-systems/gpu-memory-hierarchy]]).
+During decode, the GPU forward pass takes ~0.1ms but Python kernel launch overhead takes ~1.5ms — the GPU idles >90% of the time waiting for dispatch. CUDA graphs eliminate this by recording the execution sequence once and replaying it with a single call (~0.005ms overhead). The companion problem: a recorded graph hardcodes the physical memory addresses of its tensors at capture time, so it cannot be redirected to read from new tensors each step — feeding new per-step data (block tables, slot mappings — per-step arrays that describe which KV cache memory blocks belong to each sequence) requires copying into those fixed addresses via pinned memory (RAM the OS cannot swap to disk, so the GPU can read it directly) and Unified Virtual Addressing — UVA — (a hardware feature that maps CPU memory into the GPU's address space; see [[ml-systems/gpu-memory-hierarchy]]).
 
 ---
 
@@ -37,7 +37,7 @@ A CUDA graph records a sequence of GPU instructions once, compiles them into a s
 
 Three phases:
 
-1. **Pre-allocation**: Graph memory shapes cannot change after recording, so input/output tensors must be statically sized before capture (e.g., `block_tables = torch.zeros(max_batch_size, max_model_len / block_size)`). Sizing to `max_model_len` guarantees the buffer is large enough for any sequence the engine will process.
+1. **Pre-allocation**: Graph memory shapes cannot change after recording, so input/output tensors must be statically sized before capture (e.g., `block_tables = torch.zeros(max_batch_size, max_model_len // block_size)` where `block_size` is the fixed number of token slots per KV cache block). Sizing to `max_model_len` guarantees the buffer is large enough for any sequence the engine will process.
 2. **Capture**: Run exactly one forward pass using the static tensors. PyTorch records the execution sequence.
 3. **Replay**: Each inference step, copy dynamic data into the static tensors and call `graph.replay()`.
 
@@ -61,7 +61,7 @@ Engines store static tensors in a class attribute (e.g., `self.graph_vars = dict
 
 CUDA graphs require fixed tensor shapes. For decode, this works well:
 - **Compute shapes are predictable**: Every sequence processes exactly 1 token, so the matrix shape into linear/MLP layers is `[batch_size, 1, hidden_dim]`. Zero wasted compute.
-- **Memory padding is cheap**: The `block_table` is padded with `-1` entries, but FlashAttention respects `context_lens` as a read boundary. Padded entries are never accessed.
+- **Memory padding is cheap**: The `block_table` is padded with `-1` entries, but FlashAttention (a memory-efficient attention kernel that accepts explicit sequence lengths) respects `context_lens` as a read boundary. Padded entries are never accessed.
 
 For prefill, fixed shapes are impractical:
 - The compute matrix shape is `[prompt_len, hidden_dim]`, which varies per request.
@@ -74,7 +74,7 @@ For prefill, fixed shapes are impractical:
 
 ## CPU → GPU Memory Transfer
 
-In a [[ml-systems/llm-inference-engines|continuous batching]] engine, the scheduler rebuilds metadata arrays (`block_tables`, `slot_mappings` — see [[ml-systems/kv-cache-internals]]) every step. These must cross the PCIe bus before the CUDA graph can replay — and the transfer strategy determines whether the CPU blocks, allocates temporary VRAM, or gets out of the way entirely.
+In a [[ml-systems/llm-inference-engines|continuous batching]] engine, the scheduler rebuilds metadata arrays (`block_tables`, `slot_mappings` — see [[ml-systems/kv-cache-internals]]) every step. These must cross the PCIe bus (the hardware link connecting CPU RAM to GPU VRAM) before the CUDA graph can replay — and the transfer strategy determines whether the CPU stalls waiting for the transfer, allocates a temporary VRAM buffer, or neither.
 
 ### 1. Naive (standard PyTorch)
 
@@ -85,7 +85,7 @@ cpu_tensor = torch.tensor(data)
 gpu_tensor = cpu_tensor.cuda()
 ```
 
-Pageable memory can be swapped to disk by the OS, so the GPU's DMA controller cannot read it directly — the driver must first copy it into a temporary pinned staging buffer, then transfer across PCIe. This makes `.cuda()` synchronous: the CPU stalls until the transfer completes.
+Pageable memory can be swapped to disk by the OS, so the GPU's DMA controller (the hardware unit that moves data across PCIe without stalling the CPU) cannot read it directly — the driver must first copy it into a temporary pinned staging buffer, then transfer across PCIe. This makes `.cuda()` synchronous: the CPU stalls until the transfer completes.
 
 ### 2. Pinned memory (nano-vLLM)
 
@@ -98,7 +98,7 @@ gpu_tensor = cpu_tensor.cuda(non_blocking=True)
 static_inbox.copy_(gpu_tensor)
 ```
 
-Pinned memory is page-locked, so the GPU's DMA controller (the hardware unit that moves data across PCIe without stalling the CPU) can read it directly — eliminating the staging copy and allowing `non_blocking=True`. But a temporary `gpu_tensor` is still allocated in VRAM every step just to immediately copy its contents into the static inbox, wasting one allocation and one VRAM-to-VRAM copy per step.
+Pinned memory is page-locked, so the GPU's DMA controller can read it directly — eliminating the staging copy and allowing `non_blocking=True`. But a temporary `gpu_tensor` is still allocated in VRAM every step just to immediately copy its contents into the static inbox, wasting one allocation and one VRAM-to-VRAM copy per step.
 
 ### 3. Unified Virtual Addressing (vLLM)
 
