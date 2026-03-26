@@ -2,6 +2,10 @@
 
 #distributed-systems #algorithms #interview-prep
 
+**Scope**: The Chandy-Lamport snapshot algorithm — how it works, why it's correct, and how Apache Flink implements it as checkpoint barriers.
+
+**Prerequisites**: Basic message-passing distributed systems (processes, channels, FIFO delivery). No ML background required.
+
 ## TL;DR
 
 Captures a **consistent global snapshot** — a frozen view of every process state and every in-flight message where no message appears received but not sent — without pausing the system. The mechanism: inject **markers** (special control messages) that propagate through the **process graph** (the network of processes connected by message channels), acting as **logical cuts** (imaginary dividing lines through the execution: everything before the line is pre-snapshot, everything after is post-snapshot). Apache Flink (a stateful stream-processing engine) maps directly onto this model: its **checkpoint barriers** are the markers, and its operator pipeline — a DAG (directed acyclic graph) of stateful processing nodes — is the process graph.
@@ -126,5 +130,6 @@ assert total_channel_overhead == 1_024_000_000  # ~1 GB
 
 ## See Also
 
-- [[data-processing/checkpointing]]
-- [[ml-systems/parallelism-strategies]]
+- [[data-processing/checkpointing]] — how checkpointing fits into broader fault-tolerance and recovery strategies
+- [[data-processing/morsel-driven-parallelism]] — parallel pipeline execution model that Chandy-Lamport-style barriers must coordinate across
+- [[ml-systems/parallelism-strategies]] — distributed execution strategies that require consistent global snapshots for fault recovery
