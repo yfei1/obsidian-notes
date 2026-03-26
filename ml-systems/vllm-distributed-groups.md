@@ -6,13 +6,13 @@
 
 ## TL;DR
 
-vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP` — where **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). Each group is a `GroupCoordinator` holding NCCL (NVIDIA's GPU collective communication library) + Gloo (Meta's CPU collective library) process groups — a **collective** is an operation like all-reduce or broadcast that all ranks in a group execute together. Groups can be destroyed and rebuilt at runtime — PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** (one independent model replica within a PT-MoE deployment, running its own forward pass in parallel with other tracks) without forking vLLM.
+vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP` — where **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). A **collective** is an operation — like all-reduce (sum a tensor across all ranks, give every rank the result) or broadcast — that every rank in a group executes together. Each group is a `GroupCoordinator` holding two process groups: one backed by NCCL (NVIDIA's GPU collective library, runs kernels over NVLink/PCIe) and one backed by Gloo (Meta's CPU collective library, used for control-plane barriers where no GPU context is needed). Groups can be destroyed and rebuilt at runtime — PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** (one independent model replica within a PT-MoE deployment, running its own forward pass in parallel with other tracks) without forking vLLM.
 
 ---
 
 ## Core Intuition
 
-Distributed inference requires different communication patterns for different parallelism axes: TP ranks all-reduce activations within a pipeline stage, PP ranks send activations forward across stages, DP ranks synchronize gradients across replicas — and each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups — as long as you do it before any layers are constructed and never touch PP or DP, which cross TP boundaries and would sever the global communicator topology.
+Distributed inference requires different communication patterns for different parallelism axes: TP ranks **all-reduce** (sum a tensor across all ranks and distribute the result) activations within a pipeline stage, PP ranks send activations forward across stages, DP ranks synchronize gradients across replicas — and each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups — as long as you do it before any layers are constructed and never touch PP or DP, which cross TP boundaries and would sever the rank-to-rank paths that span all GPUs (breaking all inter-stage and inter-replica communication).
 
 ---
 
@@ -157,7 +157,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 | `_TP`  | parallel_state.py:1213 | IS TP | `all_ranks.view(-1, tp_size)` |
 | `_DCP` | parallel_state.py:1221 | Subdivides TP | `all_ranks.reshape(-1, dcp_size)` |
 | `_PCP` | parallel_state.py:1230 | Sibling of TP (same level, different axis) | `transpose(3,4).reshape(-1, pcp_size)` |
-| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP | `transpose(1,2).reshape(-1, dp*pcp*tp)` | <!-- EP = expert parallel: routes tokens to different expert sub-networks across GPUs -->
+| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP | `transpose(1,2).reshape(-1, dp*pcp*tp)` | EP = **expert parallel**: routes tokens to different expert sub-networks across GPUs |
 | `_PP`  | parallel_state.py:1233 | Above TP (crosses TP boundaries) | `transpose(2,4).reshape(-1, pp_size)` |
 | `_DP`  | parallel_state.py:1240 | Above TP (crosses TP boundaries) | `transpose(1,4).reshape(-1, dp_size)` |
 
@@ -182,8 +182,8 @@ for ranks in group_ranks:
 Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must arrive before any proceed, even for groups they don't belong to.
 
 Resources held:
-- `device_group` — NCCL process group for GPU collectives (all-reduce, broadcast over NVLink/PCIe). Used for weight sharding and activation exchange during the forward pass.
-- `cpu_group` — Gloo process group for CPU-side coordination (e.g., barrier synchronization). Gloo runs on CPU and requires no GPU context — needed for control-plane operations that happen before or after GPU kernels, where NCCL cannot be used.
+- `device_group` — NCCL process group for GPU collectives (all-reduce, broadcast). Transfers data over NVLink (high-bandwidth GPU interconnect) or PCIe (the CPU-GPU bus, slower). Used for weight sharding and activation exchange during the forward pass.
+- `cpu_group` — Gloo process group for CPU-side coordination (e.g., barrier synchronization). Runs on CPU with no GPU context — needed for control-plane operations that happen before or after GPU kernels, where NCCL cannot be used.
 - `device_communicator` — custom comm buffers (optional)
 - `mq_broadcaster` — message queue for weight broadcasting (optional)
 
@@ -280,17 +280,17 @@ assert max(1, 1 //  4) == 1   # 1 KV head: same result either way
 
 ### Pydantic Config Copy Pitfall
 
-`VllmConfig` is a Pydantic dataclass — Pydantic (a Python validation library that reconstructs objects from serialized primitives, not live references) re-runs `__init__` on nested dataclasses. When constructing `VllmConfig(model_config=mc)`, Pydantic serializes `mc` to primitives and reconstructs a new `ModelConfig`, re-running `__post_init__` and recomputing `model_arch_config` via `ModelArchConfigConvertorBase.get_total_num_attention_heads()`. If the original config inflated `num_attention_heads` (e.g., `num_heads * num_tracks = 32`), the copy resolves to the raw value (4) — because `hf_text_config` on the copy points to a differently-resolved config object.
+`VllmConfig` is a Pydantic dataclass — Pydantic (a Python validation library that reconstructs objects from serialized primitives, not live references) re-runs `__init__` on nested dataclasses. When constructing `VllmConfig(model_config=mc)`, Pydantic serializes `mc` to primitives and reconstructs a new `ModelConfig`, re-running `__post_init__` and recomputing `model_arch_config` via `ModelArchConfigConvertorBase.get_total_num_attention_heads()`. If the original config **inflated** `num_attention_heads` to account for tracks (e.g., stored `num_heads * num_tracks = 32` instead of the true per-track value 4), the Pydantic copy resolves to the raw value (4) — because `hf_text_config` on the copy points to a differently-resolved config object.
 
 Empirical evidence (captured on cluster):
 ```
-hf_config.num_attention_heads = 32   ← inflated, correct on original
+hf_config.num_attention_heads = 32   ← inflated (num_heads*num_tracks), correct on original
 # hf_config = HuggingFace model config object (loaded from model card JSON)
-model_arch_config.total_num_attention_heads = 4  ← raw, on Pydantic copy
+model_arch_config.total_num_attention_heads = 4  ← raw per-track value, on Pydantic copy
 id(self) differs from original ModelConfig → confirmed: Pydantic created a copy
 ```
 
-Fix: report truthful values in the config and patch the methods that divide by global TP to use `within_track_tp = tp // num_tracks` instead. Computed attributes that depend on mutable state cannot survive Pydantic nesting because Pydantic reconstructs from serialized primitives, not from the live object. PT-MoE's plugin applies this fix — see [[ml-systems/pt-moe-vllm-implementation]].
+Fix: store truthful per-track values in the config and patch the methods that divide by global TP to use `within_track_tp = tp // num_tracks` instead. Computed attributes that depend on mutable state cannot survive Pydantic nesting. PT-MoE's plugin applies this fix — see [[ml-systems/pt-moe-vllm-implementation]].
 
 ---
 
