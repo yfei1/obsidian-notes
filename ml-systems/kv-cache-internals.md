@@ -246,7 +246,7 @@ A common misconception: the KV cache shape comes from the HF config's `num_key_v
 ```
 config.num_key_value_heads = N          (from checkpoint config.json)
   → Model.__init__() runs               (may rebuild TP groups)
-    → Attention(num_kv_heads=M)         (M = max(1, N // within_track_tp))  # within_track_tp: TP degree for this layer's track
+    → Attention(num_kv_heads=M)         (M = max(1, N // within_track_tp))  # within_track_tp: TP degree for this layer's track — see [[ml-systems/parallel-track-architecture]]
       → Attention stores self.num_kv_heads = M
   → get_kv_cache_spec() iterates layers (attn_utils.py:21-29)
     → Each Attention.get_kv_cache_spec() returns num_kv_heads=M
