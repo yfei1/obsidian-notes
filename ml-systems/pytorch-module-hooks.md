@@ -12,7 +12,7 @@
 
 ## Role in System
 
-`nn.Module` needs a place to inject monitoring and modification logic — logging activations, clipping gradients, patching inputs — without forcing every subclass to wire that logic manually. Hooks solve this by living in `__call__`, not in `forward()`: `model(x)` routes through `__call__` → `_call_impl` → pre-hooks → `forward()` → post-hooks, so any registered hook fires automatically.
+**`forward()` is user-overridden — PyTorch can't put hook logic there.** Instead, `nn.Module` wraps every call through `__call__`, which PyTorch controls and never overrides. Hooks live in `__call__`, so any `model(x)` call fires them automatically regardless of what `forward()` does. Calling `model.forward(x)` directly re-enters at `forward()`, bypassing `__call__` entirely — all hooks silently don't fire because the dispatch wrapper is never reached.
 
 Uses: feature extraction (grabbing intermediate activations), shape debugging, gradient manipulation (clipping or zeroing gradients per-layer).
 
