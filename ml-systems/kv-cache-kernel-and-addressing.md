@@ -6,7 +6,7 @@
 
 ## Core Intuition
 
-Writing K/V vectors into the cache on every decode step is on the critical path — any per-thread address arithmetic adds latency across thousands of tokens. nano-vLLM solves this by having the CPU pre-compute a flat slot index per token (`slot_mapping`), so the Triton kernel does a single multiply and write with zero division or modulo. This works because each per-layer cache slice is memory-contiguous, making flat 1D addressing equivalent to structured `[block, position, head, dim]` indexing.
+Writing K/V vectors into the cache on every decode step is on the critical path — any per-thread address arithmetic adds latency across thousands of tokens. nano-vLLM solves this by having the CPU pre-compute a flat slot index per token (`slot_mapping`), so the GPU kernel does a single multiply and write with zero division or modulo. The kernel is written in **Triton** — a Python-embedded DSL that compiles to CUDA, where `tl.program_id(0)` identifies the current thread block and `tl.load`/`tl.store` move data between memory and registers. This works because each per-layer cache slice is memory-contiguous, making flat 1D addressing equivalent to structured `[block, position, head, dim]` indexing.
 
 See [[ml-systems/kv-cache-internals]] for the 6-D tensor layout, cache sizing, and per-layer slice assignment that this kernel operates on.
 
@@ -16,7 +16,7 @@ See [[ml-systems/kv-cache-internals]] for the 6-D tensor layout, cache sizing, a
 
 GPU integer division costs ~20 cycles; with 512 floats × 28 layers per token, per-thread address arithmetic would dominate decode throughput. The CPU scheduler knows each token's physical location before kernel launch, so it pre-computes a flat slot index — the kernel receives one integer per token and does zero address arithmetic.
 
-The Triton kernel `store_kvcache` writes one token's K and V vectors per CUDA thread. It treats the cache as a **flat 1D array** — no awareness of blocks, layers, or heads.
+The Triton kernel `store_kvcache` writes one token's K and V vectors per CUDA thread block. It treats the cache as a **flat 1D array** — no awareness of blocks, layers, or heads.
 
 ```python
 # attention.py:10-30
@@ -25,7 +25,7 @@ def store_kvcache_kernel(key_ptr, key_stride, value_ptr, value_stride,
                           k_cache_ptr, v_cache_ptr, slot_mapping_ptr, D):
     idx = tl.program_id(0)                      # which token am I?
     slot = tl.load(slot_mapping_ptr + idx)       # where should I write?
-    if slot == -1: return                         # prefix-cached token → skip
+    if slot == -1: return                         # prefix-cached token (K/V already in cache) → skip
 
     key = tl.load(key_ptr + idx * key_stride + tl.arange(0, D))
     value = tl.load(value_ptr + idx * value_stride + tl.arange(0, D))
@@ -114,7 +114,7 @@ assert k_cache.stride(1) == D    # stride along token dim == 512
 # False   ← flat addressing would corrupt data
 ```
 
-`stride(1)` is the number of elements to skip when advancing one step along dimension 1 (the token dimension). If it equals `D` (512), then consecutive tokens are exactly 512 floats apart — flat 1D addressing is valid.
+**Stride** (PyTorch term): the number of elements to skip in memory when advancing one step along a given dimension. `stride(1)` is the stride along dimension 1 (the token dimension); if it equals `D` (512), consecutive tokens are exactly 512 floats apart — flat 1D addressing is valid.
 
 This works because `kv_cache[0, 3]` fixes the two **leftmost** dimensions of a row-major tensor. The remaining dimensions `[blocks, tokens, heads, dims]` stay contiguous. If you indexed a **middle** dimension (e.g., `kv_cache[0, :, 3]` — all layers, block 3), the result would NOT be contiguous and the flat addressing would break.
 
@@ -131,7 +131,7 @@ Prefill computes K,V for all N input tokens at once — those tensors are alread
 store_kvcache(k, v, k_cache, v_cache, slot_mapping)   # write all N tokens to cache
 
 # Normal prefill: K,V were just computed — read them directly
-o = flash_attn_varlen_func(q, k, v, ...)               # local k, v — NOT the cache
+o = flash_attn_varlen_func(q, k, v, ...)               # FlashAttention (fused attention kernel) — local k, v, NOT the cache
 
 # Prefix cache hit: K,V for the prefix are already in cache
 if block_tables is not None:
@@ -139,7 +139,7 @@ if block_tables is not None:
     o = flash_attn_varlen_func(q, k, v, block_table=block_tables, ...)
 ```
 
-The prefix-cache branch is the exception: if a prefix was previously cached, its K,V vectors are not recomputed — `block_tables` redirects the read directly to the cache.
+The prefix-cache branch is the exception: if a prefix (a shared prompt prefix whose K,V vectors were cached in a prior request) was previously cached, those K,V vectors are not recomputed — `block_tables` redirects the read directly to the cache.
 
 ### Decode — write 1 token, read ALL history from cache
 
