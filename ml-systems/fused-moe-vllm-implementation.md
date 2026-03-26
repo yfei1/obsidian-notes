@@ -114,9 +114,19 @@ Total fused MoE weights per layer: ≈ 2.53 GB (bf16)
 
 ## FusedMoE Weight Loading
 
-FusedMoE stores experts in two fused weight matrices: `w13_weight` (gate + up packed) and `w2_weight` (down). Loading per-expert weights requires calling `weight_loader` once per expert with the correct `shard_id`.
+Checkpoint files store each expert's projections as separate named tensors. `w13_weight` and `w2_weight` are fused buffers — the loader must translate checkpoint names to `(buffer, expert_id, shard_id)` triples and write each expert's slice into the correct offset. A generic `Parameter.copy_` cannot do this, so vLLM **monkey-patches** (attaches a callable to an existing object at runtime, outside its class definition) a `weight_loader` onto each `Parameter` during `__init__`, because the loader logic is layer-specific and cannot live in the generic `Parameter` class.
+
+```python
+# Inside FusedMoE.__init__():
+self.w13_weight = Parameter(torch.empty(...))
+self.w13_weight.weight_loader = self.weight_loader  # attached to the param
+```
+
+Access via `getattr(param, "weight_loader", default_weight_loader)`. All vLLM parallel layers (QKVParallelLinear, ColumnParallelLinear, etc.) use the same pattern — see [[ml-systems/vllm-weight-loading]] for the full convention.
 
 ### shard_id Mapping (Mixtral Convention)
+
+`shard_id` tells `weight_loader` which slice of the fused buffer to write — without it, the loader cannot distinguish gate from up projection inside `w13_weight`. Mixtral's original 2-projection FFN used `w1` (up) and `w2` (down); SwiGLU added gate as `w3` because `w2` was already taken. `w2` therefore means **down**, not up — counterintuitive but hardcoded throughout vLLM (`fused_moe/layer.py:856-964`).
 
 | shard_id | Expert component | Internal param | Checkpoint suffix |
 |----------|-----------------|----------------|-------------------|
@@ -124,18 +134,18 @@ FusedMoE stores experts in two fused weight matrices: `w13_weight` (gate + up pa
 | `"w3"` | up projection | `w13_weight` (second half) | `hidden_transform.linear_1` |
 | `"w2"` | down projection | `w2_weight` | `output_transform` |
 
-**Why w2 = down (not up)?** Mixtral's original 2-projection FFN named them `w1` (up) and `w2` (down). SwiGLU added a gate projection as `w3` — appended last because `w2` was already taken. `w2` kept its original "down" meaning, which is counterintuitive but hardcoded throughout vLLM (`fused_moe/layer.py:856-964`).
-
 ### Per-Expert Loading Loop
+
+The checkpoint tensor is shaped `[num_experts, in_dim, out_dim]` — one slice per expert. The loop calls `weight_loader` once per expert, passing `shard_id` so the loader writes to the correct half of `w13_weight` or into `w2_weight`.
 
 ```python
 # Checkpoint: [num_experts, in_dim, out_dim] (after track slice)
 sliced = tensor[track_idx]  # [300, 2048, 768]
 
 # Determine shard_id from checkpoint name
-if "linear_0" in ckpt_name:         shard_id = "w1"   # gate
+if "linear_0" in ckpt_name:           shard_id = "w1"  # gate
 elif "output_transform" in ckpt_name: shard_id = "w2"  # down
-else:                                 shard_id = "w3"   # up
+else:                                  shard_id = "w3"  # up
 
 # Determine which internal param to target
 param = moe.w13_weight if shard_id != "w2" else moe.w2_weight
@@ -147,18 +157,6 @@ for expert_id in range(num_experts):
 ```
 
 `FusedMoE.weight_loader` maps `(shard_id, expert_id)` to the correct offset within the fused buffer — never index into `w13_weight` or `w2_weight` directly.
-
-### The weight_loader Convention
-
-vLLM **monkey-patches** (attaches a callable to an existing object at runtime, outside its class definition) a `weight_loader` onto each `Parameter` during `__init__`, because the loader logic is layer-specific and cannot live in the generic `Parameter` class:
-
-```python
-# Inside FusedMoE.__init__():
-self.w13_weight = Parameter(torch.empty(...))
-self.w13_weight.weight_loader = self.weight_loader  # attached to the param
-```
-
-Access via `getattr(param, "weight_loader", default_weight_loader)`. All vLLM parallel layers (QKVParallelLinear, ColumnParallelLinear, etc.) use the same pattern — see [[ml-systems/vllm-weight-loading]] for the full convention.
 
 ---
 
