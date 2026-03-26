@@ -12,7 +12,7 @@ vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank
 
 ## Core Intuition
 
-Distributed inference requires different communication patterns for different parallelism axes: TP ranks **all-reduce** (sum a tensor across all ranks and distribute the result) activations within a pipeline stage, PP ranks send activations forward across stages, DP ranks synchronize gradients across replicas — and each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups — as long as you do it before any layers are constructed and never touch PP or DP, which cross TP boundaries and would sever the rank-to-rank paths that span all GPUs (breaking all inter-stage and inter-replica communication).
+Distributed inference requires different communication patterns for different parallelism axes: TP ranks **all-reduce** (sum a tensor across all ranks and distribute the result) activations within a **pipeline stage** (a contiguous slice of the model's layers assigned to one GPU in a pipeline-parallel setup), PP ranks send activations forward from one stage to the next, and DP ranks synchronize gradients across replicas — each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups — as long as you do it before any layers are constructed and never touch PP or DP — those groups cross TP boundaries, so replacing them severs the rank-to-rank paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet.
 
 ---
 
@@ -157,7 +157,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 | `_TP`  | parallel_state.py:1213 | IS TP | `all_ranks.view(-1, tp_size)` |
 | `_DCP` | parallel_state.py:1221 | Subdivides TP | `all_ranks.reshape(-1, dcp_size)` |
 | `_PCP` | parallel_state.py:1230 | Sibling of TP (same level, different axis) | `transpose(3,4).reshape(-1, pcp_size)` |
-| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP | `transpose(1,2).reshape(-1, dp*pcp*tp)` | EP = **expert parallel**: routes tokens to different expert sub-networks across GPUs |
+| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP | `transpose(1,2).reshape(-1, dp*pcp*tp)` | **EP** (**expert parallel**): routes tokens to different expert sub-networks across GPUs |
 | `_PP`  | parallel_state.py:1233 | Above TP (crosses TP boundaries) | `transpose(2,4).reshape(-1, pp_size)` |
 | `_DP`  | parallel_state.py:1240 | Above TP (crosses TP boundaries) | `transpose(1,4).reshape(-1, dp_size)` |
 
@@ -268,7 +268,7 @@ Stale config path:   max(1, 8 // 32) = max(1, 0) = 1   ← wrong
 Correct group path:  max(1, 8 //  4) = max(1, 2) = 2   ← correct
 ```
 
-Each GPU allocates KV cache for 1 head instead of 2 — KV blocks are half the required size, causing silent corruption when the second head's values overwrite adjacent memory. With 1 KV head: `max(1, 1//32)=1` and `max(1, 1//4)=1` — safe by accident because the floor hits zero either way. Safe only when `num_kv_heads <= gpus_per_track` (≤ 4 in this example).
+Each GPU allocates KV cache for 1 head instead of 2. The KV cache is a pre-allocated contiguous buffer sized for exactly `heads_per_gpu` heads; with the buffer undersized by half, the second head's values are written past the end of the allocated region, overwriting whatever memory follows — silent corruption with no bounds error. With 1 KV head: `max(1, 1//32)=1` and `max(1, 1//4)=1` — safe by accident because the floor hits zero either way. Safe only when `num_kv_heads <= gpus_per_track` (≤ 4 in this example).
 
 ```python
 # verify the arithmetic
