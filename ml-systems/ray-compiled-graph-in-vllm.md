@@ -191,17 +191,21 @@ GPU compute dominates (~90%). CG affects only the broadcast (worse: O(TP) vs O(1
 
 ## Backend Selection: Who Actually Uses CG
 
-**Most users never hit CG** because the Ray backend is not the default. The backend selection logic (`config/parallel.py:751-792`) defaults to `"mp"` (MultiprocExecutor) for both single-node and multi-node deployments. Ray is selected only when:
+**Most users never hit CG** because the Ray backend is not the default. The backend selection logic (`config/parallel.py:751-792`) defaults to `"mp"` (MultiprocExecutor) for both single-node and multi-node deployments — Ray adds process-management overhead that only pays off when Ray already owns the cluster.
 
-- You explicitly pass `--distributed-executor-backend ray`
-- vLLM is running inside a Ray placement group (e.g., Ray Serve)
+Ray backend is selected when:
+
+- `--distributed-executor-backend ray` is passed explicitly
+- vLLM runs inside a Ray placement group (e.g., Ray Serve) — Ray Serve wraps every replica in a placement group, so this triggers CG implicitly for all Ray Serve users
 - `data_parallel_backend="ray"`
 
-The placement-group case is the most common implicit trigger — Ray Serve wraps every replica in a placement group, so Ray Serve users get CG whether they know it or not.
+**When Ray is selected, CG is unconditional on the hot path.** `execute_model` always goes through the compiled DAG (`ray_executor.py:466-469`, built lazily at first step) because every `execute_model` call needs the low-latency dispatch path CG provides. Cold-path operations (init, health checks, model loading) still use `ray.remote()` via `collective_rpc()` at `ray_executor.py:490-515` — they run infrequently enough that ~1-5 ms RPC overhead is irrelevant.
 
-**When Ray is selected, CG is unconditional on the hot path.** `execute_model` always goes through the compiled DAG (`ray_executor.py:466-469`, built lazily at first step). Cold-path operations (init, health checks, model loading) still use `ray.remote()` via `collective_rpc()` at `ray_executor.py:490-515` — they run infrequently enough that ~1-5 ms RPC overhead is irrelevant.
+Three env vars control CG behavior (only relevant when the Ray backend is active):
 
-CG env vars (only relevant when Ray backend is active): `VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE` (auto/nccl/shm, default: auto), `VLLM_USE_RAY_COMPILED_DAG_OVERLAP_COMM` (default: False), `VLLM_USE_RAY_WRAPPED_PP_COMM` (default: True).
+- `VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE` (auto/nccl/shm, default: auto) — controls whether inter-stage GPU tensors use NCCL or CPU-side SHM; auto selects NCCL when available
+- `VLLM_USE_RAY_COMPILED_DAG_OVERLAP_COMM` (default: False) — enables background communication overlap; disabled by default because it adds complexity without measured benefit
+- `VLLM_USE_RAY_WRAPPED_PP_COMM` (default: True) — delegates PP NCCL to vLLM's existing PP group instead of CG's own channels, keeping the data plane consistent with MultiprocExecutor
 
 Practical implication: `vllm serve model --tensor-parallel-size 4` uses MultiprocExecutor (SHM MessageQueue, no Ray, no CG). CG is only relevant when Ray manages the cluster — Ray Serve, RL frameworks like SkyRL, or explicit `--distributed-executor-backend ray`.
 
