@@ -167,7 +167,9 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 Created by `init_model_parallel_group()` (parallel_state.py:1146). A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves.
 
-Each coordinator holds two process groups because GPU collectives and CPU coordination cannot share a backend: NCCL requires an active GPU context and issues kernels over NVLink/PCIe, while Gloo runs entirely on CPU — used for control-plane barriers that occur before or after GPU kernels, where no GPU context exists. The constructor (line 316-395) creates both for every group rank list, then stores only the one the current rank belongs to:
+Each coordinator holds two process groups — one NCCL, one Gloo — because GPU collectives and CPU coordination require different backends. NCCL requires an active GPU context and issues kernels over NVLink/PCIe; it cannot run before GPU initialization. Gloo runs entirely on CPU, so it handles control-plane barriers that occur before or after GPU kernels where no GPU context exists. Splitting them means neither blocks the other.
+
+The constructor (parallel_state.py:316-395) creates both backends for every group rank list, then stores only the group the current rank belongs to:
 
 ```python
 for ranks in group_ranks:
@@ -179,7 +181,7 @@ for ranks in group_ranks:
         self.rank_in_group = ranks.index(self.rank)
 ```
 
-Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must arrive before any rank proceeds, even for groups they don't belong to.
+Every rank iterates every group — including groups it doesn't belong to — because `torch.distributed.new_group` is a collective barrier: all ranks must arrive before any rank proceeds. Skipping a group would deadlock the ranks that do participate.
 
 Resources held per coordinator:
 
