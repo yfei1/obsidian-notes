@@ -2,6 +2,8 @@
 
 #ml-systems #distributed-systems #interview-prep
 
+**Prerequisites**: [[ml-systems/parallelism-strategies]] (TP/PP/DP concepts), [[ml-systems/tensor-parallelism]] (shard/all-reduce mechanics), [[ml-systems/pt-moe-architecture]] (track concept), [[ml-systems/vllm-executor-architecture]] (engine startup sequence)
+
 ## TL;DR
 
 vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP` — where **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). Each group is a `GroupCoordinator` holding NCCL (NVIDIA's GPU collective communication library) + Gloo (Meta's CPU collective library) process groups — a **collective** is an operation like all-reduce or broadcast that all ranks in a group execute together. Groups can be destroyed and rebuilt at runtime — PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** (one independent model replica within a PT-MoE deployment, running its own forward pass in parallel with other tracks) without forking vLLM.
@@ -270,7 +272,7 @@ assert max(1, 1 //  4) == 1   # 1 KV head: same result either way
 
 ### Pydantic Config Copy Pitfall
 
-`VllmConfig` is a Pydantic dataclass — Pydantic (a Python validation library that constructs objects from serialized fields rather than passing live objects through) re-runs `__init__` on nested dataclasses when constructing a parent. When constructing `VllmConfig(model_config=mc)`, Pydantic serializes `mc` to its primitive fields and reconstructs a new `ModelConfig` from those primitives. The copy runs `__post_init__` again, recomputing `model_arch_config` via `ModelArchConfigConvertorBase.get_total_num_attention_heads()`. If the original config inflated `num_attention_heads` in `__init__` (e.g., `num_heads * num_tracks = 32`), the copy resolves to the raw value (4) instead of the inflated value (32) — because `hf_text_config` on the copy points to a differently-resolved config object.
+`VllmConfig` is a Pydantic dataclass — Pydantic (a Python validation library that reconstructs objects from serialized primitives, not live references) re-runs `__init__` on nested dataclasses. When constructing `VllmConfig(model_config=mc)`, Pydantic serializes `mc` to primitives and reconstructs a new `ModelConfig`, re-running `__post_init__` and recomputing `model_arch_config` via `ModelArchConfigConvertorBase.get_total_num_attention_heads()`. If the original config inflated `num_attention_heads` (e.g., `num_heads * num_tracks = 32`), the copy resolves to the raw value (4) — because `hf_text_config` on the copy points to a differently-resolved config object.
 
 Empirical evidence (captured on cluster):
 ```
@@ -314,17 +316,18 @@ Memory profiling and scheduling happen after model init, so they see correct sta
 ## See Also
 
 - [[ml-systems/parallelism-strategies]] — TP, PP, EP fundamentals
-- [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE process group setup that uses this rebuild pattern
+- [[ml-systems/tensor-parallelism]] — shard/all-reduce mechanics underlying TP group collectives
+- [[ml-systems/pt-moe-vllm-implementation]] — uses the `GroupCoordinator` `new_group` loop to scope `_TP` all-reduces to the correct cross-track group; applies the config-divergence fix
+- [[ml-systems/parallel-track-architecture]] — track concept and PT-MoE deployment model
+- [[ml-systems/pt-moe-architecture]] — MoE layer structure that motivates the TP rebuild pattern
 - [[ml-systems/vllm-model-integration]] — model registration and loading
 - [[ml-systems/vllm-weight-loading]] — weight loading uses `rank_in_group` for track slicing
+- [[ml-systems/kv-cache-internals]] — KV head allocation affected by config divergence after rebuild
 - [[ml-systems/validating-parallelism-at-scale]]
-- [[ml-systems/parallel-track-architecture]]
-- [[ml-systems/tensor-parallelism]]
-- [[ml-systems/kv-cache-internals]]
 - [[ml-systems/python-import-binding]] — import binding behavior for accessing rebuilt process groups
+
 ## Connections
 
-- [[ml-systems/pt-moe-vllm-implementation]] — uses the `GroupCoordinator` `new_group` loop to scope `_TP` all-reduces to the correct cross-track group per rank
+- [[ml-systems/vllm-executor-architecture]] — engine startup sequence determines when group rebuild is safe
 - [[ml-systems/ray-compiled-graph-in-vllm]]
 - [[ml-systems/vllm-cg-investigation-findings]]
-- [[ml-systems/vllm-executor-architecture]]
