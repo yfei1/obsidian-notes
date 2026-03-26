@@ -12,7 +12,7 @@ The design is only efficient because of one structural property: a **column-para
 
 ---
 
-## How It Works
+## How a Layer Is Split Across GPUs
 
 Split a single matrix multiplication across GPUs within one forward pass.
 
@@ -42,7 +42,7 @@ MLP uses column-parallel on the first linear, row-parallel on the second:
 
 ---
 
-## Column vs Row Naming Convention
+## Why 'Column' and 'Row' Mean Different Things in Code vs. Math
 
 **"Column" and "Row" refer to the mathematical weight matrix A `[in, out]`** (Megatron convention — the naming scheme from Megatron-LM, the framework that introduced this pattern), which is the **transpose** of PyTorch's W `[out, in]`:
 
@@ -146,7 +146,7 @@ Column-splitting produces sharded output; row-splitting consumes sharded input. 
 
 ---
 
-## Practical Constraints
+## When TP Breaks Down: Bandwidth and Topology Limits
 
 - **Requires high-bandwidth interconnect** — one all-reduce per Transformer layer means communication is on the critical path. NVLink (~900 GB/s, NVIDIA's GPU-to-GPU interconnect) keeps this cheap within a node; InfiniBand (~50 GB/s, the inter-node fabric) makes it a throughput bottleneck across nodes, so TP is almost always confined to a single machine.
 - **Megatron-LM (2019)** introduced this pattern for Transformers by adapting HPC partitioned matrix multiplication (ScaLAPACK-style) to the QKV and MLP blocks.
