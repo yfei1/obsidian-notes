@@ -12,6 +12,12 @@ Captures a **consistent global snapshot** — a frozen view of every process sta
 
 ---
 
+## Core Intuition
+
+**A global snapshot requires freezing every process and channel simultaneously — but you can't pause a live distributed system.** Chandy-Lamport sidesteps this by exploiting FIFO channel ordering: inject a special **marker** message into every outgoing channel the moment a process records its state. Because FIFO guarantees the marker cannot overtake any message sent before it, the marker acts as a precise logical boundary — everything that arrives before it is pre-snapshot, everything after is post-snapshot. Each downstream process records its own state on first marker receipt and forwards the marker onward, so a consistent global view assembles itself without any global pause or central coordinator.
+
+---
+
 ## The Problem
 
 You have N processes communicating via message channels. You want a snapshot where:
