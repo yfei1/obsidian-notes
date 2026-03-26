@@ -105,7 +105,9 @@ The system is **correct** but accumulates hash keys for prefixes never queried a
 
 ## Why a Naive Fix in `_allocate_block` Is Wrong
 
-A tempting fix is to purge the block's old hash when it's grabbed from the free list:
+The obvious fix: when `_allocate_block` recycles a block, delete the old hash entry. This fails because `hash_to_block_id` maps a hash to *the most recently written block holding that content* — not exclusively to the block being recycled. Two blocks can transiently hold identical content: if requests share a prefix, both get filled with the same tokens and the map points to the newer copy while the older copy remains live until recycled.
+
+The naive fix:
 
 ```python
 def _allocate_block(self, block_id):
@@ -118,12 +120,12 @@ def _allocate_block(self, block_id):
 
 This breaks when another block legitimately holds the same hash:
 
-1. Block 5 has hash `0xABC`, gets deallocated → `hash_to_block_id[0xABC] = 5`
-2. A different request shares the same prefix tokens, so block 7 gets filled with identical content → `hash_to_block_id[0xABC] = 7`. Two blocks can transiently hold identical content (same hash) during allocation: the map always points to the most recently written copy, but the older copy is still live until it's recycled.
+1. Block 5, hash `0xABC`, deallocated → `hash_to_block_id[0xABC] = 5`
+2. A new request with identical prefix tokens fills block 7 → `hash_to_block_id[0xABC] = 7` (valid)
 3. Block 5 is grabbed from the free list for different content
-4. The naive fix runs `hash_to_block_id.pop(0xABC)` → **deletes the valid entry for block 7**
+4. Naive fix runs `hash_to_block_id.pop(0xABC)` → **deletes the valid entry for block 7**
 
-Block 5's `.hash` field is stale but `hash_to_block_id[0xABC]` now legitimately belongs to block 7.
+Block 5's `.hash` field is stale, but `hash_to_block_id[0xABC]` now belongs to block 7. The fix deletes a live entry because it checks the *block's* hash without verifying the *map* still points to this block.
 
 ---
 
