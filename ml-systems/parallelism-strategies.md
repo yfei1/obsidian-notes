@@ -167,11 +167,17 @@ If all tokens route to the same 2 experts, those GPUs are overloaded while other
 
 ## 6 & 7. Sequence Parallelism (SP) and Context Parallelism (CP)
 
-SP and CP solve different activation memory problems that TP alone leaves unaddressed.
+SP and CP solve different activation memory problems that TP alone leaves unaddressed. They target different bottlenecks and compose freely with each other and with TP.
 
-**SP** targets redundant activations within a TP group. TP shards weight matrices but non-TP ops — LayerNorm and Dropout — still run on the full sequence on every GPU, so each GPU stores a redundant full-sequence activation. SP eliminates this by splitting the sequence dimension across TP ranks (the GPUs in the TP group), so each GPU stores only its sequence slice — activation memory drops by ~30–40% because N full-sequence copies collapse to N partial-sequence copies. SP is always paired with TP because it reuses the same TP process group and replaces two of TP's existing collectives — **all-gather** (each GPU broadcasts its shard so every GPU reconstructs the full tensor) and **reduce-scatter** (each GPU contributes a partial result; the sum is computed and then split so each GPU receives only its slice) — rather than adding new ones, so there is no extra communication cost.
+### SP: Eliminating Redundant Activations Within a TP Group
 
-**CP** targets a different bottleneck: when a single sequence is too long (128K+ tokens) for its attention state to fit on one GPU at all, SP cannot help because SP only eliminates redundant copies — it does not reduce the size of one GPU's required working set. CP distributes attention computation across GPUs via **Ring Attention**: each GPU holds a slice of the sequence and passes its key/value tensors to the next GPU in a cycle, computing its local attention slice before receiving the next chunk — one full ring rotation completes the attention for that layer. CP composes with both TP and SP.
+TP shards weight matrices but leaves non-TP ops — LayerNorm and Dropout — running on the full sequence on every GPU. Each GPU therefore stores a redundant full-sequence activation even though it only holds a shard of the weights. SP fixes this by splitting the sequence dimension across TP ranks (the GPUs in the TP group), so each GPU stores only its sequence slice — activation memory drops by ~30–40% because N full-sequence copies collapse to N partial-sequence copies.
+
+SP is always paired with TP because it reuses the same TP process group. It replaces two of TP's existing collectives — **all-gather** (each GPU broadcasts its shard so every GPU reconstructs the full tensor) and **reduce-scatter** (each GPU contributes a partial result; the sum is split so each GPU receives only its slice) — rather than adding new ones. No extra communication cost.
+
+### CP: Fitting Long Sequences That Exceed a Single GPU
+
+SP only eliminates redundant copies — it does not reduce the size of one GPU's required working set. When a single sequence is too long (128K+ tokens) for its attention state to fit on one GPU at all, SP cannot help. CP distributes attention computation across GPUs via **Ring Attention**: each GPU holds a slice of the sequence and passes its key/value tensors to the next GPU in a cycle, computing its local attention slice before receiving the next chunk — one full ring rotation completes the attention for that layer. CP composes with both TP and SP.
 
 Full mechanism, worked diagrams, SP–TP collective swap, Ring Attention rounds, and the SP vs CP vs TP comparison table: [[ml-systems/sequence-and-context-parallelism]]
 
