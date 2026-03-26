@@ -241,7 +241,7 @@ DECODE (generating token 7):
 
 ## How vLLM Sizes the KV Cache (num_kv_heads Data Flow)
 
-A common misconception: the KV cache shape comes from the HF config's `num_key_value_heads`. It doesn't — vLLM reads from **live Attention layer objects** after the model is fully constructed. Custom models (like PT-MoE) may rebuild **tensor-parallel (TP) process groups** — the set of GPUs jointly computing a single layer by splitting its weight matrices and attention heads across them — inside `model.__init__()`. The **TP degree** (number of GPUs sharing a layer) determines how many heads each GPU owns; a higher TP degree means each GPU owns fewer heads, so each GPU's KV cache slice holds fewer head slots.
+A common misconception: the KV cache shape comes from the HF config's `num_key_value_heads`. It doesn't — vLLM reads from **live Attention layer objects** after the model is fully constructed. Custom models (like PT-MoE, see [[ml-systems/pt-moe-vllm-implementation]]) may rebuild **tensor-parallel (TP) process groups** (see [[ml-systems/tensor-parallelism]]) — the set of GPUs jointly computing a single layer by splitting its weight matrices and attention heads across them — inside `model.__init__()`. The **TP degree** (number of GPUs sharing a layer) determines how many heads each GPU owns; a higher TP degree means each GPU owns fewer heads, so each GPU's KV cache slice holds fewer head slots.
 
 ```
 config.num_key_value_heads = N          (from checkpoint config.json)
@@ -252,11 +252,12 @@ config.num_key_value_heads = N          (from checkpoint config.json)
     → Each Attention.get_kv_cache_spec() returns num_kv_heads=M
   → get_kv_cache_shape(num_kv_heads=M)  (attn_utils.py:120)
   → Cache allocated with M heads ✓
+# within_track_tp: TP degree for this GPU's parallel track — see [[ml-systems/parallel-track-architecture]]
 ```
 
 Concrete values for Qwen3-0.6B on a single GPU (TP=1):
 - `config.num_key_value_heads = 8` <!-- source: Qwen3-0.6B config.json -->
-- `within_track_tp = 1` (`within_track_tp`: the TP degree for this layer's track — single GPU here, so no head splitting)
+- `within_track_tp = 1` (`within_track_tp`: the TP degree for this layer's track — see [[ml-systems/parallel-track-architecture]]; single GPU here, so no head splitting)
 - `M = max(1, 8 // 1) = 8` — each GPU's cache slice holds 8 KV head slots
 - Cache shape per layer: `[2441, 256, 8, 64]` — consistent with the `[2, 28, 2441, 256, 8, 64]` tensor above
 
