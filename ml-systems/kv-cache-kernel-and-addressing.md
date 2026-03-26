@@ -122,6 +122,8 @@ This works because `kv_cache[0, 3]` fixes the two **leftmost** dimensions of a r
 
 ## How Prefill and Decode Use the Cache Differently
 
+Prefill computes K,V for all N input tokens at once — those tensors are already in GPU SRAM, so attention reads them directly. The cache write is a **side effect**: populate the cache now so decode steps can read the history later. Decode generates one token at a time — the new token's K,V must be written to the cache, and its Q must attend over every prior token already stored there.
+
 ### Prefill — write N tokens, read from local tensors
 
 ```python
@@ -137,9 +139,11 @@ if block_tables is not None:
     o = flash_attn_varlen_func(q, k, v, block_table=block_tables, ...)
 ```
 
-During normal prefill, the cache write is a **side effect** — attention reads from the freshly computed `k, v` tensors, and the cache is populated so future decode steps can read the history.
+The prefix-cache branch is the exception: if a prefix was previously cached, its K,V vectors are not recomputed — `block_tables` redirects the read directly to the cache.
 
 ### Decode — write 1 token, read ALL history from cache
+
+Decode has no local K,V history — every prior token's vectors live in the cache. The new token's K,V is written first, then Q attends over the full cache. `context_lens` tells FlashAttention how many slots per sequence are valid (the rest is padding).
 
 ```python
 # attention.py:71-74
@@ -152,8 +156,6 @@ o = flash_attn_with_kvcache(
     block_table=block_tables        # where each sequence's blocks live
 )
 ```
-
-During decode, the new token's K,V is written to its slot. Then its Q attends to **all** previous K,V vectors by reading from the cache via `block_tables`. The `context_lens` parameter tells FlashAttention how many slots are valid (vs padding).
 
 ---
 
