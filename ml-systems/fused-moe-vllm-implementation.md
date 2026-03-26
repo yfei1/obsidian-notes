@@ -12,7 +12,7 @@ This note covers how vLLM implements MoE layers in practice: why the router uses
 
 ## Core Intuition
 
-**MoE layers create three implementation problems that standard parallel layers don't solve.** First, the router must produce identical top-k decisions on every tensor-parallel rank — standard column-parallel sharding breaks this because each rank sees only a subset of expert scores. Second, the gate and up projections inside each expert's SwiGLU FFN must be packed into a single buffer so the fused CUDA kernel can dispatch all experts in one launch rather than looping per-expert. Third, checkpoint weight names (`hidden_transform.linear_0`) don't map to vLLM's internal fused-buffer layout (`w13_weight[expert_id, :intermediate_size, :]`), so a per-parameter `weight_loader` callable handles the translation at load time.
+**MoE layers create three implementation problems that standard parallel layers don't solve.** First, the router must produce identical top-k decisions on every tensor-parallel rank — standard column-parallel sharding breaks this because each rank sees only a subset of expert scores. Second, each expert's FFN uses SwiGLU (a gated activation: output = silu(gate(x)) * up(x), requiring two projections), and both projections must be packed into a single buffer so the fused CUDA kernel can dispatch all experts in one launch rather than looping per-expert. Third, checkpoint weight names (`hidden_transform.linear_0`) don't map to vLLM's internal fused-buffer layout (`w13_weight[expert_id, :intermediate_size, :]`), so a per-parameter `weight_loader` callable handles the translation at load time.
 
 ---
 
@@ -28,7 +28,7 @@ FusedMoE implementation has three distinct concerns:
 
 ## Why the Router Must Be ReplicatedLinear
 
-`ColumnParallelLinear` shards the output dim across TP ranks — with TP=2 and 300 experts, rank 0 sees scores for experts 0–149, rank 1 sees 150–299. Each rank then picks different top-k experts from its local half, so **dispatch** (routing each token to its selected experts) diverges across ranks and outputs are inconsistent. `ReplicatedLinear` keeps the full `[hidden_size, num_experts]` = `[2048, 300]` weight on every TP rank, so all ranks produce identical routing decisions at the cost of duplicated router storage.
+`ColumnParallelLinear` shards the output dim across TP ranks — with TP=2 and 300 experts, rank 0 sees scores for experts 0–149, rank 1 sees 150–299. Each rank then picks different top-k experts from its local half, so **dispatch** (routing each token to its selected experts) diverges across ranks — the subsequent all-reduce (summing partial outputs across TP ranks) then produces wrong results because ranks operated on different expert subsets. `ReplicatedLinear` keeps the full `[hidden_size, num_experts]` = `[2048, 300]` weight on every TP rank, so all ranks produce identical routing decisions at the cost of duplicated router storage.
 
 Router weight storage per TP rank: `2048 × 300 × 2B (bf16) = 1,228,800 B ≈ 1.17 MB` — small enough that duplication across ranks is not a concern.
 
@@ -44,7 +44,7 @@ Router weight storage per TP rank: `2048 × 300 × 2B (bf16) = 1,228,800 B ≈ 1
 
 ## FusedMoE Takes hidden_states and router_logits Separately
 
-The router scores experts but does not transform the data — `x` passes through unchanged to the expert FFNs. `FusedMoE.forward(hidden_states, router_logits)` uses the scores to select top-k experts, runs `x` through those SwiGLU FFNs, and returns the weighted combination.
+The router scores experts but does not transform the data — `x` passes through unchanged to the expert FFNs. `FusedMoE.forward(hidden_states, router_logits)` uses the scores to select top-k experts, runs `x` through those experts' SwiGLU FFNs (gate + up projections fused in `w13_weight`, down projection in `w2_weight`), and returns the weighted combination.
 
 Using the running example: `T=8` tokens, `hidden_size=2048`, `num_experts=300`, `intermediate_size=736`, `top_k=2`:
 
@@ -114,7 +114,7 @@ Total fused MoE weights per layer: ≈ 2.53 GB (bf16)
 
 ## FusedMoE Weight Loading
 
-Checkpoint files store each expert's projections as separate named tensors. `w13_weight` and `w2_weight` are fused buffers — the loader must translate checkpoint names to `(buffer, expert_id, shard_id)` triples and write each expert's slice into the correct offset. A generic `Parameter.copy_` cannot do this, so vLLM **monkey-patches** (attaches a callable to an existing object at runtime, outside its class definition) a `weight_loader` onto each `Parameter` during `__init__`, because the loader logic is layer-specific and cannot live in the generic `Parameter` class.
+Checkpoint files store each expert's projections as separate named tensors. `w13_weight` and `w2_weight` are fused buffers — the loader must translate checkpoint names to `(buffer, expert_id, shard_id)` triples and write each expert's slice into the correct offset. A generic `Parameter.copy_` (PyTorch's built-in tensor copy, which writes a full tensor without offset logic) cannot do this, so vLLM **monkey-patches** (attaches a callable to an existing object at runtime, outside its class definition) a `weight_loader` onto each `Parameter` during `__init__`, because the loader logic is layer-specific and cannot live in the generic `Parameter` class.
 
 ```python
 # Inside FusedMoE.__init__():
@@ -126,7 +126,7 @@ Access via `getattr(param, "weight_loader", default_weight_loader)`. All vLLM pa
 
 ### shard_id Mapping (Mixtral Convention)
 
-`shard_id` tells `weight_loader` which slice of the fused buffer to write — without it, the loader cannot distinguish gate from up projection inside `w13_weight`. Mixtral's original 2-projection FFN used `w1` (up) and `w2` (down); SwiGLU added gate as `w3` because `w2` was already taken. `w2` therefore means **down**, not up — counterintuitive but hardcoded throughout vLLM (`fused_moe/layer.py:856-964`).
+`shard_id` tells `weight_loader` which slice of the fused buffer to write — without it, the loader cannot distinguish gate from up projection inside `w13_weight`. Mixtral's original FFN had two projections: `w1` (up) and `w2` (down). SwiGLU requires a third projection (gate), which was assigned `w3` because `w2` was already taken for down. `w2` therefore means **down**, not up — counterintuitive but hardcoded throughout vLLM (`fused_moe/layer.py:856-964`).
 
 | shard_id | Expert component | Internal param | Checkpoint suffix |
 |----------|-----------------|----------------|-------------------|
