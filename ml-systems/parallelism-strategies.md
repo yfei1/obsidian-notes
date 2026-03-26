@@ -57,7 +57,7 @@ DP runs as N independent model replicas behind a load balancer. No synchronizati
 
 ## 2. ZeRO / FSDP (Training Only)
 
-Vanilla DP redundantly stores full optimizer states (Adam keeps fp32 copies of params, gradients, momentum — an exponential moving average of past gradients — and variance — an exponential moving average of past squared gradients — totaling 4× model size in bytes), gradients, and parameters on every GPU. For a 7B model with Adam in fp32, that's 112 GB per GPU (fp32 params + fp32 gradients + fp32 momentum + fp32 variance = 4 × 7B × 4 bytes/param for fp32), duplicated across every replica. ZeRO and FSDP eliminate this by sharding those states across DP replicas in three progressive stages: optimizer states only (Stage 1), plus gradients (Stage 2), plus parameters (Stage 3). Both are **training-only** because inference has no optimizer states or gradients to shard.
+Vanilla DP redundantly stores full optimizer states on every GPU. Adam keeps four fp32 tensors per parameter — params, gradients, momentum (exponential moving average of past gradients), and variance (exponential moving average of past squared gradients) — totaling 4 × model_params × 4 bytes. For a 7B model that is 4 × 7B × 4 bytes = 112 GB per GPU, duplicated across every DP replica. ZeRO and FSDP eliminate this redundancy by sharding those states across DP replicas in three progressive stages: optimizer states only (Stage 1), plus gradients (Stage 2), plus parameters (Stage 3). Both are **training-only** because inference has no optimizer states or gradients to shard.
 
 ZeRO (Zero Redundancy Optimizer, DeepSpeed/Microsoft) and FSDP (Fully Sharded Data Parallel, PyTorch/Meta) are conceptually identical — competing implementations of the same idea. Pick one; using both simultaneously is redundant and unsupported by any framework.
 
@@ -69,7 +69,7 @@ Full stage-by-stage breakdown, ZeRO vs FSDP comparison table, and inference trad
 
 TP splits individual weight matrices across GPUs within a single forward pass — each GPU computes a partial result, then one `all_reduce` (defined in §1 above: sum across all GPUs, result broadcast to every GPU) combines them.
 
-The standard pattern is **Col→Row pairing**. **Column-parallel** splits the weight matrix along its output dimension: each GPU holds a column slice and produces a partial output independently — no sync needed after this step. **Row-parallel** splits along the input dimension: each GPU computes a partial dot product over its input slice, then one `all_reduce` sums the partials. The Col→Row pairing works with exactly one `all_reduce` because column-parallel produces output already split along the feature dimension, and row-parallel expects its input split along that same dimension — the shapes align at the boundary with no extra communication. Any other pairing (Col→Col, Row→Row, Row→Col) misaligns at the boundary and requires two communication steps.
+The standard pattern is **Col→Row pairing**. **Column-parallel** splits the weight matrix along its output dimension: each GPU holds a column slice and produces a partial output independently — no sync needed after this step. **Row-parallel** splits along the input dimension: each GPU computes a partial dot product over its input slice, then one `all_reduce` sums the partials. The Col→Row pairing works with exactly one `all_reduce` because column-parallel produces output already split along the feature dimension (shape `[batch, seq, hidden/N]`), and row-parallel expects its input split along that same dimension — the shapes align at the boundary with no extra communication. Any other pairing (Col→Col, Row→Row, Row→Col) produces a shape mismatch at the boundary — the output of the first op is not in the form the second op expects as input — requiring an extra communication step to reshuffle before proceeding.
 
 Full details — naming conventions, all four pairing designs with worked Qwen3-0.6B shapes, NCCL collective reference, and the TP memory model: [[ml-systems/tensor-parallelism]]
 
@@ -173,9 +173,9 @@ SP and CP solve different activation memory problems that TP alone leaves unaddr
 
 TP shards weight matrices but leaves non-TP ops — LayerNorm and Dropout — unsharded. Because those ops don't participate in TP's weight sharding, each TP rank must store a **full-sequence activation** for them even though it holds only a 1/N slice of the weights — producing N identical copies of the same tensor across the TP group. SP eliminates this redundancy by splitting the sequence dimension across TP ranks for those ops, so each GPU stores only its 1/N sequence slice. Activation memory drops ~30–40%.
 
-SP is always paired with TP — not by convention, but because it reuses TP's existing process group and the two collectives TP already issues:
+SP is always paired with TP — not by convention, but because it reuses TP's existing **process group** (the set of GPUs that participate in a given collective operation) and the two collectives TP already issues:
 - **all-gather**: each GPU broadcasts its sequence shard so every GPU reconstructs the full sequence before a TP weight op (which needs the full sequence to compute its weight shard's contribution)
-- **reduce-scatter**: each GPU contributes a partial result; the sum is split so each GPU receives only its sequence slice after the op
+- **reduce-scatter**: each GPU contributes a partial result; the collective sums them and splits the result so each GPU receives only its 1/N sequence slice
 
 SP repositions these collectives to bracket the non-TP ops rather than adding new ones — no extra communication cost.
 
@@ -183,7 +183,7 @@ SP repositions these collectives to bracket the non-TP ops rather than adding ne
 
 SP reduces redundant copies but does not reduce peak attention memory. Even with SP, each GPU must hold keys and values for every token in its sequence slice to compute attention — at 128K tokens, that KV state alone can exceed 80 GB on a single GPU, making SP insufficient regardless of TP degree.
 
-CP solves this by partitioning the sequence at the attention computation itself. Each GPU holds a contiguous sequence slice and never materializes the full sequence's KV state. The mechanism is **Ring Attention**: GPUs form a logical ring; each GPU computes its local attention contribution against its current **key/value tensors** (the per-token representations that attention queries against — see [[ml-systems/attention-mechanics]]), then passes those KV tensors to the next GPU in the ring. After one full rotation, every GPU has seen every KV chunk and attention is complete — no single GPU ever holds the full sequence's KV state simultaneously. CP composes with both TP and SP.
+CP solves this by partitioning the sequence at the attention computation itself. Each GPU holds a contiguous sequence slice and never materializes the full sequence's KV state. The mechanism is **Ring Attention**: GPUs form a logical ring; each GPU computes attention for its own query (Q) slice against the current **key/value tensors** (the per-token representations that attention queries against — see [[ml-systems/attention-mechanics]]) it holds, then passes those KV tensors to the next GPU in the ring. Q stays fixed on each GPU throughout; only KV tensors rotate. After one full rotation, every GPU's Q slice has attended over every KV chunk, so attention is complete — no single GPU ever holds the full sequence's KV state simultaneously. CP composes with both TP and SP.
 
 Full mechanism, worked diagrams, SP–TP collective swap, Ring Attention rounds, and the SP vs CP vs TP comparison table: [[ml-systems/sequence-and-context-parallelism]]
 
