@@ -10,6 +10,12 @@ vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank
 
 ---
 
+## Core Intuition
+
+Distributed inference requires different communication patterns for different parallelism axes: TP ranks all-reduce activations within a pipeline stage, PP ranks send activations forward across stages, DP ranks synchronize gradients across replicas — and each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups — as long as you do it before any layers are constructed and never touch PP or DP, which cross TP boundaries and would sever the global communicator topology.
+
+---
+
 ## The Rank Layout Tensor
 
 All groups are derived from one 5D tensor (parallel_state.py:1547-1553):
