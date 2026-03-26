@@ -24,7 +24,7 @@ Seven parallelism strategies exist for distributing LLM workloads across GPUs. M
 
 ## 1. Data Parallelism (DP)
 
-### How it works
+### DP: How a Global Batch Becomes Per-GPU Micro-Batches
 
 ```
 Setup: 4 GPUs, each holds a FULL copy of the model
@@ -45,11 +45,11 @@ Setup: 4 GPUs, each holds a FULL copy of the model
 4. Repeat with next batch
 ```
 
-### Memory constraint
+### Why DP Breaks at 70B+ Parameters
 
 Every GPU holds the **entire** model + optimizer states + gradients + activations. A 70B parameter model at fp16 is ~140 GB of weights alone — nearly 2× a single 80 GB A100, before accounting for optimizer states (3–4× model size for Adam fp32) or activations.
 
-### In inference
+### DP in Inference: Independent Replicas, No Sync
 
 DP runs as N independent model replicas behind a load balancer. No synchronization needed because there is no gradient exchange.
 
@@ -79,7 +79,7 @@ Full details — naming conventions, all four pairing designs with worked Qwen3-
 
 ## 4. Pipeline Parallelism (PP)
 
-### How it works
+### PP: How Layers Map to GPU Stages
 
 Split model layers across GPUs sequentially.
 
@@ -97,7 +97,7 @@ Forward pass:
         → GPU-3 computes layers 24-31 → output
 ```
 
-### The bubble problem (training)
+### Why PP Wastes GPU Time — and How Micro-Batches Fix It
 
 ```
 Naive approach: only 1 GPU active at a time (75% idle!)
@@ -118,7 +118,7 @@ flow through the pipeline one after another) to fill the bubble:
 Bubble fraction = (p-1)/(p-1+m) for p stages and m micro-batches — more micro-batches amortize the fixed (p-1) idle slots.
 ```
 
-### Communication and inference behavior
+### Why PP Uses InfiniBand (Not NVLink) and Behaves Differently in Inference
 
 - Transfers only **activations** (the intermediate feature tensors passed between layers) between stages, not weights, so works over InfiniBand across nodes — activation tensors are `[micro_batch, seq_len, hidden_dim]`, far smaller than the weight matrices TP synchronizes.
 - Standard pairing: **TP within a node + PP across nodes**, because TP needs NVLink (~900 GB/s) and PP only needs InfiniBand (~50 GB/s for activation transfers).
@@ -128,7 +128,7 @@ Bubble fraction = (p-1)/(p-1+m) for p stages and m micro-batches — more micro-
 
 ## 5. Expert Parallelism (EP)
 
-### How it works
+### EP: How Experts Are Assigned and Tokens Are Routed
 
 Mixture-of-Experts (MoE) models replace a single feed-forward layer with many parallel "expert" sub-networks — small feed-forward networks — but a learned **router** activates only a few per token (e.g., 2 out of 64). EP assigns whole experts to specific GPUs.
 
@@ -159,7 +159,7 @@ For each token:
 
 EP outperforms TP for MoE because TP forces all GPUs to compute partial results for every expert even though each token activates only 2 of 64 — 62/64 of that compute is wasted. EP routes tokens via All-to-All only to GPUs holding the activated experts, so 2 GPUs do work per token instead of all GPUs doing partial work for all experts.
 
-### Load balancing (training)
+### Why EP Needs an Auxiliary Loss During Training
 
 If all tokens route to the same 2 experts, those GPUs are overloaded while others idle. Training frameworks add an **auxiliary loss** — an extra term added to the main training loss — that penalizes unbalanced routing, encouraging the model to spread tokens across all experts.
 
@@ -237,7 +237,7 @@ vLLM and SGLang are **inference-only** engines. They do not perform backward pas
 
 Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it's a model architecture redesign that removes the sequential layer dependencies that cause the PP bubble. Published in the [2025 Foundation Models update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates).
 
-### How it works
+### PT-MoE: Parallel Tracks Replace Sequential Layer Dependencies
 
 ```
 Standard Transformer (sequential dependency):
@@ -255,7 +255,7 @@ PT-MoE (parallel tracks):
   Each track has its own set of MoE layers.
 ```
 
-### PT-MoE Eliminates the PP Bubble
+### Why Track Independence Maps Directly to Zero-Bubble Hardware Execution
 
 ```
 Standard PP (sequential dependency — has pipeline bubble):
