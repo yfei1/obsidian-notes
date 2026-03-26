@@ -70,6 +70,8 @@ hash_to_block_id = {H1: 0, H2: 0, H3: 0}
 
 **After N sequences with unique content**: the map has N entries all pointing to block 0, with N−1 stale. It grows by 1 per cycle, unbounded.
 
+### Growth Rate
+
 ```python
 # verify: memory growth math
 entries_per_day = 10_000
