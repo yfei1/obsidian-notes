@@ -156,6 +156,8 @@ This is the exception where prefill uses `block_tables` — normally prefill is 
 
 ## How Does Deallocation Preserve Cached Blocks?
 
+Deallocation has two cases, distinguished by ref_count. Blocks shared across sequences (ref_count > 1) must survive until the last holder releases them — freeing early would corrupt the KV data still in use. Blocks with ref_count 0 are unowned, but the engine keeps their hash, token_ids, and KV data intact in the free list — because a future request with the same prefix can reclaim them without a prefill pass, saving ~8 ms per 512-token system prompt.
+
 When seq 1 finishes:
 
 ```python
@@ -169,7 +171,7 @@ def deallocate(self, seq):
     seq.block_table.clear()
 ```
 
-Shared blocks (ref_count > 1) survive because seq 2 still holds a reference. When a block hits ref_count 0, it goes to `free_block_ids` but **keeps its hash, token_ids, and KV cache data** — a future sequence with the same 512-token system prompt can reclaim all 32 blocks without recomputation, saving another ~8 ms prefill.
+Shared blocks (ref_count > 1) survive because seq 2 still holds a reference. When a block hits ref_count 0, it moves to `free_block_ids` but **keeps its hash, token_ids, and KV cache data** — the next request hitting the same prefix reclaims all 32 blocks via `_allocate_block(block_id)` in the cache-hit path, bypassing prefill entirely.
 
 ---
 
