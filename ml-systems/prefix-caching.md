@@ -253,5 +253,6 @@ print(f'flops_ratio={ratio:.1f}x')
 - [[ml-systems/llm-inference-engines]] — where prefix caching fits in the broader serving pipeline
 - [[ml-systems/vllm-model-integration]] — how `block_tables` are passed to the attention kernel
 - [[ml-systems/transformer-model-internals]] — KV head dimensions and layer counts used in the running example
-- [[ml-systems/kv-cache-kernel-and-addressing]]
+- [[ml-systems/kv-cache-kernel-and-addressing]] — physical slot mapping and how block_table indices translate to GPU memory addresses
+- [[ml-systems/flashinfer-vllm-integration]] — the variable-length attention kernel that reads cached KV via block_tables during prefill
 - [[ml-systems/prefix-caching-hash-table-leak]] — deep dive into the unbounded-growth bug and correct fix patterns
