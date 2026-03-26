@@ -74,15 +74,15 @@ We claimed single-node TP uses multiprocessing and is already fast. Verify: does
 
 We saw log lines showing `RAY_CGRAPH_get_timeout` and `VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE = auto` in v1. Confirm: does v1 always use the compiled DAG path when the Ray backend is selected? Is there a fallback path that uses standard `ray.get()` / `.remote()` calls? What env vars control this?
 
-**Answer: Yes, but only when you explicitly select the Ray backend.** CG is always used for `execute_model` when `distributed_executor_backend="ray"` — built lazily at first step (`ray_executor.py:466-467`), no fallback to standard Ray RPC on the hot path.
+**Answer: Most users never hit CG because the Ray backend is not the default.** The backend selection logic (`config/parallel.py:751-792`) defaults to `"mp"` (MultiprocExecutor) for both single-node and multi-node (`--nnodes > 1`) deployments. Ray is selected only when: (a) you explicitly pass `--distributed-executor-backend ray`, (b) vLLM is running inside a Ray placement group (e.g., Ray Serve), or (c) `data_parallel_backend="ray"`. The placement-group case is the most common implicit trigger — Ray Serve wraps every replica in a placement group, so Ray Serve users get CG whether they know it or not.
 
-**But most users never hit CG.** The backend selection logic (`config/parallel.py:751-792`) defaults to `"mp"` (MultiprocExecutor) for single-node multi-GPU. Ray is selected only when: (a) you explicitly pass `--distributed-executor-backend ray`, (b) you're inside a Ray placement group (e.g., Ray Serve), or (c) `data_parallel_backend="ray"`. Multi-node with `--nnodes > 1` also defaults to `"mp"`, not Ray.
+**When Ray is selected, CG is unconditional on the hot path.** `execute_model` always goes through the compiled DAG (`ray_executor.py:466-469`, built lazily at first step) — there is no fallback to standard `ray.remote()` for hot-path dispatch. Cold-path operations (init, health checks, model loading) still use `ray.remote()` via `collective_rpc()` at `ray_executor.py:490-515`, because they run infrequently enough that ~1-5 ms RPC overhead is irrelevant.
 
-To use distributed execution without CG: just use the default. `vllm serve model --tensor-parallel-size 4` uses MultiprocExecutor (SHM MessageQueue, no Ray, no CG). Ray is only needed when Ray manages the cluster (placement groups, Ray Serve, RL frameworks like SkyRL).
+**To use Ray for process management without CG**, the current answer is: you can't. PR #36836 (RayExecutorV2) changes this by introducing `VLLM_USE_RAY_V2_EXECUTOR_BACKEND=1`, which uses Ray for cluster management but routes `execute_model` through MultiprocExecutor's MessageQueue (O(1) broadcast, no compiled DAG). Once merged and defaulted, the old CG-based `RayExecutor` is removed entirely — CG disappears from the hot path for all backends.
 
-**Can you use Ray without CG?** Not yet. When `distributed_executor_backend="ray"`, CG is unconditional — no flag to disable it. PR #36836 (RayExecutorV2) adds this: `VLLM_USE_RAY_V2_EXECUTOR_BACKEND=1` gives you Ray for process management with MultiprocExecutor's MessageQueue dispatch (no CG). Once merged and defaulted on, the old CG-based `RayExecutor` will be removed entirely.
+The practical implication: `vllm serve model --tensor-parallel-size 4` uses MultiprocExecutor (SHM MessageQueue, no Ray, no CG). CG is only relevant when Ray manages the cluster — Ray Serve, RL frameworks like SkyRL, or explicit `--distributed-executor-backend ray`.
 
-CG env vars (only relevant when Ray backend is active, before RayExecutorV2): `VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE` (auto/nccl/shm, default: auto), `VLLM_USE_RAY_COMPILED_DAG_OVERLAP_COMM` (default: False), `VLLM_USE_RAY_WRAPPED_PP_COMM` (default: True).
+CG env vars (only relevant when Ray backend is active, before RayExecutorV2 lands): `VLLM_USE_RAY_COMPILED_DAG_CHANNEL_TYPE` (auto/nccl/shm, default: auto), `VLLM_USE_RAY_COMPILED_DAG_OVERLAP_COMM` (default: False), `VLLM_USE_RAY_WRAPPED_PP_COMM` (default: True).
 
 ---
 
