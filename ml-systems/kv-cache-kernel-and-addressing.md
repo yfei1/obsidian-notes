@@ -2,6 +2,8 @@
 
 #ml-systems #inference #triton
 
+**Prerequisites**: [[ml-systems/kv-cache-internals]] (6-D tensor layout, block table, slot addressing), [[ml-systems/gpu-memory-hierarchy]] (why CPU pre-computation avoids GPU division cost), [[ml-systems/attention-mechanics]] (prefill vs decode attention paths).
+
 ## Core Intuition
 
 Writing K/V vectors into the cache on every decode step is on the critical path — any per-thread address arithmetic adds latency across thousands of tokens. nano-vLLM solves this by having the CPU pre-compute a flat slot index per token (`slot_mapping`), so the Triton kernel does a single multiply and write with zero division or modulo. This works because each per-layer cache slice is memory-contiguous, making flat 1D addressing equivalent to structured `[block, position, head, dim]` indexing.
@@ -159,5 +161,6 @@ During decode, the new token's K,V is written to its slot. Then its Q attends to
 
 - [[ml-systems/kv-cache-internals]] — 6-D tensor layout, cache sizing via warmup, per-layer slice assignment (prerequisites for this note)
 - [[ml-systems/attention-mechanics]] — flash_attn API details, prefill vs decode kernel signatures
+- [[ml-systems/flashinfer-vllm-integration]] — production FlashInfer kernels that replace the nano-vLLM `flash_attn_with_kvcache` calls shown here
 - [[ml-systems/gpu-memory-hierarchy]] — why slot_mapping is pre-computed on CPU (memory wall, division cost)
 - [[ml-systems/prefix-caching]] — when `slot == -1` (skip) and when `block_tables` is set during prefill
