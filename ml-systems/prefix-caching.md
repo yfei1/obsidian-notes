@@ -53,15 +53,16 @@ Prompt 1 arrives first — cold cache, all 32 full blocks are misses. Prompt 2 a
 
 ### Seq 1 enters `BlockManager.allocate()`
 
+Allocation walks the sequence block-by-block, computing a chained hash for each full block and looking it up in `hash_to_block_id`. Partial blocks (where `len(token_ids) < block_size`) always get `h = -1` and are never cached — because a partial block's token IDs are not yet final (more tokens may arrive), so caching them would produce stale hits.
+
 ```python
 def allocate(self, seq):
     h = -1
     cache_miss = False
     for i in range(seq.num_blocks):
         token_ids = seq.block(i)                                    # tokens for block i
-        h = self.compute_hash(token_ids, h) if full_block else -1   # full_block = (len(token_ids) == block_size); partial last block gets h=-1 and is never cached
+        h = self.compute_hash(token_ids, h) if full_block else -1   # partial last block: h=-1, never cached
         block_id = self.hash_to_block_id.get(h, -1)                # lookup → -1 (empty map)
-        # First time: no entry → cache_miss = True
         if block_id == -1 or self.blocks[block_id].token_ids != token_ids:
             cache_miss = True
         if cache_miss:
@@ -78,7 +79,7 @@ def allocate(self, seq):
 
 ### Seq 1 prefill — `ModelRunner.prepare_prefill()`
 
-Since `seq.num_cached_tokens == 0`, every token hits the GPU:
+Since `seq.num_cached_tokens == 0`, every token is sent to the GPU:
 
 ```python
 input_ids.extend(seq[seq.num_cached_tokens:])              # all 512 tokens → len 512
@@ -88,7 +89,7 @@ for i in range(seq.num_cached_blocks, seq.num_blocks):     # blocks 0–31 (all 
     # compute slot_mapping for every block
 ```
 
-The attention kernel receives two length parameters: `cu_seqlens_q` (cumulative query-sequence length — how many tokens are being *computed* this step) and `cu_seqlens_k` (cumulative key-sequence length — how many tokens the keys span, including any cached prefix). Here `cu_seqlens_q == cu_seqlens_k == 512` — every token is computed fresh, so the kernel operates *in-place* (Q, K, V are written and read within the same contiguous allocation, with no reference to external blocks). A `block_table` (a per-sequence array mapping logical block indices to physical GPU block IDs) is only passed to the kernel when cached blocks must be read; for a cold request there are none, so no `block_table` is passed. GPU computes 512 × 512 attention, writing 32 × 2 MB = 64 MB of KV data into the 32 allocated blocks.
+Two length parameters control the attention kernel: `cu_seqlens_q` (how many tokens are being *computed* this step) and `cu_seqlens_k` (how many tokens the keys span, including any cached prefix). For a cold request, `cu_seqlens_q == cu_seqlens_k == 512` — every token is computed fresh, so Q, K, and V are all derived from the same 512-token input. Because Q and K cover the same tokens, the kernel operates *in-place*: it reads and writes within a single contiguous allocation rather than reaching into external blocks. No `block_table` (a per-sequence array mapping logical block indices to physical GPU block IDs) is passed, because there are no cached blocks to read. The GPU computes 512 × 512 attention and writes 32 × 2 MB = 64 MB of KV data into the 32 allocated blocks.
 
 ---
 
