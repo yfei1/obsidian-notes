@@ -548,6 +548,14 @@ Additional patterns:
     Each step names the component, cites `file:line`, and states what data moves
     and why. The diagram shows *where* things are; the walkthrough shows *when*
     and *why* they happen in that order.
+13. **Code blocks must be self-contained for the target reader**: When including
+    simplified source code, ensure every non-obvious variable and method call is
+    defined either in a prose paragraph immediately before the block, or in inline
+    comments within the block. The target reader should be able to trace the code
+    line-by-line without consulting external docs. If a diagram follows a code
+    block, (a) state what the diagram represents (topology, data flow, runtime
+    sequence), and (b) verify the diagram is consistent with the code — labels
+    on diagram elements must match which code lines produce them.
 
 -----
 

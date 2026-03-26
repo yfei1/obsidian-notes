@@ -333,6 +333,27 @@ def _gate_inline_definition_preservation(original: str, new_content: str,
         )
 
 
+def _gate_duplicate_headers(new_content: str, result: GateResult) -> None:
+    """Veto if any ## header text appears more than once."""
+    headers = re.findall(r'^(## .+)$', new_content, re.MULTILINE)
+    seen: set[str] = set()
+    for h in headers:
+        if h in seen:
+            result.fail(f"Duplicate section header: {h}")
+        seen.add(h)
+
+
+def _gate_wikilink_count(original: str, new_content: str, result: GateResult) -> None:
+    """Veto if total wikilink count decreases (net link loss)."""
+    link_re = re.compile(r'\[\[([^\]]+)\]\]')
+    orig_prose = _strip_code_blocks(original)
+    new_prose = _strip_code_blocks(new_content)
+    orig_count = len(link_re.findall(orig_prose))
+    new_count = len(link_re.findall(new_prose))
+    if orig_count > 2 and new_count < orig_count:
+        result.fail(f"Wikilink count regression: {orig_count} → {new_count}")
+
+
 # ---------------------------------------------------------------------------
 # Main gate runner
 # ---------------------------------------------------------------------------
@@ -370,6 +391,7 @@ def check_all_gates(original_content: str, new_content: str,
 
     # These always apply regardless of strategy
     _gate_required_sections(new_content, result)
+    _gate_duplicate_headers(new_content, result)
     _gate_causal_reasoning(original_content, new_content, result)
     _gate_bullet_preservation(original_content, new_content, result)
     _gate_title_line1(new_content, result)
@@ -378,8 +400,10 @@ def check_all_gates(original_content: str, new_content: str,
     _gate_broken_wikilinks(original_content, new_content, all_notes, result)
     _gate_code_block_preservation(original_content, new_content, result)
     # Cross-file strategies (split, dedup) intentionally move content to sibling files —
-    # definitions may land in the other file, not this one. Skip inline-def gate for these.
+    # definitions may land in the other file, not this one. Skip inline-def and wikilink-count
+    # gates for these (links may consolidate across files).
     if not is_cross_file:
         _gate_inline_definition_preservation(original_content, new_content, result)
+        _gate_wikilink_count(original_content, new_content, result)
 
     return result

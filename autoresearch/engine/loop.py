@@ -9,6 +9,7 @@ The loop never knows what kind of change was made — it just executes Ops.
 import argparse
 import math
 import os
+import re
 import sys
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -63,8 +64,12 @@ SOFT_GATE_PREFIXES = (
 def generate_delta(target_path: str, content: str, strategy: Strategy,
                    constitution: str,
                    error_feedback: str = "",
-                   extra_vars: dict[str, str] | None = None) -> list | None:
-    """Generate ops by calling Claude via the local LLM layer."""
+                   extra_vars: dict[str, str] | None = None) -> tuple[list | None, str | None]:
+    """Generate ops by calling Claude via the local LLM layer.
+
+    Returns (ops, retry_feedback). retry_feedback is non-None when ops is None
+    and a retry with that feedback message may succeed.
+    """
     max_tokens = 16384 if strategy.name in ("split", "dedup", "cross_link", "systematize") else 8192
 
     def llm_fn(prompt: str) -> str | None:
@@ -77,23 +82,24 @@ def generate_delta(target_path: str, content: str, strategy: Strategy,
         extra_vars=extra_vars,
     )
 
-    # Fix D: Independent verification of concretize numerical claims
+    # Independent verification of concretize numerical claims
     if ops and strategy.name == "concretize":
-        if not _verify_concretize_claims(ops, content, target_path):
-            return None  # Verification failed — reject the delta
+        passed, verify_err = _verify_concretize_claims(ops, content, target_path)
+        if not passed:
+            return None, verify_err  # Return error as retry feedback
 
-    return ops
+    return ops, None
 
 
 def _verify_concretize_claims(ops: list, original_content: str,
-                               target_path: str) -> bool:
+                               target_path: str) -> tuple[bool, str]:
     """Independently verify numerical claims from concretize using a SEPARATE LLM call.
 
     The entity that verifies must be independent of the entity that generates.
     We extract the proposed changes, then ask a separate LLM call to write
     verification assertions. This decorrelates errors.
 
-    Returns True if verification passes or no numerical claims found.
+    Returns (passed, retry_feedback). retry_feedback is empty when passed=True.
     """
     import subprocess
     import tempfile
@@ -104,11 +110,11 @@ def _verify_concretize_claims(ops: list, original_content: str,
     file_contents = {target_path: original_content}
     new_contents, err = temp_delta.execute_all(file_contents)
     if err:
-        return True  # Can't build diff — let normal flow handle it
+        return True, ""  # Can't build diff — let normal flow handle it
 
     new_content = new_contents.get(target_path, "")
     if new_content == original_content:
-        return True  # No changes
+        return True, ""  # No changes
 
     # Extract lines that contain new numbers (simple heuristic)
     import difflib
@@ -120,14 +126,14 @@ def _verify_concretize_claims(ops: list, original_content: str,
     numeric_lines = [l for l in added_lines if re.search(r'\d+\.?\d*\s*(MB|GB|TB|ms|us|µs|ns|TFLOPS|GFLOPS|lines|tokens|bytes|KB|%)', l, re.IGNORECASE)]
 
     if not numeric_lines:
-        return True  # No numerical claims to verify
+        return True, ""  # No numerical claims to verify
 
     claims_text = "\n".join(f"- {l.strip()}" for l in numeric_lines[:10])
 
     # SEPARATE LLM call to generate verification script
     verify_prompt = f"""These numerical claims were added to a technical note. Write a Python script that verifies EACH calculation using only stdlib math (no imports beyond math).
 
-For each claim, write an assert statement that checks the arithmetic. If a claim is a measurement/benchmark (not derivable from math), write: # SKIP: benchmark claim, not verifiable
+For each claim, write an assert statement that checks the arithmetic. Use math.isclose(actual, expected, rel_tol=1e-2) for floating-point comparisons (1% tolerance — intermediate rounding in the note is expected). If a claim is a measurement/benchmark (not derivable from math), write: # SKIP: benchmark claim, not verifiable
 
 Claims:
 {claims_text}
@@ -136,7 +142,7 @@ Respond with ONLY the Python script (no markdown fences, no explanation). The sc
 
     verify_script = call_claude(verify_prompt, model="sonnet", max_tokens=2048, temperature=0.0)
     if not verify_script:
-        return True  # LLM call failed — don't block
+        return True, ""  # LLM call failed — don't block
 
     # Strip markdown fences if present
     verify_script = re.sub(r'^```\w*\n|```$', '', verify_script.strip(), flags=re.MULTILINE)
@@ -150,17 +156,24 @@ Respond with ONLY the Python script (no markdown fences, no explanation). The sc
                 capture_output=True, text=True, timeout=10,
             )
             if result.returncode != 0:
+                err_msg = result.stderr[:400].strip()
                 print(f"  Concretize verification FAILED (independent check):", file=sys.stderr)
-                print(f"    {result.stderr[:300]}", file=sys.stderr)
-                return False
+                print(f"    {err_msg}", file=sys.stderr)
+                feedback = (
+                    f"Your numerical claims failed independent verification:\n{err_msg}\n\n"
+                    f"Fix: recheck the arithmetic for the specific value(s) shown above. "
+                    f"Either correct the number or, if it is a benchmark/measured value "
+                    f"(not derivable from a formula), remove it entirely."
+                )
+                return False, feedback
             print(f"  Concretize verification PASSED ({len(numeric_lines)} claims checked)")
-            return True
+            return True, ""
     except subprocess.TimeoutExpired:
         print(f"  Concretize verification timed out", file=sys.stderr)
-        return False
+        return False, "Verification script timed out — simplify the calculations."
     except Exception as e:
         print(f"  Concretize verification error: {e}", file=sys.stderr)
-        return True  # Don't block on infrastructure errors
+        return True, ""  # Don't block on infrastructure errors
 
 
 def _extract_fact_inventory(content: str) -> str:
@@ -636,12 +649,22 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
         # Build unified candidate pool: base strategies + eligible conditionals
         candidate_pool: list[tuple[Strategy, dict[str, str]]] = []
 
-        # Base strategies (always in the pool)
+        # Pre-compute eligibility filters for strategies that need target context
+        _code_block_re = re.compile(r'```\w*\n(.*?)```', re.DOTALL)
+        _eligible_code_blocks = sum(
+            1 for b in _code_block_re.findall(target_content)
+            if b.count('\n') >= 8
+        )
+
+        # Base strategies (always in the pool, with pre-filters)
         for s in NOTE_STRATEGIES:
             ev: dict[str, str] = {}
             if s.name == "clarify":
                 # Always set — empty string when no prereqs, so placeholder is replaced
                 ev["already_known_terms"] = already_known_block
+            # Pre-filter: simplify_code only on notes with ≥2 eligible code blocks
+            if s.name == "simplify_code" and _eligible_code_blocks < 2:
+                continue
             candidate_pool.append((s, ev))
 
         # Conditional strategies (added to pool only when context triggers them)
@@ -656,9 +679,24 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             # Consolidate: available when overlap is high (>60%) — full merge + delete
             if target_overlap.overlap_ratio > 0.6:
                 canonical_content = file_contents.get(target_overlap.canonical_path, "")
+                # Inject excerpts from notes that reference the target (top 3 by size)
+                referencing_excerpts = ""
+                ref_notes = []
+                for np, nc in file_contents.items():
+                    if np != target_path and f"[[{Path(target_path).stem}]]" in nc:
+                        ref_notes.append((np, nc))
+                ref_notes.sort(key=lambda x: -len(x[1]))
+                for rp, rc in ref_notes[:3]:
+                    # Extract paragraph(s) containing the wikilink
+                    stem = Path(target_path).stem
+                    paras = rc.split("\n\n")
+                    relevant = [p for p in paras if stem in p]
+                    excerpt = "\n\n".join(relevant)[:2000]
+                    referencing_excerpts += f"\n--- {rp} ---\n{excerpt}\n"
                 candidate_pool.append((CONSOLIDATE_STRATEGY, {
                     **dedup_vars,
                     "canonical_content": canonical_content[:8000],
+                    "referencing_excerpts": referencing_excerpts or "(no other notes reference this file)",
                 }))
         if not has_prereqs or not has_connections:
             candidate_pool.append((SYSTEMATIZE_STRATEGY, {
@@ -703,10 +741,27 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             # Add common vars available to all strategies
             extra_vars.setdefault("note_list", all_note_list)
             extra_vars.setdefault("line_count", str(target_lines))
-            ops = generate_delta(target_path, target_content, strategy, constitution,
-                                 extra_vars=extra_vars)
+            ops, retry_fb = generate_delta(target_path, target_content, strategy, constitution,
+                                           extra_vars=extra_vars)
+
+            # Strategy-specific retry when ops is None
             if ops is None:
-                return strategy, None, "no output"
+                if retry_fb is None and strategy.name == "simplify_code":
+                    retry_fb = (
+                        "You returned no output. You MUST produce exactly one edit_file op. "
+                        "Pick the longest code block (≥8 lines) in the note and add a "
+                        "pseudocode comment block immediately above it that summarizes its "
+                        "logic in 3-5 plain English lines. Do not change the code itself."
+                    )
+                if retry_fb:
+                    print(f"  {strategy.name}: retrying with failure feedback...", flush=True)
+                    ops, _ = generate_delta(
+                        target_path, target_content, strategy, constitution,
+                        error_feedback=retry_fb,
+                        extra_vars=extra_vars,
+                    )
+                if ops is None:
+                    return strategy, None, "no output"
 
             delta = Delta(
                 generation=generation,
@@ -718,10 +773,20 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             # Dry-run: execute all ops and check for errors
             _, err = delta.execute_all(file_contents)
             if err:
-                # Retry with error feedback
-                retry_ops = generate_delta(
+                # Build targeted feedback — search-not-found needs a stronger hint
+                if "search text not found" in err:
+                    error_feedback = (
+                        f"SEARCH TEXT NOT FOUND. Your edit failed because the search string "
+                        f"does not exactly match the file. You must copy the text VERBATIM, "
+                        f"character-by-character, from the note — do NOT paraphrase, reformat, "
+                        f"or add/remove whitespace. Specific failure: {err}"
+                    )
+                else:
+                    error_feedback = f"Your ops failed: {err}"
+
+                retry_ops, _ = generate_delta(
                     target_path, target_content, strategy, constitution,
-                    error_feedback=f"Your ops failed: {err}",
+                    error_feedback=error_feedback,
                     extra_vars=extra_vars,
                 )
                 if retry_ops is None:
@@ -1024,6 +1089,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             "strategies": [s.name for s, _ in strategies_to_run],
             "num_valid_deltas": len(deltas),
             "num_valid_judges": len(result.per_judge),
+            "judge_ids_responded": list(result.per_judge.keys()),
             "outcome": "adopted",
             "winner": winner.strategy,
             "winner_advantage": winner_advantage,

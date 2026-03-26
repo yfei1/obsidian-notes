@@ -115,6 +115,21 @@ HARD RULES for numbers you introduce:
    DO NOT INCLUDE. You cannot run benchmarks. Instead explain the MECHANISM of
    why one approach is faster, without inventing specific numbers.
 
+LINE BUDGET — CRITICAL:
+Your edit MUST be net-zero or net-negative on line count. For every line of
+concrete content you add, remove the corresponding vague/abstract prose it replaces.
+
+Example — WRONG (net +2 lines):
+  search: "the GPU has limited memory"
+  replace: "the GPU has limited memory\nA100: 80GB HBM2e\n~2.5GB consumed by KV cache per 1K context at 70B"
+
+Example — RIGHT (net 0 lines):
+  search: "the GPU has limited memory"
+  replace: "A100: 80GB HBM2e — ~2.5GB consumed by KV cache per 1K context at 70B scale"
+
+If you cannot make the edit line-neutral, do NOT produce it. Fewer, tighter edits
+that pass gates are better than ambitious edits that get vetoed.
+
 Constitution excerpt (quality signals):
 {constitution}
 
@@ -181,6 +196,20 @@ The note ({target_path}):
 Goal: Reorder sections for progressive conceptual build-up. The reader should climb
 a conceptual ladder — each section builds on the previous one.
 
+HARD INVARIANTS (violating ANY of these causes automatic rejection):
+1. Your output MUST preserve one complete section pair from the original:
+   [## TL;DR + ## See Also] OR [## Core Intuition + ## Connections] OR
+   [## Role in System + ## Related Concepts]. If the original has ## TL;DR,
+   your output must keep ## TL;DR (or rename it to ## Core Intuition AND
+   also rename ## See Also to ## Connections in the same edit).
+2. Every **term** (parenthetical definition) pattern in the original MUST
+   appear verbatim somewhere in your output. You may move definitions to
+   different sections but NEVER delete them.
+3. If the note's sections already follow a logical progressive build-up
+   (overview → mechanism → trade-offs), make only targeted improvements:
+   split sections >20 lines, rename generic headers to concept-questions.
+   Do NOT reorder sections that are already well-structured.
+
 Target templates from the constitution:
 
 Concept Notes should follow:
@@ -235,32 +264,29 @@ The note ({target_path}):
     ),
 
     Strategy(
-        name="scope_tighten",
-        description="Remove content that strays beyond the note's stated topic",
-        prompt_template="""You are reviewing this Obsidian note for scope discipline.
-The note should explain its stated topic and nothing else. Find paragraphs or
-sections that wander into adjacent topics not present in the note's original
-scope, and either:
-- Remove them (replacing with a one-liner + [[wikilink]] if the topic deserves
-  its own note)
-- Compress them to the minimum context needed for local understanding
+        name="compress",
+        description="Compress verbose on-topic explanations without removing any coverage",
+        prompt_template="""You are compressing verbose sections of this Obsidian note.
 
-Apply the minimal-context test: "Does the reader need this sentence to
-understand the material already here, or is it teaching a new adjacent topic?"
+Goal: Find paragraphs where the same idea uses 3 sentences but could use 1.
+Tighten the prose without removing any topic, example, cross-reference, or
+causal explanation.
 
-Allowed expansions (do NOT cut these):
-- First-use definitions of terms already referenced
-- One bridging sentence between concepts already present
-- One-line context needed to explain why the topic matters
-- A short local contrast when needed to prevent confusion
+RULES — what you MUST NOT remove:
+- Any topic or subtopic currently covered (compress, don't cut)
+- Any wikilink or cross-reference
+- Any code block or concrete example
+- Any "because" / causal explanation
+- Any **term** (definition) pattern
 
-Not allowed (cut or compress these):
-- New neighboring subtopics not part of the original note
-- Survey-style coverage of the whole design space
-- Background paragraphs just because they are useful in general
-- Compare/contrast sections with methods not discussed in the source
-- Broadening from "how X works" into "when to choose among X, Y, Z"
-  unless the source already contains that decision frame
+RULES — what you SHOULD compress:
+- Redundant restatements of the same point
+- Verbose setup sentences before the actual content
+- Transition phrases between sections ("Now let's look at...", "Moving on...")
+- Obvious statements the target reader already knows
+
+Compression test: for every paragraph, try halving the words. If meaning
+survives, use the shorter version.
 
 Constitution (quality goals):
 ---
@@ -312,6 +338,27 @@ RULES:
    keep that rationale in the pseudo code.
 8. Never reorder operations from the real code. Even if two steps appear independent,
    their order may matter for correctness (e.g., scaling before slicing in TP).
+
+QUALITY BAR — your pseudo code must ADD insight the reader cannot quickly extract
+from the real code: why a branch exists, what tensor shapes are at each step, what
+the performance implication is. If you can only produce a line-by-line translation,
+do NOT generate an edit.
+
+EXAMPLE — good pseudo code:
+```
+For each weight tensor in the checkpoint:
+  skip rotary embeddings (computed at runtime, not stored)
+  if weight matches a stacked param (qkv, gate+up):
+    look up the fused parameter by replacing the suffix
+    call its weight_loader with the shard_id (which slice to fill)
+  else: load directly into the matching nn.Parameter
+```
+
+EXAMPLE — bad pseudo code (line-by-line translation, adds nothing):
+```
+Loop over weights. If rotary, skip. For each stacked param mapping,
+check if name matches. If yes, get param, call weight_loader. Break.
+```
 
 Constitution (quality goals):
 ---
@@ -471,39 +518,36 @@ Note ({target_path}):
 # ---------------------------------------------------------------------------
 
 REWRITE_STRATEGY = Strategy(
-    name="rewrite",
-    description="Rewrite a note from its extracted fact outline for better structure and flow",
-    prompt_template="""You are rewriting an Obsidian note from scratch using its extracted fact outline.
+    name="section_rewrite",
+    description="Rewrite the weakest section of a note for better structure and flow",
+    prompt_template="""You are rewriting ONE section of this Obsidian note.
 
-The note's current structure may have layered edits, awkward flow, or sections that
-don't build a clean conceptual ladder. Your job: write a NEW version that preserves
-every fact but improves organization, flow, and clarity.
+Goal: Find the single weakest section (disorganized, missing causal chains,
+poor progressive disclosure) and rewrite ONLY that section. Do not touch
+the rest of the note.
 
-MANDATORY ARTIFACTS — you MUST include ALL of these verbatim in your rewrite:
-{fact_inventory}
+How to identify the weakest section:
+- Paragraphs that state facts without "because" explanations
+- Sections >30 lines without subsection headers
+- Sections that jump to implementation before explaining the concept
+- Sections with inconsistent voice or fragmented structure
 
 RULES:
-1. Every artifact above MUST appear in your output. Missing any = rejection.
-2. Follow the constitution's note template (Concept Note or Implementation Walkthrough).
-3. You may freely reorder sections, rename headers, merge or split sections.
-4. Do NOT add new facts, numbers, or claims not in the artifact list.
-5. Do NOT remove any section's content — reorganize, don't delete.
-6. Keep the same filename and title.
-7. The rewrite must be a COMPLETE note — output replaces the entire file.
+1. Only produce ONE edit_file op targeting ONE section.
+2. Your rewritten section must be within +/-10% of the original section's line count.
+3. Preserve all **term** (definition) patterns, code blocks, and wikilinks.
+4. Do not add new facts or claims.
+5. Do not change the section header name.
 
 Constitution (quality goals):
 ---
 {constitution}
 ---
 
-Current note ({target_path}, {line_count} lines):
+The note ({target_path}, {line_count} lines):
 ---
 {content}
 ---
-
-Output a SINGLE edit_file op that replaces the entire file content.
-Use the EXACT first line of the current note as the "search" value, and the
-COMPLETE rewritten note as the "replace" value.
 """ + OPS_FORMAT_INSTRUCTIONS,
 )
 
@@ -527,10 +571,15 @@ STEPS (in this exact order):
 1. edit_file on {canonical_note}: Add any content from {target_path} that does NOT
    already exist in {canonical_note}. Integrate it into the appropriate sections —
    don't just append it at the bottom.
-2. edit_file on ALL notes that reference {target_path}: Update their wikilinks
-   to point to {canonical_note} instead. Check for both [[stem]] and [[dir/stem]]
-   formats, including piped links like [[stem|display text]].
+2. edit_file on notes that reference {target_path}: Update their wikilinks
+   to point to {canonical_note} instead. Use ONLY the excerpts shown below as
+   search strings — do NOT guess at text you haven't been shown.
 3. delete_file on {target_path}: Remove the source note.
+
+REFERENCING NOTES — excerpts from notes that link to {target_path}:
+---
+{referencing_excerpts}
+---
 
 CRITICAL (Priority 2 — no net information loss):
 - Every fact, number, code block, and causal explanation from {target_path} must
