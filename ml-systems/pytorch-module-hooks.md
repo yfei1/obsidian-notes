@@ -225,9 +225,12 @@ The bypass is silent: no error, identical output shape, hooks simply don't fire.
 
 `torch.compile` traces a call into a static computation graph ahead of time — every operation must be representable as a fixed graph node. A **graph break** occurs when the tracer encounters an operation it cannot represent statically; it abandons the trace at that point and falls back to slow Python execution for the rest of the call, negating the compile speedup.
 
-`module.compile()` sets `_compiled_call_impl` and compiles `_call_impl` itself, tracing through hook dispatch logic. Hook code is therefore inside the compiled region — and hooks commonly contain non-traceable Python. `.item()` is the canonical example: it forces a GPU→CPU scalar transfer at runtime, a dynamic data-dependent operation the tracer cannot represent statically. The compiler hits `.item()`, emits a graph break, and the rest of that call runs as unoptimized Python.
+The risk depends on *which* compile path is used:
 
-`@torch.compile` applied to `forward()` does not set `_compiled_call_impl`, so hooks remain outside the compiled region entirely — no graph break risk.
+- **`@torch.compile` on `forward()`** does not set `_compiled_call_impl`, so `_call_impl` and its hook dispatch run as normal CPU Python outside the compiled region. Hooks are never traced — no graph break risk regardless of what they contain.
+- **`module.compile()`** sets `_compiled_call_impl` and compiles `_call_impl` itself, tracing through the hook dispatch loop. Hook code is therefore inside the compiled region.
+
+Hooks compiled via `module.compile()` break the graph when they contain operations the tracer cannot represent as static graph nodes. `.item()` is the canonical example: it forces a GPU→CPU scalar transfer whose value is only known at runtime, making it data-dependent — the tracer cannot fix it into the static graph. The compiler emits a graph break at that point; the rest of the call runs as unoptimized Python, negating the compile speedup.
 
 ### `@torch.compile` on a single op regresses performance
 
