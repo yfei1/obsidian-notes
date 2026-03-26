@@ -105,9 +105,7 @@ The system is **correct** but accumulates hash keys for prefixes never queried a
 
 ## Why a Naive Fix in `_allocate_block` Is Wrong
 
-`_allocate_block` knows which block it is recycling, but `hash_to_block_id` maps a hash to *the most recently written block* with that content — not exclusively to the block being recycled. These diverge because two blocks can legitimately hold identical content: two requests sharing a prefix each get their own block filled with the same tokens, so the map is updated to point to the newer block while the older one remains live. Deleting the map entry when recycling the older block would silently remove the valid pointer to the newer one.
-
-The naive fix:
+The naive fix purges the map entry for a block's old hash when that block is recycled:
 
 ```python
 def _allocate_block(self, block_id):
@@ -118,14 +116,16 @@ def _allocate_block(self, block_id):
     ...
 ```
 
-This breaks because the block's `.hash` field records what *this block* last held, not what the map currently points to. Concretely:
+This is wrong because `hash_to_block_id` maps a hash to the *most recently written* block with that content — not exclusively to the block being recycled. Two blocks can hold identical content when two requests share the same prefix: each gets its own physical block filled with the same tokens. When that happens, the map is updated to point to the newer block while the older block remains live with the same `.hash`.
+
+Concrete failure sequence:
 
 1. Block 5, hash `0xABC`, deallocated → `hash_to_block_id[0xABC] = 5`
-2. A new request with identical prefix fills block 7 → `hash_to_block_id[0xABC] = 7` (valid; map now points to block 7)
+2. New request with identical prefix fills block 7 → `hash_to_block_id[0xABC] = 7` (map now points to block 7; block 5 still live)
 3. Block 5 is grabbed from the free list for different content
-4. Naive fix runs `hash_to_block_id.pop(0xABC)` → **deletes the valid entry for block 7**
+4. Naive fix reads `block.hash == 0xABC` and runs `hash_to_block_id.pop(0xABC)` → **deletes the valid entry for block 7**
 
-The fix checks the *block's* stale hash without first verifying the *map* still points to this block — so it purges a live entry.
+The bug: `block.hash` records what *this block* last held, but the map may have already moved on to a different block with the same content. The fix uses the wrong ownership check — it asks "did this block ever hold hash H?" instead of "does the map still point to this block for hash H?".
 
 ---
 
