@@ -174,7 +174,7 @@ Shared blocks (ref_count > 1) survive because seq 2 still holds a reference. Whe
 
 ## Why Does `hash_to_block_id` Grow Without Bound?
 
-`hash_to_block_id` is never cleaned up — stale entries accumulate as blocks are recycled, reaching ~16 MB after 1M unique-prefix requests. See [[ml-systems/prefix-caching-hash-table-leak]] for the full trace, stale-entry analysis, and correct fix patterns.
+`deallocate()` moves freed blocks to `free_block_ids` but never removes their entries from `hash_to_block_id` — so every unique-prefix block that has ever been allocated leaves a permanent 16-byte entry (8-byte hash key + 8-byte block ID value). Those entries become stale once the block is recycled for a different sequence, but the dict never shrinks. At 1M unique-prefix requests × 16 bytes/entry, the dict reaches ~16 MB. The entries are functionally harmless because the token-ID equality check (`self.blocks[block_id].token_ids != token_ids`) catches stale hits and forces a fresh allocation — but the memory leak is real. See [[ml-systems/prefix-caching-hash-table-leak]] for the full trace, stale-entry analysis, and correct fix patterns.
 
 <!-- verify:
 python3 -c "
