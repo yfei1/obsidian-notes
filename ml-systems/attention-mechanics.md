@@ -358,25 +358,25 @@ def store_kvcache_kernel(key_ptr, ..., slot_mapping_ptr, D):
 
 ## Tensor Parallelism for Attention
 
-Attention uses the same Column→Row sharding pattern as the MLP layers — ColumnParallel (each GPU takes a column slice of the weight matrix, no communication needed) for the first projection, RowParallel + all_reduce (a collective operation that sums partial results across all GPUs, leaving each GPU with the correct full output) for the last. With `tp_size=2`:
+**Why attention is TP-friendly**: each head's score matrix depends only on that head's own Q and K — head 3 never reads head 12's projections. Cross-head interaction happens only at o_proj, where outputs are concatenated and mixed. This independence means heads can be split across GPUs with zero communication during the attention computation itself, and only 1 all_reduce (at o_proj) per attention block.
 
-**QKVParallelLinear** (ColumnParallel — each GPU computes a disjoint slice of Q, K, V heads, requiring no inter-GPU communication):
+This maps directly to the Column→Row sharding pattern: ColumnParallel (each GPU takes a column slice of the weight matrix, no communication needed) for QKV projection, RowParallel + all_reduce (a collective that sums partial results across GPUs) for o_proj. With `tp_size=2`:
+
+**QKVParallelLinear** (ColumnParallel — each GPU computes a disjoint head slice, no inter-GPU communication):
 
 ```
 GPU 0: Q heads 0-7  [N, 512]   K heads 0-3  [N, 256]   V heads 0-3  [N, 256]
 GPU 1: Q heads 8-15 [N, 512]   K heads 4-7  [N, 256]   V heads 4-7  [N, 256]
 ```
 
-**Attention computation** (each GPU independently):
+**Attention computation** (each GPU independently, no communication):
 
 ```
 GPU 0: 8 Q heads attend to 4 KV heads → O [N, 8, 64] → flatten → [N, 512]
 GPU 1: 8 Q heads attend to 4 KV heads → O [N, 8, 64] → flatten → [N, 512]
 ```
 
-No communication — each GPU's heads are self-contained.
-
-**o_proj** (RowParallel — each GPU holds a row slice of W_O, producing a partial result; an all_reduce sums the partials across GPUs to get the correct full output):
+**o_proj** (RowParallel — each GPU holds a row slice of W_O, producing a partial sum; all_reduce combines them):
 
 ```
 GPU 0: [N, 512] @ W_0^T → [N, 1024] (partial)
@@ -384,9 +384,7 @@ GPU 1: [N, 512] @ W_1^T → [N, 1024] (partial)
 all_reduce(sum) → [N, 1024] correct output on both GPUs
 ```
 
-**Why attention is TP-friendly**: each head operates on its own Q, K, V projection slice — the score matrix for head 3 depends only on head 3's Q and K, never on head 12's. Cross-head interaction only happens at o_proj, where each head's output is concatenated and mixed. This means the entire attention computation requires only 1 all_reduce (at o_proj) per attention block.
-
-**KV cache is also sharded**: GPU 0 caches K, V for heads 0-3 only. GPU 1 caches heads 4-7. No duplication — each GPU's cache = `(num_kv_heads / tp_size) × head_dim` per token. See [[ml-systems/parallelism-strategies]] for the full Column→Row analysis and why this pattern minimizes communication.
+**KV cache is also sharded** — because each GPU owns a disjoint head slice, it only needs to cache K and V for those heads. GPU 0 caches heads 0–3; GPU 1 caches heads 4–7. No duplication: each GPU's cache = `(num_kv_heads / tp_size) × head_dim` per token. See [[ml-systems/parallelism-strategies]] for the full Column→Row analysis and why this pattern minimizes communication.
 
 ---
 
