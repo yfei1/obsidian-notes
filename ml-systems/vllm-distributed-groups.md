@@ -249,7 +249,7 @@ ps._TP = init_model_parallel_group( # create narrowed group
 | `_TP` | Yes | Only affects layers calling `get_tp_group()` |
 | `_EP` | Yes | Same pattern, separate global |
 | `_DCP` | Yes | Subdivides TP, must match new TP |
-| `_PCP` | Careful | Sibling of TP, strides across TP groups |
+| `_PCP` | Rebuild only if PCP topology also changes | Sibling of TP, strides across TP groups |
 | `_PP` | No — breaks global topology | Above TP; crosses TP boundaries, so replacing it severs rank-to-rank paths across all GPUs |
 | `_DP` | No — breaks global topology | Above TP; same reason as PP |
 
@@ -259,7 +259,7 @@ After rebuilding `_TP`, two values disagree:
 - `parallel_config.tensor_parallel_size` = 32 (unchanged config)
 - `get_tp_group().world_size` = 4 (rebuilt group)
 
-Most vLLM code reads the config (scheduler, executor, padding). Model layers read the group. One known risk:
+Most vLLM code reads the config (scheduler, executor, padding). Model layers read the group. One silent failure point — KV cache head allocation at config/model.py:1172:
 
 ```python
 # config/model.py:1172 — KV heads per GPU
@@ -285,9 +285,9 @@ assert max(1, 1 //  4) == 1   # 1 KV head: same result either way
 
 ### Pydantic Config Copy Pitfall
 
-`VllmConfig` is a Pydantic dataclass — Pydantic (a Python validation library that constructs objects from serialized fields rather than passing live objects through) re-runs `__init__` on nested dataclasses when constructing a parent. The problem: PT-MoE inflates `num_attention_heads` at runtime (e.g., `num_heads * num_tracks = 32`) to make vLLM's global-TP code paths produce correct per-track shard sizes. That inflation is a computed mutation applied inside `__init__` to a live object. Pydantic doesn't preserve live mutations — it serializes `mc` to its primitive fields and reconstructs a new `ModelConfig` from those primitives, re-running `__post_init__` against the original raw values from `hf_text_config`.
+`VllmConfig` is a Pydantic dataclass — Pydantic (a Python validation library that constructs objects from serialized fields rather than passing live objects through) re-runs `__init__` on nested dataclasses when constructing a parent. PT-MoE inflates `num_attention_heads` at runtime (e.g., `num_heads * num_tracks = 32`) to make vLLM's global-TP code paths produce correct per-track shard sizes. That inflation is a computed mutation applied inside `__init__` to a live object. Pydantic doesn't preserve live mutations — it serializes `mc` to its primitive fields and reconstructs a new `ModelConfig` from those primitives, re-running `__post_init__` against the original raw values from `hf_text_config`.
 
-Because `hf_text_config` on the copy points to a differently-resolved config object, `ModelArchConfigConvertorBase.get_total_num_attention_heads()` sees the raw per-track value (4) instead of the inflated value (32) — silently undoing the inflation.
+Because `hf_text_config` on the Pydantic copy points to a differently-resolved config object, `ModelArchConfigConvertorBase.get_total_num_attention_heads()` sees the raw per-track value (4) instead of the inflated value (32) — silently undoing the inflation.
 
 Empirical evidence (captured on cluster):
 ```
