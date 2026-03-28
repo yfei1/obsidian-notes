@@ -153,3 +153,4 @@ Both use the same workers, same NCCL groups, same model runner. The difference i
 - [[ml-systems/tensor-parallelism]]
 - [[ml-systems/vllm-weight-loading]] — executor initialization path that constructs the model and calls load_weights() before the serving loop starts
 - [[ml-systems/ray-compiled-graph-in-vllm]] — Ray Compiled Graph as an alternative dispatch path to MultiprocExecutor's MessageQueue; being removed because async scheduling hides the latency CG was built to reduce
+- [[ml-systems/cuda-graph-inference-optimization]] — the executor's decode loop calls `graph.replay()` each step; CUDA graph capture happens during engine initialization before the executor begins serving requests

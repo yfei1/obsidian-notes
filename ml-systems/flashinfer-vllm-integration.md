@@ -315,3 +315,4 @@ assert total_mb == 768
 - [[ml-systems/kv-cache-internals]] -- paged KV cache layout that FlashInfer reads natively
 - [[ml-systems/kv-cache-kernel-and-addressing]]
 - [[ml-systems/prefix-caching]]
+- [[ml-systems/cuda-graph-inference-optimization]] — FlashInfer attention kernels are captured inside CUDA graphs during decode; the static tensor shapes required for graph capture constrain how FlashInfer receives sequence metadata

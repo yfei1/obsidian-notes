@@ -124,7 +124,10 @@ See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of p
 - [[ml-systems/torch-compile-cuda-graphs-hook-interaction]] — how `torch.compile` interacts with CUDA graph capture
 - [[ml-systems/attention-mechanics]] — FlashAttention kernels that run inside the recorded graph
 - [[ml-systems/kv-cache-internals]] — block tables and slot mappings that must be fed into the graph each step
+- [[ml-systems/kv-cache-kernel-and-addressing]] — low-level kernel addressing of block tables and slot mappings that are copied into static graph buffers each step
 - [[ml-systems/vllm-torch-compile-integration]] — how vLLM's compile pipeline interacts with CUDA graph capture
-- [[ml-systems/ray-compiled-graph-in-vllm]]
+- [[ml-systems/torch-compile-graph-breaks]] — graph breaks during capture force fallback to eager mode, defeating CUDA graph replay
 - [[ml-systems/ray-compiled-graph-in-vllm]] — PP tensor transfer (via CG channels or isend/irecv) is excluded from CUDA graph capture because it crosses graph boundaries between pipeline stages
 - [[ml-systems/pytorch-module-hooks]] — hooks fire during CUDA graph capture but are absent from replay; the `__call__` dispatch chain explains why
+- [[ml-systems/flashinfer-vllm-integration]] — FlashInfer attention kernels execute inside the recorded CUDA graph during decode
+- [[ml-systems/vllm-executor-architecture]] — the executor drives the decode loop that calls `graph.replay()` each step

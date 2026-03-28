@@ -140,3 +140,4 @@ This is better than removing the check entirely because eager-mode callers still
 - [[ml-systems/vllm-torch-compile-integration]] — vLLM's `@support_torch_compile` decorator: the opt-in contract and detection path
 - [[ml-systems/torch-compile-cuda-graphs-hook-interaction]]
 - [[ml-systems/pytorch-module-hooks]] — `module.compile()` vs `@torch.compile` on `forward()`: which path traces hook dispatch and causes graph breaks
+- [[ml-systems/cuda-graph-inference-optimization]] — graph breaks during CUDA graph capture force fallback to eager mode, eliminating the kernel-launch overhead reduction
