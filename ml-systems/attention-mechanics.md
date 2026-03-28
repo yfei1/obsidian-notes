@@ -305,7 +305,7 @@ if context.is_prefill:
         softmax_scale=1/sqrt(64), causal=True)
 ```
 
-All N tokens' Q, K, V are available simultaneously; compute scales O(N²·d_k) → **compute-bound**. The `varlen` suffix packs variable-length sequences into one flat tensor without padding — rather than zero-padding all sequences to the longest one (which wastes compute on the padded positions), it stores sequences back-to-back and uses `cu_seqlens` offsets to tell the kernel where each sequence starts. This enables **continuous batching** (serving requests of different lengths together in one kernel call, adding new requests as old ones finish, without padding overhead): requests of different lengths run in one kernel call without padding overhead.
+All N tokens' Q, K, V are available simultaneously; compute scales O(N²·d_k) → **compute-bound**. The `varlen` suffix packs variable-length sequences into one flat tensor without padding — rather than zero-padding all sequences to the longest one (which wastes compute on the padded positions), it stores sequences back-to-back and uses `cu_seqlens` offsets to tell the kernel where each sequence starts. This enables **continuous batching** (serving requests of different lengths together in one kernel call, adding new requests as old ones finish) without padding overhead.
 
 ### Decode — Generate One Token at a Time (Memory-Bound)
 
@@ -394,9 +394,9 @@ all_reduce(sum) → [N, 1024] correct output on both GPUs
 
 2. **"Why scale by √d_k?"** — d_k-dim dot products have variance ≈ d_k; raw ±64 scores push softmax to near-one-hot, killing gradients. Dividing by √d_k restores variance to ~1, keeping softmax in a trainable regime.
 
-3. **"Why GQA over MHA?"** — KV cache is the memory bottleneck at decode time. GQA (16Q/8KV for Qwen3-0.6B) halves KV cache vs MHA (16Q/16KV): 2048 vs 4096 bytes/token/layer. Q heads need diversity (each is a different search strategy); KV heads can be shared because different Q heads querying the same KV head still produce different attention distributions. MQA (1 KV head) saves 16× but degrades quality — GQA is the empirical sweet spot.
+3. **"Why GQA over MHA?"** — KV cache is the memory bottleneck at decode time. GQA (16Q/8KV for Qwen3-0.6B) halves KV cache vs MHA (16Q/16KV): 2,048 vs 4,096 bytes/token/layer. Q heads need diversity (each is a different search strategy); KV heads can be shared because different Q heads querying the same KV head still produce different attention distributions. MQA (1 KV head) saves 16× but degrades quality — GQA is the empirical sweet spot.
 
-4. **"Why separate K and V?"** — K is a token's identity broadcast (why it gets selected); V is its information payload (what gets transmitted). Decoupling means a token can be found for one reason (syntactic role via K) while transmitting entirely different content (semantics via V). K=V locks these together, limiting expressiveness.
+4. **"Why separate K and V?"** — K is a token's identity broadcast (why it gets selected); V is its information payload (what gets transmitted). Decoupling lets a token be found for one reason (syntactic role via K) while transmitting entirely different content (semantics via V). K=V locks these together, limiting expressiveness.
 
 5. **"Prefill vs decode: different kernels, why?"** — Prefill has all N tokens' Q,K,V available; compute scales O(N²·d_k) → compute-bound → `flash_attn_varlen_func` (packed variable-length sequences for continuous batching). Decode generates 1 token; Q is [1, d_k] but must read all N cached K,V from HBM → memory-bound → `flash_attn_with_kvcache` (paged block_table addressing). Same math, opposite bottleneck, different kernel optimizations.
 
@@ -416,13 +416,13 @@ all_reduce(sum) → [N, 1024] correct output on both GPUs
 - [[ml-systems/norms-and-regularization]] — L2 norm theory behind RMSNorm
 - [[ml-systems/pt-moe-architecture]] — sliding window + global NoPE attention patterns in 150B model
 - [[ml-systems/kv-cache-internals]] — slot allocation, eviction, prefix caching internals
-- [[ml-systems/mixture-of-experts]]
-- [[ml-systems/vllm-model-integration]]
-- [[ml-systems/parallel-track-architecture]]
-- [[ml-systems/prefix-caching]]
-- [[ml-systems/kv-cache-kernel-and-addressing]]
-- [[ml-systems/sequence-and-context-parallelism]]
-- [[ml-systems/tensor-parallelism]]
-- [[ml-systems/flashinfer-vllm-integration]]
-- [[ml-systems/lora-mechanics]]
-- [[ml-systems/cuda-graph-inference-optimization]]
+- [[ml-systems/mixture-of-experts]] — expert routing and sparse activation patterns
+- [[ml-systems/vllm-model-integration]] — how attention is registered and dispatched in vLLM
+- [[ml-systems/parallel-track-architecture]] — multi-GPU execution topology
+- [[ml-systems/prefix-caching]] — reusing KV cache across requests sharing a common prefix
+- [[ml-systems/kv-cache-kernel-and-addressing]] — slot allocation and block addressing details
+- [[ml-systems/sequence-and-context-parallelism]] — splitting long sequences across GPUs
+- [[ml-systems/tensor-parallelism]] — Column→Row sharding in depth
+- [[ml-systems/flashinfer-vllm-integration]] — FlashInfer kernel dispatch from vLLM
+- [[ml-systems/lora-mechanics]] — low-rank adaptation of Q/K/V/o projections
+- [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture for decode-step latency
