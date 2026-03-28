@@ -2,6 +2,10 @@
 
 #ml-systems #interview-prep
 
+**Scope**: Architecture reference for the 150B Parallel Track MoE model — track structure, sync mechanics, layer patterns, norm design, and checkpoint layout. For the vLLM serving integration, see [[ml-systems/pt-moe-vllm-implementation]].
+
+**Prerequisites**: [[ml-systems/parallelism-strategies]] (TP all-reduce mechanics), [[ml-systems/mixture-of-experts]] (router, expert FFN, top-k), [[ml-systems/attention-mechanics]] (QKV, causal mask, GQA), [[ml-systems/rotary-position-embedding]] (RoPE).
+
 ## TL;DR
 
 Parallel Track MoE (PT-MoE) runs 8 independent small transformers ("tracks") in parallel, averaging outputs every 4 layers. Each track has its own weights, MoE experts, and KV cache — no cross-track communication until the sync point. This cuts GPU sync points from 96 to 12 (87.5%) versus standard tensor parallelism. The 150B model is 8 × ~2B-parameter tracks with 300 MoE experts each, 8 activated per token per track.
@@ -238,15 +242,11 @@ Each module with "8 ×" above has a `nn.ModuleList` of 8 components and a Python
 
 ## Interview Talking Points
 
-1. **"What is PT-MoE?"** — 8 independent small transformers (tracks) run in parallel, averaging outputs every 4 layers. Each track has its own weights and MoE experts. 87.5% fewer GPU syncs than standard TP.
-
-2. **"Why tracks instead of deeper layers?"** — Standard TP needs 2 all-reduces per layer: `o_proj` and `down_proj`. 48 layers = 96 blocking syncs. PT defers sync to every 4th layer boundary = 12 syncs. GPUs compute instead of waiting.
-
-3. **"What's the attention pattern?"** — 42/48 layers use sliding window (4096 tokens, RoPE) for local processing. 6/48 layers use full-context attention without RoPE for content-based long-range retrieval. Local layers handle positional grammar; global layers handle semantic lookup.
-
-4. **"Why no RoPE on global layers?"** — RoPE encodes relative distance. Long-range retrieval ("find the user's name from 6000 tokens ago") is distance-agnostic — pure content matching. RoPE would bias attention toward nearby tokens even when the target is far.
-
-5. **"How big is each track?"** — ~2B parameters, hidden_dim=2048, 48 layers. "150B" counts 8 tracks × 300 experts × 8 tracks' worth of routing. Each token activates 8 experts per track, so active compute per token is far below 150B.
+1. **PT-MoE**: 8 independent small transformers run in parallel, averaging every 4 layers. 87.5% fewer GPU syncs than standard TP.
+2. **Why tracks**: Standard TP = 2 all-reduces/layer × 48 layers = 96 blocking syncs. PT defers to every 4th boundary = 12 syncs.
+3. **Attention pattern**: 42/48 layers sliding window + RoPE (local grammar); 6/48 full-context no-RoPE (content-based long-range retrieval).
+4. **No RoPE on global layers**: Long-range retrieval is distance-agnostic — RoPE would bias toward nearby tokens even when the target is far.
+5. **Track size**: ~2B params, hidden_dim=2048, 48 layers. Active compute per token is far below 150B (only 8 experts activated per track).
 
 ---
 
@@ -295,15 +295,15 @@ Source: `ajax/vendor/axlearn/axlearn/common/attention.py` lines 3016-3022 (v2 at
 
 ## See Also
 
-- [[ml-systems/pt-moe-vllm-implementation]] — Implementation design decisions, process groups, EP composition
+- [[ml-systems/pt-moe-vllm-implementation]] — serving integration: process groups, EP composition, custom ops
 - [[ml-systems/mixture-of-experts]] — MoE fundamentals: router, experts, FusedMoE, load balancing
-- [[ml-systems/parallelism-strategies]] — TP sync points that PT eliminates, expert parallelism
+- [[ml-systems/parallelism-strategies]] — TP all-reduce mechanics that PT replaces
 - [[ml-systems/attention-mechanics]] — standard attention math (QKV, causal mask, GQA)
-- [[ml-systems/transformer-model-internals]] — dense decoder layer that each track is built from
-- [[ml-systems/rotary-position-embedding]] — RoPE used in local attention layers
-- [[ml-systems/validating-parallelism-at-scale]]
-- [[ml-systems/parallel-track-architecture]]
-- [[ml-systems/tensor-parallelism]]
-- [[ml-systems/fused-moe-vllm-implementation]]
-- [[ml-systems/vllm-distributed-groups]]
-- [[ml-systems/vllm-weight-loading]] — how the multi-track architecture's dim-0 concatenation convention is handled during checkpoint loading
+- [[ml-systems/transformer-model-internals]] — dense decoder layer each track is built from
+- [[ml-systems/rotary-position-embedding]] — RoPE applied in local attention layers
+- [[ml-systems/tensor-parallelism]] — baseline sync model PT improves on
+- [[ml-systems/fused-moe-vllm-implementation]] — FusedMoE kernel used per-track
+- [[ml-systems/vllm-weight-loading]] — dim-0 concatenation convention for multi-track checkpoints
+- [[ml-systems/vllm-distributed-groups]] — process group setup for PT's parallel execution
+- [[ml-systems/validating-parallelism-at-scale]] — correctness checks across track configurations
+- [[ml-systems/parallel-track-architecture]] — higher-level architectural framing
