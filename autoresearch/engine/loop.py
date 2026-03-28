@@ -542,9 +542,16 @@ def _check_gates_cross_file(winner: Delta, file_contents: dict[str, str],
             continue  # File being deleted — no content to gate-check
         if original == updated:
             continue
+        # For split: new files created by the strategy inherit the parent's
+        # baseline violations — duplicate headers / line-limit issues came from
+        # the source, not from the split itself (no regression).
+        baseline_for_path = baseline_violations_map.get(path) if baseline_violations_map else None
+        if baseline_for_path is None and winner.strategy == "split" and baseline_violations_map:
+            # path is a new file — use target (parent) baseline as proxy
+            baseline_for_path = baseline_violations_map.get(target_path)
         gate_result = check_all_gates(original, updated, path, all_note_paths,
                                       strategy=winner.strategy,
-                                      baseline_violations=baseline_violations_map.get(path) if baseline_violations_map else None)
+                                      baseline_violations=baseline_for_path)
         if not gate_result.passed:
             all_violations.extend(gate_result.violations)
 
@@ -1104,8 +1111,61 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 num_edits=len(winner.ops),
             ))
             save_delta_ops(winner)
-            # Per-note memory: winner vetoed, losers lost to identity
             note_tried.setdefault(target_path, {})[winner.strategy] = "vetoed"
+
+            # ── RUNNER-UP: try the next-best candidate once ──
+            runner_up = max(
+                (d for d in deltas if d.id != winner.id),
+                key=lambda d: result.advantages.get(d.id, -1),
+                default=None,
+            )
+            runner_adv = result.advantages.get(runner_up.id, 0) if runner_up else 0
+            if runner_up and runner_adv >= 1.0:
+                print(f"  Trying runner-up: {runner_up.strategy} (adv={runner_adv:.2f})")
+                ru_new_contents, _ = runner_up.execute_all(file_contents)
+                ru_gate_failed, ru_violations = _check_gates_cross_file(
+                    runner_up, file_contents, ru_new_contents, all_note_paths,
+                    baseline_violations_map=baseline_violations_map or None)
+                if not ru_gate_failed:
+                    # Adopt runner-up
+                    for path in runner_up.affected_paths():
+                        updated = ru_new_contents.get(path)
+                        fp = REPO_ROOT / path
+                        if updated is None:
+                            if fp.exists():
+                                fp.unlink()
+                        elif updated != file_contents.get(path, ""):
+                            fp.parent.mkdir(parents=True, exist_ok=True)
+                            fp.write_text(updated, encoding="utf-8")
+                    msg = (f"evolution[{generation}]: {runner_up.strategy} on {target_path} "
+                           f"(adv={runner_adv:.2f}, runner-up after {winner.strategy} vetoed)")
+                    git_commit(msg)
+                    if push:
+                        git_push()
+                    print(f"\n  ADOPTED (runner-up): {runner_up.strategy} "
+                          f"(advantage={runner_adv:.2f}, commit={git_head_hash()})")
+                    append_history(AttemptRecord(
+                        generation=generation, target=target_path,
+                        strategy=runner_up.strategy, delta_id=runner_up.id,
+                        outcome="adopted", advantage=runner_adv,
+                        num_edits=len(runner_up.ops),
+                    ))
+                    for d in deltas:
+                        if d.id not in (winner.id, runner_up.id):
+                            note_tried.setdefault(target_path, {})[d.strategy] = "identity_won"
+                    cached_scores.pop(target_path, None)
+                    history = load_history()
+                    save_generation_metadata(generation, {
+                        "generation": generation, "target": target_path,
+                        "outcome": "adopted_runner_up",
+                        "winner": runner_up.strategy,
+                        "winner_advantage": runner_adv,
+                    })
+                    continue
+                else:
+                    print(f"  Runner-up also vetoed: {', '.join(ru_violations[:2])}")
+                    note_tried.setdefault(target_path, {})[runner_up.strategy] = "vetoed"
+
             for d in deltas:
                 if d.id != winner.id:
                     note_tried.setdefault(target_path, {})[d.strategy] = "identity_won"
