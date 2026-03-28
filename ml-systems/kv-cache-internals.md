@@ -4,13 +4,13 @@
 
 ## TL;DR
 
-**Problem**: autoregressive generation recomputes K and V for every prior token at every step — O(N²) total compute. **Fix**: store each token's K and V the first time they're computed and reuse them. nano-vLLM allocates the cache as a single 6-D tensor `[2, layers, blocks, block_size, kv_heads, head_dim]`, sized by running a warmup forward pass and measuring remaining VRAM. Each Attention module receives a **view** (not copy) of its layer's slice. A **Triton** kernel (Triton: a GPU programming language that compiles Python-like code to PTX, OpenAI 2021) writes new K/V vectors into the cache using **flat 1D addressing**: each token is pre-assigned a physical slot index (`slot_mapping`) by the CPU, and the kernel writes directly to `slot * D` in the flat array — no block/position math on the GPU. The **BlockManager** is the CPU-side component that tracks which 256-token blocks are free or in use and pre-computes `slot_mapping`.
+**Problem**: autoregressive generation recomputes K and V for every prior token at every step — O(N²) total compute. **Fix**: store each token's K and V the first time they're computed and reuse them. nano-vLLM allocates the cache as a single 6-D tensor `[2, layers, blocks, block_size, kv_heads, head_dim]`, sized by running a warmup forward pass and measuring remaining VRAM. Each Attention module receives a **view** (not copy) of its layer's slice. A **Triton** kernel (Triton: a GPU programming language that compiles Python-like code to GPU machine code, OpenAI 2021) writes new K/V vectors into the cache using **flat 1D addressing**: each token is pre-assigned a physical slot index (`slot_mapping`) by the CPU, and the kernel writes directly to `slot * D` in the flat array — no block/position math on the GPU. The **BlockManager** is the CPU-side component that tracks which 256-token blocks are free or in use and pre-computes `slot_mapping` before each kernel launch.
 
 ---
 
 ## Why Does the KV Cache Exist?
 
-**Autoregressive generation recomputes the same K and V vectors on every step.** K (key) and V (value) are the two per-token projections that attention reads from context — each depends only on its own source token's embedding, not on later tokens. Generating token 100 requires K and V for tokens 0–99; token 101 requires K and V for tokens 0–100 — but those vectors haven't changed, because the source tokens haven't changed.
+**Autoregressive generation recomputes the same K and V vectors on every step.** In a transformer, each token is projected into three vectors: Q (query), K (key), and V (value). K and V encode what each token *offers* to be attended to; they depend only on that token's own embedding, not on later tokens. Generating token 100 requires K and V for tokens 0–99; token 101 requires K and V for tokens 0–100 — but those vectors haven't changed, because the source tokens haven't changed.
 
 Concretely: at decode step 100 (generating token 100), the model computes 100 K vectors and 100 V vectors — but 99 of those 100 sets are identical to what was computed at step 99. Only 1 new K/V pair (for token 99) is genuinely new. Across a 128-token generation, the total K/V compute without caching is `sum(t for t in range(1, 129)) = 8256` token-projections; with caching it is `128` (one per step) — a 64.5× reduction in K/V projection work. The attention score computation has the same structure, making generation O(N²) total compute without the cache.
 
@@ -58,7 +58,7 @@ self.kv_cache = torch.empty(
 # 610.3515625
 ```
 
-The `block_size=256` is the BlockManager's allocation granularity: a new block is assigned every 256 tokens. Prefix-caching hashes and commits a block only when full, so a partial block is never reused.
+The `block_size=256` is the BlockManager's allocation granularity: a new block is assigned every 256 tokens. **Prefix-caching** (reusing cached K/V blocks for repeated prompt prefixes across requests) hashes and commits a block only when full, so a partial block is never reused.
 
 **FlashAttention** (a fused attention kernel that avoids materializing the full N×N score matrix in VRAM) requires `block_size % 256 == 0` for aligned **block-table** (per-sequence array mapping logical block index → physical block number) lookups. Misaligned entries break **coalesced memory access** — where threads in a **warp** (32 threads executing in lockstep) read consecutive addresses in one transaction — forcing each warp to issue multiple transactions instead of one.
 
@@ -253,13 +253,13 @@ The KV cache shape depends on how many KV heads each GPU owns — not on the che
 ```
 config.num_key_value_heads = N          (from checkpoint config.json)
   → Model.__init__() runs               (may rebuild TP groups)
-    → Attention(num_kv_heads=M)         (M = max(1, N // within_track_tp))  # within_track_tp: TP degree for this layer's track — see [[ml-systems/parallel-track-architecture]]
+    → Attention(num_kv_heads=M)         (M = max(1, N // within_track_tp))  # within_track_tp: number of GPUs sharing this layer's computation
       → Attention stores self.num_kv_heads = M
   → get_kv_cache_spec() iterates layers (attn_utils.py:21-29)
     → Each Attention.get_kv_cache_spec() returns num_kv_heads=M
   → get_kv_cache_shape(num_kv_heads=M)  (attn_utils.py:120)
   → Cache allocated with M heads ✓
-# within_track_tp: TP degree for this GPU's parallel track — see [[ml-systems/parallel-track-architecture]]
+# See [[ml-systems/parallel-track-architecture]] for within_track_tp details
 ```
 
 Concrete values for Qwen3-0.6B on a single GPU (TP=1):
