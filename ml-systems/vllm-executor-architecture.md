@@ -111,9 +111,9 @@ The executor broadcasts `("execute_model", (scheduler_output,), {}, output_rank)
 
 ## How Async Scheduling Hides Dispatch Latency
 
-Without async scheduling, each step is sequential: schedule → dispatch → GPU → process. Dispatch (~100-300 us) sits on the critical path because the engine blocks waiting for workers to receive the batch before the GPU can start — so the GPU idles between steps.
+Without async scheduling, dispatch (~100-300 us) sits on the critical path: the engine blocks until workers acknowledge receipt before the GPU can start, so the GPU idles between steps.
 
-With **async scheduling** (`core.py:419-535`), the engine maintains a **batch queue** — a buffer of pre-dispatched batches. Because dispatch is non-blocking, the engine can enqueue batch N+1 while the GPU is still executing batch N:
+With **async scheduling** (`core.py:419-535`), the engine maintains a **batch queue** — a buffer of pre-dispatched batches. Because `enqueue()` returns as soon as the SHM write completes (~10-20 us) without waiting for worker acknowledgment, the engine can schedule and dispatch batch N+1 while the GPU is still executing batch N:
 
 ```
 Without async (batch_queue_size=1):                    [core.py:378-407]
@@ -125,9 +125,9 @@ With async (batch_queue_size=2, e.g. PP=2):            [core.py:419-535]
                         |<-- overlapped with GPU_N -->|
 ```
 
-Batch queue size = `max_concurrent_batches`: `pp_size` for [[ml-systems/parallelism-strategies|pipeline parallelism]] — because PP keeps one micro-batch in flight per pipeline stage simultaneously, so the engine must have `pp_size` batches pre-dispatched to keep every stage busy at once. Without PP, the queue depth is 2: one executing on GPU, one being prepared.
+Batch queue size = `max_concurrent_batches`. Without [[ml-systems/parallelism-strategies|pipeline parallelism]], depth is 2: one batch executing on GPU, one being prepared. With PP=K, depth is `pp_size` — because PP keeps one micro-batch in flight per stage simultaneously, so the engine needs K batches pre-dispatched to keep all K stages busy at once. Fewer pre-dispatched batches than stages means at least one stage stalls waiting for input.
 
-MultiprocExecutor achieves near-perfect overlap because `enqueue()` returns after a ~10-20 us SHM write without waiting for worker acknowledgment — the engine immediately proceeds to schedule the next batch. RayDistributedExecutor gets only partial overlap because Compiled Graph channel writes block inline for ~300 us–1 ms before returning, consuming most of the window that async scheduling is trying to hide.
+MultiprocExecutor achieves near-perfect overlap because `enqueue()` fires and returns in ~10-20 us. RayDistributedExecutor gets only partial overlap because Compiled Graph channel writes block inline for ~300 us–1 ms before returning — consuming most of the scheduling window that async scheduling is trying to reclaim.
 
 ---
 
