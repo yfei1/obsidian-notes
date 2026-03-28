@@ -69,7 +69,7 @@ For prefill, fixed shapes are impractical:
 - The compute matrix shape is `[prompt_len, hidden_dim]`, which varies per request.
 - A static graph must be sized for `max_model_len` (e.g., 8192). A 72-token prompt would be padded with 8,120 zero tokens.
 - `nn.Linear` layers perform dense matrix multiplication (`X @ W`) with no short-circuit for zero tokens. All 8,192 rows are multiplied against the full weight matrix.
-- FlashAttention can skip padded positions when given explicit sequence lengths, but linear projections (QKV, output) and MLP blocks execute dense matrix multiplication (`X @ W`) over every row regardless — there is no short-circuit for zero-valued inputs. These linear layers make up ~66% of a transformer's compute.
+- Linear projections (QKV, output) and MLP blocks execute dense matrix multiplication (`X @ W`) over every row regardless — there is no short-circuit for zero-valued inputs. These layers make up ~66% of a transformer's compute.
 - Result: for a 72-token prompt in a graph sized for 8,192, the GPU wastes ~99% of tensor core cycles on padding across all 32 layers.
 
 ---
