@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pairs → **remap names** (translate checkpoint naming conventions to PyTorch module paths) → call each parameter's `weight_loader` (a callable vLLM attaches to each `nn.Parameter` at model construction time, not a PyTorch built-in) which handles **TP sharding** — splitting weight matrices across multiple GPUs so each GPU holds only its slice — transparently. Same code works for TP=1 (single GPU) and TP=8 (eight-way split).
+vLLM loads weights via `load_weights()`: iterate checkpoint `(name, tensor)` pairs → **remap names** (translate checkpoint naming conventions to PyTorch module paths) → call each parameter's `weight_loader` (a callable vLLM attaches to each `nn.Parameter` at model construction time, not a PyTorch built-in) which handles **TP sharding** — splitting weight matrices across multiple GPUs so each GPU holds only its slice — transparently. Same code works for TP=1 (single GPU) and TP=8 (eight-way split), because sharding is encapsulated in `weight_loader` — the outer loop has no TP-aware logic.
 
 **Interview talking points:**
 - **Name remapping**: training and inference frameworks evolve independently, so checkpoint names diverge from PyTorch module paths; `load_weights()` bridges via regex + suffix-map (e.g. `transformer.tamm_model.layers.segment_0.layer_0.attention.qkv_transform.fused_linear.weight` → `model.layers.0.self_attn.qkv_proj.weight`).
@@ -102,7 +102,7 @@ weight_loader(param, tensor)
 
 | Layer Type | What weight_loader Does |
 |---|---|
-| `QKVParallelLinear` | The fused QKV weight packs Q (query), K (key), and V (value) projections into one matrix; `weight_loader` splits them apart, then shards each across TP ranks |
+| `QKVParallelLinear` | The fused QKV weight packs Q (query — projects input to query space), K (key — projects input to key space), and V (value — projects input to value space) projections into one matrix; `weight_loader` splits them apart, then shards each across TP ranks |
 | `ColumnParallelLinear` | Slice output dimension by TP rank |
 | `RowParallelLinear` | Slice input dimension by TP rank |
 | `VocabParallelEmbedding` | Slice vocab dimension by TP rank |
@@ -179,7 +179,7 @@ TAMM's 56 layers span two segments. Segment 0 (layers 0–34) computes full QKV 
 
 ## PT-MoE 150B: Track-Parallel Weight Loading
 
-PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks train jointly in one job and are exported as a single checkpoint, with per-track weights concatenated on dim 0.
+PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks train jointly in one job — sharing gradients across the embedding but maintaining independent layer weights — and are exported as a single checkpoint, with per-track weights concatenated on dim 0.
 
 This breaks the standard loading loop. A shared weight like the embedding has shape `[153600, 2048]` — no track dimension. A per-track weight like `gate_proj` has shape `[8, 2048, 5888]`. Passing that full tensor to `weight_loader` would feed it a tensor 8× too large, producing wrong shapes and silent corruption. The fix: detect whether a tensor is per-track, slice dim 0 to extract this GPU's track, then delegate to the standard `weight_loader` machinery unchanged.
 
@@ -236,9 +236,9 @@ def needs_transpose(name: str) -> bool:
 
 ### Expert Weight Loading (FusedMoE)
 
-After track slicing, expert weights are 3D: `[300, 2048, 768]`. `FusedMoE` cannot receive this directly — it stores all 300 experts in two fused weight matrices (`w13` for gate+up projections, `w2` for down), because that layout enables a single **batched GEMM** (one matrix multiply covering all experts) instead of 300 separate matmuls. Each expert's slice must be placed at the correct offset within those fused buffers, so the outer loop iterates per-expert and passes `expert_id` so `weight_loader` knows where to write.
+After track slicing, expert weights are 3D: `[300, 2048, 768]`. `FusedMoE` cannot receive this directly — it stores all 300 experts in two fused weight matrices (`w13` for gate+up projections, `w2` for down), because that layout enables a single **batched GEMM** (General Matrix Multiply — one fused operation covering all experts simultaneously on the GPU) instead of 300 separate matmuls. Each expert's slice must be placed at the correct offset within those fused buffers, so the outer loop iterates per-expert and passes `expert_id` so `weight_loader` knows where to write.
 
-`shard_id` identifies which projection the slice belongs to (`"w1"`=gate, `"w3"`=up, `"w2"`=down) — `FusedMoE.weight_loader` uses it to route the slice into `w13` or `w2`:
+`shard_id` (passed as a keyword arg to `weight_loader`) identifies which projection the slice belongs to (`"w1"`=gate, `"w3"`=up, `"w2"`=down) — `FusedMoE.weight_loader` uses it to route the slice into the correct fused buffer (`w13` holds gate+up; `w2` holds down):
 
 ```python
 # After track slice: [300, 2048, 768]
@@ -271,7 +271,7 @@ Source: `weights/afm-text-150b-instruct-20250915/tensor_shapes.txt`
 
 ### Global NoPE in Checkpoint
 
-Attention scores between tokens are computed as dot products of their Q and K vectors. **RoPE** (Rotary Position Embedding) rotates Q and K vectors by an angle proportional to token position before scoring, so the dot product between two tokens decreases as their distance grows. **Global NoPE** (No Positional Encoding) layers omit RoPE entirely, so the attention score between any two tokens is position-independent — useful for attending across arbitrarily distant context without the distance penalty RoPE applies. They use a different checkpoint name for QKV (`qkv_transform_global_nope.fused_linear` instead of `qkv_transform.fused_linear`) but map to the same model parameter (`self_attn.qkv_proj`) because the weight shape is identical — only the training objective differs. The `_SUFFIX_MAP` handles both:
+In attention, each token's representation is projected into a **query** (Q) and **key** (K) vector; attention scores are dot products of Q against all prior K vectors. **RoPE** (Rotary Position Embedding) rotates each token's Q and K vectors by an angle proportional to that token's position before scoring, so the dot product between two tokens decreases as their distance grows. **Global NoPE** (No Positional Encoding) layers omit RoPE entirely — Q and K are used without rotation — so the attention score between any two tokens is position-independent, useful for attending across arbitrarily distant context without the distance penalty RoPE applies. They use a different checkpoint name for QKV (`qkv_transform_global_nope.fused_linear` instead of `qkv_transform.fused_linear`) but map to the same model parameter (`self_attn.qkv_proj`) because the weight shape is identical — only the training objective differs. The `_SUFFIX_MAP` handles both:
 
 ```python
 ("attention.qkv_transform.fused_linear.", "self_attn.qkv_proj."),
