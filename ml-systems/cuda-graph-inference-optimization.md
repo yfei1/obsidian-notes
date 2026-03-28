@@ -131,3 +131,4 @@ See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of p
 - [[ml-systems/pytorch-module-hooks]] — hooks fire during CUDA graph capture but are absent from replay; the `__call__` dispatch chain explains why
 - [[ml-systems/flashinfer-vllm-integration]] — FlashInfer attention kernels execute inside the recorded CUDA graph during decode
 - [[ml-systems/vllm-executor-architecture]] — the executor drives the decode loop that calls `graph.replay()` each step
+- [[ml-systems/prefix-caching]] — prefix cache hits produce variable-length prefill paths that constrain CUDA graph capture

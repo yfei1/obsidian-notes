@@ -255,3 +255,5 @@ print(f'flops_ratio={ratio:.1f}x')
 - [[ml-systems/kv-cache-kernel-and-addressing]] — physical slot mapping and how block_table indices translate to GPU memory addresses
 - [[ml-systems/flashinfer-vllm-integration]] — the variable-length attention kernel that reads cached KV via block_tables during prefill
 - [[ml-systems/prefix-caching-hash-table-leak]] — deep dive into the unbounded-growth bug and correct fix patterns
+- [[ml-systems/vllm-executor-architecture]] — the executor drives the scheduler and BlockManager that prefix caching hooks into
+- [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture must account for the variable-length prefill path that prefix cache hits produce
