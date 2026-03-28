@@ -179,9 +179,11 @@ TAMM's 56 layers span two segments. Segment 0 (layers 0–34) computes full QKV 
 
 ## PT-MoE 150B: Track-Parallel Weight Loading
 
-PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks train jointly in one job — sharing gradients across the embedding but maintaining independent layer weights — and are exported as a single checkpoint, with per-track weights concatenated on dim 0.
+PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks train jointly in one job and are exported as a single checkpoint, with per-track weights concatenated on dim 0 — because the export pipeline has no per-track file split, all 8 tracks land in the same safetensors shards.
 
-This breaks the standard loading loop. A shared weight like the embedding has shape `[153600, 2048]` — no track dimension. A per-track weight like `gate_proj` has shape `[8, 2048, 5888]`. Passing that full tensor to `weight_loader` would feed it a tensor 8× too large, producing wrong shapes and silent corruption. The fix: detect whether a tensor is per-track, slice dim 0 to extract this GPU's track, then delegate to the standard `weight_loader` machinery unchanged.
+This breaks the standard loading loop: a per-track weight like `gate_proj` has shape `[8, 2048, 5888]`, but the model's `nn.Parameter` expects `[2048, 5888]` — the shape for one track. Passing the full tensor to `weight_loader` feeds it a tensor 8× too large, producing wrong TP shard slices and silent corruption. Shared weights (embedding, output norm) have no track dimension at all, so a blanket dim-0 slice would corrupt them instead.
+
+The fix is a pre-dispatch slice: detect whether a tensor is per-track, extract this GPU's track slice from dim 0, then delegate to the standard `weight_loader` unchanged. Detection uses a dim-0 heuristic — the export pipeline consistently stores every per-track tensor with `num_tracks` (8) as dim 0, and every shared tensor with a different leading dimension (e.g., `153600` for vocab) — so `tensor.shape[0] == num_tracks` reliably discriminates the two cases without inspecting tensor names.
 
 ### Checkpoint Shape Convention
 
