@@ -197,16 +197,14 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 Two attributes name a rank's position, but count from different origins — confusing them causes incorrect weight shard selection.
 
 - **`rank`**: global process index (e.g., 12)
-- **`local_rank`**: physical GPU slot on this node, set by `torchrun` from the node boundary (rank 12 on a node covering GPUs 8–15 → `local_rank=4`)
-- **`rank_in_group`**: position within this group's rank list, computed as `ranks.index(self.rank)` (rank 12 in TP group [12,13,14,15] → `rank_in_group=0`)
+- **`local_rank`**: physical GPU slot on this node, set by `torchrun` from the node boundary — rank 12 on a node covering GPUs 8–15 → `local_rank=4`
+- **`rank_in_group`**: position within this group's rank list, computed as `ranks.index(self.rank)` — rank 12 in TP group [12,13,14,15] → `rank_in_group=0`
 - **`world_size`**: number of ranks in this group (4)
 - **`ranks`**: all global ranks in this group ([12, 13, 14, 15])
 
-`local_rank` counts from the node boundary, so rank 12 on a node covering GPUs 8–15 gets `local_rank=4`. `rank_in_group` counts from the first entry in the group's rank list, so rank 12 in TP group [12,13,14,15] gets `rank_in_group=0`. They diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology.
+`local_rank` and `rank_in_group` diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology. Model layers use `rank_in_group` to select weight shards because weight sharding must be consistent within the group regardless of which physical node the group starts on; using `local_rank` would assign the wrong shard to every rank except those on the first node.
 
-Model layers use `rank_in_group` to select weight shards, not `local_rank`, because weight sharding must be consistent within the group regardless of which physical node the group starts on. Using `local_rank` would assign the wrong shard to every rank except those on the first node.
-
-This distinction also drives the PT-MoE track index. In the running example, the cross-track group for TP slot 0 is [0,4,8,12,16,20,24,28] — one rank per track at the same intra-track position. Rank 12 has `rank_in_group=3` in that group because it is the fourth entry. PT-MoE uses this value as the **track index** — which independent model replica this rank belongs to — because it uniquely identifies which track the rank serves across the full 32-GPU fleet.
+The same distinction drives the PT-MoE track index. The cross-track group for TP slot 0 is [0,4,8,12,16,20,24,28] — one rank per track at the same intra-track position. Rank 12 is the fourth entry, so `rank_in_group=3`. PT-MoE uses this as the **track index** — which independent model replica this rank belongs to — because it uniquely identifies which track the rank serves across the full 32-GPU fleet.
 
 ---
 
