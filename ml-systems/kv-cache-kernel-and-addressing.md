@@ -165,3 +165,5 @@ o = flash_attn_with_kvcache(
 - [[ml-systems/gpu-memory-hierarchy]] — why slot_mapping is pre-computed on CPU (memory wall, division cost)
 - [[ml-systems/prefix-caching]] — when `slot == -1` (skip) and when `block_tables` is set during prefill
 - [[ml-systems/prefix-caching-hash-table-leak]] — implementation bug where the hash→block_id map in BlockManager grows unbounded because stale entries are never purged on block recycling
+- [[ml-systems/gpu-kernel-stack]] — Triton sits within the broader GPU kernel stack; `store_kvcache_kernel` is a concrete example of a custom Triton kernel replacing a CUDA primitive
+- [[ml-systems/vllm-model-integration]] — vLLM's model runner (the production counterpart to nano-vLLM's `model_runner.py`) is where slot_mapping is assembled before kernel launch

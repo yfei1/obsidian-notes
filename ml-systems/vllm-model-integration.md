@@ -369,3 +369,4 @@ All assertions passed.
 - [[ml-systems/lora-mechanics]]
 - [[ml-systems/lora-vllm-serving]]
 - [[ml-systems/vllm-weight-loading]] — how model classes attach weight_loader callables to nn.Parameter during __init__, enabling TP-agnostic checkpoint loading
+- [[ml-systems/kv-cache-kernel-and-addressing]] — how slot_mapping is assembled in the model runner and consumed by the Triton cache-write kernel
