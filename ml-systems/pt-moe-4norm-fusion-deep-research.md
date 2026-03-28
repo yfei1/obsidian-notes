@@ -115,17 +115,20 @@ The standard `fused_add_rms_norm` returns `(normed_x, unnormed_sum_as_residual)`
 
 ### 3. What would a custom fused kernel look like?
 
-**Fused kernel for PT-MoE pattern (steps C+D combined):**
+The goal: fuse steps C+D (and G+H) into one kernel — compute `add` and `post_norm` without writing the intermediate sum to HBM. Because each step is memory-bound (compute is trivial; the bottleneck is moving data between HBM and SRAM), eliminating the intermediate write/read saves one HBM round-trip per pair.
+
+**Kernel semantics** differ from vLLM's `fused_add_rms_norm` in one critical way: the output residual must be the *normed* result, not the raw sum.
+
 ```
 Inputs: x (pre-normed attn output), residual (previous layer's normed output), w, eps
 Kernel:
-  sum = x + residual           # elementwise add
-  y = rms_norm(sum, w, eps)    # normalize the sum
-  residual_out = y             # residual = normed output (Post-LN semantics!)
+  sum = x + residual           # elementwise add (stays in SRAM)
+  y = rms_norm(sum, w, eps)    # normalize the sum (stays in SRAM)
+  residual_out = y             # residual = normed output (Post-LN semantics)
 Output: (y, y)                 # both hidden_states and residual = same normed tensor
 ```
 
-This is a `fused_add_rms_norm_post_ln` — analogous to vLLM's but with `residual_out = normed` instead of `residual_out = sum`.
+This is `fused_add_rms_norm_post_ln` — same structure as vLLM's kernel but `residual_out = normed` instead of `residual_out = sum`.
 
 **Triton kernel structure** (from 05-layer-norm.py:49-95):
 ```triton
@@ -135,7 +138,7 @@ def _fused_add_rmsnorm_post_ln_fwd(X, Residual, W, Y, ResOut, stride, N, eps, BL
     # Load x and residual
     x = tl.load(X + row*stride + cols, ...)
     r = tl.load(Residual + row*stride + cols, ...)
-    # Add
+    # Add (in registers — never written to HBM)
     s = x + r
     # RMSNorm
     var = tl.sum(s * s, axis=0) / N
@@ -148,34 +151,31 @@ def _fused_add_rmsnorm_post_ln_fwd(X, Residual, W, Y, ResOut, stride, N, eps, BL
     tl.store(ResOut + row*stride + cols, y, ...)  # Post-LN: residual = normed
 ```
 
-Each call to this kernel replaces 3 ops: plain elementwise add + variance computation (norm of sum). The same kernel applies to *both* post-norm pairs (attn: steps C+D, and mlp: steps G+H).
+For hidden_size=2048 with bf16, `BLOCK=2048` fits entirely in registers — single-pass, no re-reads. Each call replaces 2 separate kernel launches (add + norm). The same kernel applies to both post-norm pairs (attn: steps C+D, mlp: steps G+H).
 
-**HBM bandwidth savings for hidden_size=2048, bf16:**
+**HBM traffic per token** (hidden_size=2048, bf16 → 4096 bytes/token/tensor):
 
-Assumptions: batch_size=1, seq_len=S tokens, bf16 (2 bytes/element).
-Per token, each tensor is 2048 * 2 = 4096 bytes.
-
-*Current 4-norm pattern per layer (approximate HBM ops):*
+*Current — 6 separate kernels per decoder layer:*
 | Op | Reads | Writes |
 |---|---|---|
 | Step B: plain norm(h) | 4096 B | 4096 B |
 | Step C: h + residual | 4096 + 4096 B | 4096 B |
-| Step D: norm(h) | 4096 B | 4096 B * 2 (h and residual same tensor) |
+| Step D: norm(h) | 4096 B | 4096 B |
 | Step F: plain norm(o) | 4096 B | 4096 B |
 | Step G: o + residual | 4096 + 4096 B | 4096 B |
-| Step H: norm(h) | 4096 B | 4096 B * 2 |
-| **Total** | **44,032 B** | **24,576 B** -> **~68 KB/token** |
+| Step H: norm(h) | 4096 B | 4096 B |
+| **Total** | **28,672 B** | **24,576 B** → **~52 KB/token** |
 
-*With 2x fused_add_rms_norm_post_ln kernels (B stays separate, C+D fused, F stays separate, G+H fused):*
+*Fused — 4 kernels per decoder layer (B and F stay separate; C+D and G+H fused):*
 | Op | Reads | Writes |
 |---|---|---|
 | Step B: plain norm | 4096 B | 4096 B |
-| Steps C+D fused | 4096 + 4096 B | 4096 + 4096 B |
+| Steps C+D fused | 4096 + 4096 B | 4096 B |
 | Step F: plain norm | 4096 B | 4096 B |
-| Steps G+H fused | 4096 + 4096 B | 4096 + 4096 B |
-| **Total** | **28,672 B** | **24,576 B** -> **~52 KB/token** |
+| Steps G+H fused | 4096 + 4096 B | 4096 B |
+| **Total** | **28,672 B** | **16,384 B** → **~44 KB/token** |
 
-**Savings: ~16 KB/token (~23% HBM reduction for the norm ops)**. More importantly, kernel launches drop from 6 to 4 per layer.
+The fusion eliminates 2 intermediate writes (the raw sums from steps C and G never touch HBM). **Kernel launches drop from 6 to 4 per layer** — the more significant saving during decode, where launch overhead (~5–10 µs each) dominates over bandwidth cost for small batch sizes.
 
 ---
 
