@@ -18,6 +18,7 @@ from pathlib import Path
 from shared import (
     REPO_ROOT, AUTORESEARCH_DIR, git_commit, git_push, git_head_hash,
     fix_bidirectional_links, discover_notes, read_note, relative_path,
+    is_conforming,
 )
 from autoresearch_core.util import detect_overlaps, Overlap
 from engine.delta import Delta, Op
@@ -25,7 +26,7 @@ from engine.grpo import grpo_rank, IDENTITY_ID
 from engine.strategies import (
     NOTE_STRATEGIES, SPLIT_STRATEGY, DEDUP_STRATEGY, SYSTEMATIZE_STRATEGY,
     REWRITE_STRATEGY, CONSOLIDATE_STRATEGY, RENAME_STRATEGY, CROSSLINK_STRATEGY,
-    SPLIT_LINE_THRESHOLD, Strategy,
+    NORMALIZE_STRATEGY, SPLIT_LINE_THRESHOLD, Strategy,
 )
 from engine.gates import (
     check_all_gates, GateResult,
@@ -447,10 +448,12 @@ def select_target(notes: list[Path], history: list[dict],
         staleness = 1.0 / (1.0 + target_counts.get(rp, 0))
         weakness = 1.0 - (avg / 10.0)
 
-        # Strong bonus for notes never targeted — guarantees coverage
-        never_targeted = 0.3 if target_counts.get(rp, 0) == 0 else 0.0
+        # Small bonus for notes never targeted — ensures eventual coverage
+        # but weakness (quality gap) is the primary driver now.
+        never_targeted = 0.05 if target_counts.get(rp, 0) == 0 else 0.0
 
-        combined = 0.4 * weakness + 0.6 * staleness + never_targeted
+        # Weakness-first: fix the worst notes before exploring mediocre ones.
+        combined = 0.85 * weakness + 0.1 * staleness + never_targeted
         candidates.append((combined, rp, note))
 
     candidates.sort(reverse=True)
@@ -517,7 +520,9 @@ def _enforce_op_scope(ops: list, strategy: str, target_path: str) -> list:
 
 def _check_gates_cross_file(winner: Delta, file_contents: dict[str, str],
                             new_contents: dict[str, str],
-                            all_note_paths: list[str]) -> tuple[bool, list[str]]:
+                            all_note_paths: list[str],
+                            baseline_violations_map: dict[str, set[str]] | None = None,
+                            ) -> tuple[bool, list[str]]:
     """Check gates for cross-file strategies with combined content fallback.
 
     For cross-file strategies (split, dedup, cross_link), content-loss gates
@@ -538,7 +543,8 @@ def _check_gates_cross_file(winner: Delta, file_contents: dict[str, str],
         if original == updated:
             continue
         gate_result = check_all_gates(original, updated, path, all_note_paths,
-                                      strategy=winner.strategy)
+                                      strategy=winner.strategy,
+                                      baseline_violations=baseline_violations_map.get(path) if baseline_violations_map else None)
         if not gate_result.passed:
             all_violations.extend(gate_result.violations)
 
@@ -747,6 +753,9 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
         candidate_pool.append((CROSSLINK_STRATEGY, {}))
         # rename: always eligible — UCB will suppress it if filename is already good
         candidate_pool.append((RENAME_STRATEGY, {}))
+        # normalize: only for non-conforming files (missing sections, dup headers, etc.)
+        if not is_conforming(target_content):
+            candidate_pool.append((NORMALIZE_STRATEGY, {}))
 
         # Score each candidate using global UCB + per-note memory
         target_cache = note_tried.get(target_path, {})
@@ -1035,9 +1044,18 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             if op.kind == "create_file" and op.path not in all_note_paths:
                 all_note_paths.append(op.path)
 
+        # Compute baseline violations for non-conforming files so gates allow non-regression
+        baseline_violations_map: dict[str, set[str]] = {}
+        for path in winner.affected_paths():
+            orig = file_contents.get(path, "")
+            if orig and not is_conforming(orig):
+                baseline_result = check_all_gates(orig, orig, path, all_note_paths, strategy="")
+                baseline_violations_map[path] = set(baseline_result.violations)
+
         # Fix 1: Combined gate checking for cross-file strategies
         gate_failed, veto_violations = _check_gates_cross_file(
-            winner, file_contents, new_contents, all_note_paths)
+            winner, file_contents, new_contents, all_note_paths,
+            baseline_violations_map=baseline_violations_map or None)
 
         # Hard/soft gate split: when judges have strong consensus, relax soft gates
         if gate_failed and winner_advantage >= SOFT_GATE_ADVANTAGE_THRESHOLD:
