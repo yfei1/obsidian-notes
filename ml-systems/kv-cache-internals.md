@@ -194,10 +194,10 @@ For a 5-token prefill with `slot_mapping = [10752, 10753, 10754, 10755, 10756]`,
 
 ### Prefill vs. decode cache usage
 
-The two phases differ because of what tokens are available as attention inputs:
+The two phases differ because of how many tokens are available locally during the forward pass:
 
-- **Prefill**: all N input tokens are projected together in one forward pass, so the full K and V matrices are already in SRAM. Attention reads from those local tensors — going through the cache would be redundant. Cache writes happen as a side effect, storing K/V so decode steps can reuse them.
-- **Decode**: only 1 new token is projected per step, so local K/V covers only that token. To attend over the full prior context, `flash_attn_with_kvcache` reads all prior K/V from the cache via **`block_tables`** — a per-sequence lookup table mapping logical block index → physical block number in the cache tensor. Without the cache, decode would reproject all prior tokens every step — the O(N²) cost the cache eliminates.
+- **Prefill**: all N prompt tokens are projected in one batched pass, so the full K and V matrices for the entire prompt exist in SRAM simultaneously. Attention reads from those local tensors directly — routing through the cache would add a round-trip to VRAM for data already on-chip. Cache *writes* still happen as a side effect: the Triton kernel stores every token's K/V into the cache so decode steps can read them back later.
+- **Decode**: only 1 new token is projected per step, so local K/V covers only that single token. Attending over the full prior context requires reading all previously stored K/V vectors from the cache. `flash_attn_with_kvcache` does this via **`block_tables`** — a per-sequence lookup table mapping logical block index → physical block number in the cache tensor — because tokens from the same sequence may occupy non-contiguous physical blocks (the BlockManager assigns blocks as they become available). Without the cache, decode would reproject all prior tokens every step, restoring the O(N²) total compute the cache was built to eliminate.
 
 Full kernel code, `slot_mapping` computation, memory contiguity proof, and prefill/decode call-site details: [[ml-systems/kv-cache-kernel-and-addressing]].
 
