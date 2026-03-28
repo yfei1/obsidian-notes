@@ -320,9 +320,13 @@ The shard header is the source of truth for storage convention (e.g. `[in, out]`
 
 - [[ml-systems/transformer-model-internals]] — the module hierarchy that `named_parameters()` walks
 - [[ml-systems/parallelism-strategies]] — tensor parallelism and why weight_loader exists
+- [[ml-systems/tensor-parallelism]] — ColumnParallelLinear / RowParallelLinear weight_loader shard logic
 - [[ml-systems/llm-inference-engines]] — where `load_weights()` fits in the engine initialization
 - [[ml-systems/vllm-distributed-groups]] — GroupCoordinator fields (`rank_in_group` used for track index)
 - [[ml-systems/pt-moe-vllm-implementation]] — the PT-MoE model that uses this loading pattern
+- [[ml-systems/pt-moe-architecture]] — multi-track architecture that drives the dim-0 slicing convention
 - [[ml-systems/mixture-of-experts]] — FusedMoE weight_loader shard_id mapping
-- [[ml-systems/tensor-parallelism]]
-- [[ml-systems/fused-moe-vllm-implementation]]
+- [[ml-systems/fused-moe-vllm-implementation]] — FusedMoE.weight_loader internals (shard_id, expert_id, w13/w2 layout)
+- [[ml-systems/rotary-position-embedding]] — RoPE vs Global NoPE distinction that produces divergent checkpoint names
+- [[ml-systems/vllm-model-integration]] — how vLLM model classes register weight_loader on parameters during __init__
+- [[ml-systems/vllm-executor-architecture]] — executor initialization path that calls load_weights() before serving begins

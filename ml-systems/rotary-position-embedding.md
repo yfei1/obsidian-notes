@@ -286,3 +286,4 @@ Increasing `base` slows down all frequencies, expanding the range over which pos
 - [[ml-systems/parallelism-strategies]] — tensor parallelism for QKV and o_proj
 - [[ml-systems/pt-moe-architecture]]
 - [[ml-systems/tensor-parallelism]]
+- [[ml-systems/vllm-weight-loading]] — Global NoPE layers produce a divergent checkpoint name (`qkv_transform_global_nope`) that maps to the same model parameter as RoPE layers

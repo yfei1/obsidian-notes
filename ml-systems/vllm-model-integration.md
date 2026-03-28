@@ -368,3 +368,4 @@ All assertions passed.
 - [[ml-systems/vllm-torch-compile-integration]] — `@support_torch_compile` decorator: how to enable compilation for your model
 - [[ml-systems/lora-mechanics]]
 - [[ml-systems/lora-vllm-serving]]
+- [[ml-systems/vllm-weight-loading]] — how model classes attach weight_loader callables to nn.Parameter during __init__, enabling TP-agnostic checkpoint loading

@@ -151,3 +151,4 @@ Both use the same workers, same NCCL groups, same model runner. The difference i
 - [[ml-systems/vllm-distributed-groups]] — The data plane: NCCL groups for TP, PP, EP
 - [[ml-systems/parallelism-strategies]] — TP, PP, EP concepts
 - [[ml-systems/tensor-parallelism]]
+- [[ml-systems/vllm-weight-loading]] — executor initialization path that constructs the model and calls load_weights() before the serving loop starts

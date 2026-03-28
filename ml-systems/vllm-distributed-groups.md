@@ -341,3 +341,4 @@ Memory profiling and scheduling happen after model init, so they see correct sta
 - [[ml-systems/vllm-cg-investigation-findings]]
 - [[ml-systems/vllm-executor-architecture]]
 - [[ml-systems/pt-moe-architecture]]
+- [[ml-systems/vllm-weight-loading]] — uses `rank_in_group` from GroupCoordinator to select the per-track weight slice in PT-MoE 150B loading

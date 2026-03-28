@@ -401,3 +401,4 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/lora-mechanics]]
 - [[ml-systems/lora-vllm-serving]]
 - [[ml-systems/vllm-torch-compile-integration]]
+- [[ml-systems/vllm-weight-loading]] — how `named_parameters()` module-tree walk underpins checkpoint-to-parameter name remapping

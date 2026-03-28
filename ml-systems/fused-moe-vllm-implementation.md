@@ -168,3 +168,4 @@ for expert_id in range(num_experts):
 - [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE vLLM implementation using FusedMoE + ReplicatedLinear
 - [[ml-systems/tensor-parallelism]] — TP rank sharding mechanics; why ColumnParallelLinear breaks router consistency
 - [[ml-systems/parallelism-strategies]] — broader parallelism taxonomy
+- [[ml-systems/vllm-weight-loading]] — gotchas when calling FusedMoE.weight_loader (weight_name guard, transpose requirement, expert iteration order)

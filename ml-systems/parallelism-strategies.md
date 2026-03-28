@@ -326,3 +326,4 @@ Track independence maps directly to hardware:
 - [[ml-systems/lora-vllm-serving]]
 - [[ml-systems/ray-compiled-graph-in-vllm]]
 - [[ml-systems/vllm-executor-architecture]]
+- [[ml-systems/vllm-weight-loading]] — weight_loader pattern that encapsulates TP sharding during checkpoint loading

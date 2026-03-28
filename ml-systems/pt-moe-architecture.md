@@ -306,3 +306,4 @@ Source: `ajax/vendor/axlearn/axlearn/common/attention.py` lines 3016-3022 (v2 at
 - [[ml-systems/tensor-parallelism]]
 - [[ml-systems/fused-moe-vllm-implementation]]
 - [[ml-systems/vllm-distributed-groups]]
+- [[ml-systems/vllm-weight-loading]] — how the multi-track architecture's dim-0 concatenation convention is handled during checkpoint loading
