@@ -37,7 +37,7 @@ def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
 
 **Input**: An iterator of `(checkpoint_name, tensor)` pairs from safetensors files on disk. vLLM's model loader (the engine initialization path that calls `load_weights()`) provides this iterator.
 
-**Output**: A `set[str]` of model parameter names that were successfully loaded. Used for validation (e.g., asserting all 562 tensors loaded).
+**Output**: A `set[str]` of model parameter names that were successfully loaded. Used for validation (e.g., `assert len(loaded) == len(params_dict)` — for the 3B model, 562 parameters).
 
 **Who calls it**: vLLM's model loader (the engine component that constructs the model and loads its weights before serving begins), after `__init__` has fully constructed the model — `self.named_parameters()` returns the complete parameter tree only after all submodules are registered. Calling before `__init__` completes would miss parameters from submodules not yet registered.
 
@@ -155,7 +155,7 @@ class AFMTextV9ForCausalLM(nn.Module):
         return loaded
 ```
 
-TAMM's 56 layers span two segments. Segment 0 (layers 0–34) computes full QKV projections at every layer (`qkv_transform.fused_linear`). Segment 1 (layers 35–55) reuses the **key/value vectors** — the K and V projections from layer 34 are held constant for all subsequent layers — so each of those 21 layers computes only a fresh Q projection (`q_transform`) against those fixed K/V values, halving their KV compute. The regex maps `segment_1.layer_M` → `model.layers.(35+M)`.
+TAMM's 56 layers span two segments. Segment 0 (layers 0–34, `num_regular_layers=35`) computes full QKV projections at every layer (`qkv_transform.fused_linear`). Segment 1 (layers 35–55) reuses the **key/value vectors** — the K and V projections from layer 34 are held constant for all subsequent layers — so each of those 21 layers computes only a fresh Q projection (`q_transform`) against those fixed K/V values, eliminating 2 of 3 projection matmuls per layer in segment 1. The regex maps `segment_1.layer_M` → `model.layers.(35+M)`.
 
 ---
 
