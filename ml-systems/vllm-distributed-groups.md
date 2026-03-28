@@ -4,13 +4,13 @@
 
 ## TL;DR
 
-vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP` — where **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). A **collective** is an operation — like all-reduce (sum a tensor across all ranks, give every rank the result) or broadcast — that every rank in a group executes together. Each group is a `GroupCoordinator` holding two process groups: one backed by NCCL (NVIDIA's GPU collective library, runs kernels over NVLink/PCIe) and one backed by Gloo (Meta's CPU collective library, used for control-plane barriers where no GPU context is needed). Groups can be destroyed and rebuilt at runtime — PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** (one independent model replica within a PT-MoE deployment, running its own forward pass in parallel with other tracks) without forking vLLM.
+vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP` — where **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). A **collective** is an operation — like all-reduce (sum a tensor across all ranks, give every rank the result) or broadcast — that every rank in a group executes together. Each group is a `GroupCoordinator` holding two process groups: one backed by NCCL (NVIDIA's GPU collective library, runs kernels over NVLink/PCIe — NVLink is NVIDIA's high-bandwidth GPU interconnect) and one backed by Gloo (Meta's CPU collective library, used for control-plane barriers where no GPU context is needed). **Mixture-of-Experts (MoE)** is a model architecture where each token is routed to a small subset of specialist sub-networks (experts) rather than passing through all weights — enabling large total parameter counts without proportional compute. Groups can be destroyed and rebuilt at runtime — PT-MoE (a vLLM plugin for parallelizing MoE layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** (one independent model replica within a PT-MoE deployment, running its own forward pass in parallel with other tracks) without forking vLLM.
 
 ---
 
 ## Core Intuition
 
-Distributed inference requires different communication patterns for different parallelism axes: TP ranks **all-reduce** (sum a tensor across all ranks and distribute the result) activations within a **pipeline stage** (a contiguous slice of the model's layers assigned to one GPU in a pipeline-parallel setup), PP ranks send activations forward from one stage to the next, and DP ranks synchronize gradients across replicas — each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups — as long as you do it before any layers are constructed and never touch PP or DP — those groups cross TP boundaries, so replacing them severs the rank-to-rank paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet.
+Distributed inference requires different communication patterns for different parallelism axes: TP ranks **all-reduce** (sum a tensor across all ranks and distribute the result) activations within a **pipeline stage** (a contiguous slice of the model's layers assigned to one GPU in a pipeline-parallel setup), PP ranks send activations forward from one stage to the next, and DP ranks synchronize outputs across replicas — each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups — as long as you do it before any layers are constructed and never touch PP or DP — those groups cross TP boundaries, so replacing them severs the rank-to-rank paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet.
 
 ---
 
@@ -155,7 +155,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 | `_TP`  | parallel_state.py:1213 | IS TP | `all_ranks.view(-1, tp_size)` |
 | `_DCP` | parallel_state.py:1221 | Subdivides TP | `all_ranks.reshape(-1, dcp_size)` |
 | `_PCP` | parallel_state.py:1230 | Sibling of TP (same level, different axis) | `transpose(3,4).reshape(-1, pcp_size)` |
-| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP | `transpose(1,2).reshape(-1, dp*pcp*tp)` | **EP** (**expert parallel**): routes tokens to different expert sub-networks across GPUs |
+| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP | `transpose(1,2).reshape(-1, dp*pcp*tp)` | **EP** (**expert parallel**): routes tokens to different MoE expert sub-networks across GPUs |
 | `_PP`  | parallel_state.py:1233 | Above TP (crosses TP boundaries) | `transpose(2,4).reshape(-1, pp_size)` |
 | `_DP`  | parallel_state.py:1240 | Above TP (crosses TP boundaries) | `transpose(1,4).reshape(-1, dp_size)` |
 
@@ -190,7 +190,7 @@ Resources held per coordinator:
 | `device_communicator` | — | Custom comm buffers (optional) |
 | `mq_broadcaster` | — | Message queue for weight broadcasting (optional) |
 
-Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU memory and thread resources until explicitly released, so leaked communicators cause OOM and can deadlock subsequent collective operations.
+Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU memory and thread resources until explicitly released, so leaked communicators cause OOM (out-of-memory errors) and can deadlock subsequent collective operations.
 
 ### Rank vs. Group Position Attributes
 
@@ -255,7 +255,7 @@ After rebuilding `_TP`, two values disagree:
 - `parallel_config.tensor_parallel_size` = 32 (unchanged config)
 - `get_tp_group().world_size` = 4 (rebuilt group)
 
-Most vLLM code reads the config (scheduler, executor, padding). Model layers read the group. One known risk:
+Most vLLM code reads the config (scheduler, executor, padding). Model layers read the group. The divergence is silent — no assertion fires — so any config-reading path that should use the narrowed group size will silently produce wrong values. One known risk:
 
 ```python
 # config/model.py:1172 — KV heads per GPU
