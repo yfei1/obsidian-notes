@@ -164,3 +164,4 @@ o = flash_attn_with_kvcache(
 - [[ml-systems/flashinfer-vllm-integration]] — production FlashInfer kernels that replace the nano-vLLM `flash_attn_with_kvcache` calls shown here
 - [[ml-systems/gpu-memory-hierarchy]] — why slot_mapping is pre-computed on CPU (memory wall, division cost)
 - [[ml-systems/prefix-caching]] — when `slot == -1` (skip) and when `block_tables` is set during prefill
+- [[ml-systems/prefix-caching-hash-table-leak]] — implementation bug where the hash→block_id map in BlockManager grows unbounded because stale entries are never purged on block recycling
