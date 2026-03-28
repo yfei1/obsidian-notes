@@ -150,14 +150,14 @@ assert local_rank_rank12 == 4
 
 PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP are "at or below" TP — they subdivide or span the same ranks as TP.
 
-| Group | Global var | Relationship to TP | Built from |
-|-------|-----------|-------------------|------------|
-| `_TP`  | parallel_state.py:1213 | IS TP | `all_ranks.view(-1, tp_size)` |
-| `_DCP` | parallel_state.py:1221 | Subdivides TP | `all_ranks.reshape(-1, dcp_size)` |
-| `_PCP` | parallel_state.py:1230 | Sibling of TP (same level, different axis) | `transpose(3,4).reshape(-1, pcp_size)` |
-| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP | `transpose(1,2).reshape(-1, dp*pcp*tp)` | **EP** (**expert parallel**): routes tokens to different expert sub-networks across GPUs; in the 32-GPU example (DP=PCP=1, TP=32) EP collapses to one group of 32 — same ranks as `_TP` |
-| `_PP`  | parallel_state.py:1233 | Above TP (crosses TP boundaries) | `transpose(2,4).reshape(-1, pp_size)` |
-| `_DP`  | parallel_state.py:1240 | Above TP (crosses TP boundaries) | `transpose(1,4).reshape(-1, dp_size)` |
+| Group | Global var | Relationship to TP | Built from | Example (32 GPUs, TP=32) |
+|-------|-----------|-------------------|------------|-------------------------|
+| `_TP`  | parallel_state.py:1213 | IS TP | `all_ranks.view(-1, tp_size)` | 1 group: [0..31] |
+| `_DCP` | parallel_state.py:1221 | Subdivides TP | `all_ranks.reshape(-1, dcp_size)` | DCP=1: 32 singleton groups |
+| `_PCP` | parallel_state.py:1230 | Same level as TP, PCP axis | `transpose(3,4).reshape(-1, pcp_size)` | PCP=1: 32 singleton groups |
+| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP (routes tokens to expert sub-networks) | `transpose(1,2).reshape(-1, dp*pcp*tp)` | EP=32: 1 group [0..31] |
+| `_PP`  | parallel_state.py:1233 | Above TP (crosses TP boundaries) | `transpose(2,4).reshape(-1, pp_size)` | PP=1: 32 singleton groups |
+| `_DP`  | parallel_state.py:1240 | Above TP (crosses TP boundaries) | `transpose(1,4).reshape(-1, dp_size)` | DP=1: 32 singleton groups |
 
 ---
 
@@ -214,8 +214,8 @@ This distinction also drives the PT-MoE track index. In the running example, the
 
 ```python
 init_model_parallel_group(
-    group_ranks,   # list of ALL groups — every rank appears in exactly one
-    local_rank,    # physical GPU slot: get_world_group().local_rank
+    group_ranks,   # list of ALL groups — e.g. [[0..31]] for TP=32, or [[0,1,2,3],…,[28..31]] after rebuild
+    local_rank,    # physical GPU slot: get_world_group().local_rank (rank 12 on GPUs 8–15 → 4)
     backend,       # "nccl" for GPU: torch.distributed.get_backend(get_world_group().device_group)
 )
 ```
