@@ -1074,9 +1074,11 @@ Kernel 3: attn_post_norm(sum)
 [same 3 kernels for MLP block]
 ```
 
-**Total HBM traffic per attention block**: ~6 reads + 3 writes = **36 KB/token** just bouncing data back and forth through HBM, for what is arithmetically trivial work.
+**Total HBM traffic per attention block**: 4 reads + 3 writes = **28 KB/token**.
 
-The `normed_h` tensor gets written to HBM by kernel 1, then **immediately** read back from HBM by kernel 2. That round-trip is pure waste — the data was right there in SRAM, but the kernel ended and flushed it.
+Breakdown: Kernel 1 reads `h` (1 read). Kernel 2 reads `normed_h` + `residual` (2 reads). Kernel 3 reads `sum` (1 read). Each kernel writes one output tensor (3 writes total).
+
+The waste is structural: `normed_h` is written to HBM by kernel 1, then **immediately** read back from HBM by kernel 2 — because when a kernel ends, its register/SRAM contents are gone. The data had to leave the chip and come back for no reason other than the kernel boundary.
 
 #### What happens with fused kernel (simple fusion)
 
