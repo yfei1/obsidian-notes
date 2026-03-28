@@ -6,7 +6,7 @@
 
 ## Core Intuition
 
-During decode, the GPU forward pass takes ~0.1ms but Python kernel launch overhead takes ~1.5ms — the GPU idles >90% of the time waiting for dispatch. CUDA graphs fix this by recording the full execution sequence once and replaying it with a single call (~0.005ms overhead).
+Python kernel launch overhead (~1.5ms) dwarfs the GPU forward pass (~0.1ms), leaving the GPU idle >90% of the time — see [[ml-systems/llm-inference-engines]] for the full decode loop context. CUDA graphs fix this by recording the full execution sequence once and replaying it with a single call (~0.005ms overhead).
 
 The companion problem: a recorded graph hardcodes the physical memory addresses of its tensors at capture time, so it cannot be redirected to read from new tensors each step. Feeding new per-step data — block tables and slot mappings (arrays that describe which KV cache memory blocks belong to each sequence) — requires copying into those fixed addresses each step. That copy must be efficient: pinned memory (RAM the OS cannot swap to disk, giving the GPU's DMA controller a stable address to read directly) eliminates the staging copy required for ordinary pageable RAM. UVA — Unified Virtual Addressing — goes further by mapping pinned CPU memory into the GPU's address space at startup, eliminating the explicit transfer command entirely (see [[ml-systems/gpu-memory-hierarchy]]).
 
