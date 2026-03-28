@@ -198,3 +198,4 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 - [[ml-systems/flashinfer-vllm-integration]] — FlashInfer C++/CUDA kernels: same custom-op level as Triton, with native paged KV cache
 - [[ml-systems/lora-vllm-serving]]
 - [[ml-systems/kv-cache-internals]]
+- [[ml-systems/attention-mechanics]] — concrete Triton KV cache write kernel and Flash Attention prefill/decode dispatch as worked examples of the kernel stack

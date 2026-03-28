@@ -426,3 +426,5 @@ all_reduce(sum) → [N, 1024] correct output on both GPUs
 - [[ml-systems/flashinfer-vllm-integration]] — FlashInfer kernel dispatch from vLLM
 - [[ml-systems/lora-mechanics]] — low-rank adaptation of Q/K/V/o projections
 - [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture for decode-step latency
+- [[ml-systems/gpu-kernel-stack]] — Triton and Flash Attention kernel dispatch underlying the prefill/decode kernels used here
+- [[ml-systems/vllm-torch-compile-integration]] — torch.compile and CUDA graph integration affecting the decode attention path

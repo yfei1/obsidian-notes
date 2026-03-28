@@ -171,3 +171,4 @@ Dynamic input marking (`decorators.py:381-418`) tells Dynamo which tensor dimens
 - [[ml-systems/lora-vllm-serving]] — LoRA adapter serving; compile interaction matters when adapters modify the forward path
 - [[ml-systems/pytorch-module-hooks]] — How `nn.Module.__call__` dispatches hooks and how `@torch.compile` / `module.compile()` interact with that dispatch path
 - [[ml-systems/cuda-graph-inference-optimization]]
+- [[ml-systems/attention-mechanics]] — attention prefill/decode kernels are the primary compute targets that torch.compile and CUDA graph capture optimize
