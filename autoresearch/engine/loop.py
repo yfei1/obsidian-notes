@@ -40,7 +40,7 @@ from engine.state import (
     AttemptRecord, append_history, save_delta_ops, load_history, save_generation_metadata,
 )
 from judges.ensemble import default_ensemble
-from score import score_rule_based, score_all_notes_batched, DIMENSIONS
+from score import score_rule_based, score_all_notes_batched, DIMENSIONS, RULE_BASED_DIMS
 
 # ---------------------------------------------------------------------------
 # Configuration
