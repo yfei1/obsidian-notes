@@ -245,41 +245,34 @@ vLLM and SGLang are **inference-only** engines. They do not perform backward pas
 
 Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it's a model architecture redesign that removes the sequential layer dependencies that cause the PP bubble. Published in the [2025 Foundation Models update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates).
 
-### PT-MoE: Parallel Tracks Replace Sequential Layer Dependencies
+### Why Sequential Layers Force a Pipeline Bubble
 
-```
-Standard Transformer (sequential dependency):
-  Input → Layer 1 → Layer 2 → ... → Layer N → Output
-  Every layer depends on the previous one.
-  PP assigns layers to GPUs, but GPUs must wait for previous stages.
-
-PT-MoE (parallel tracks):
-  Input → [Track A: small transformer] ──→ Merge → next block → Output
-        → [Track B: small transformer] ──→ ↑
-        → [Track C: small transformer] ──→ ↑
-
-  Tracks process tokens INDEPENDENTLY.
-  Synchronization only at input/output boundaries of each track block (a group of parallel tracks that merge before the next block).
-  Each track has its own set of MoE layers.
-```
-
-### Why Track Independence Maps Directly to Zero-Bubble Hardware Execution
+The PP bubble exists because of a data dependency: layer N+1 cannot start until layer N produces its output activations. With 4 pipeline stages, the first 3 stages sit idle while stage 0 processes its first micro-batch — that idle gap is the bubble. Micro-batches reduce but cannot eliminate it, because the dependency chain is architectural, not a scheduling artifact.
 
 ```
 Standard PP (sequential dependency — has pipeline bubble):
   GPU-0: [layers 0-7]  → must wait → GPU-1: [layers 8-15] → must wait → ...
-  GPUs sit idle waiting for the previous stage.
+  GPUs sit idle waiting for activations from the previous stage.
+```
 
+### PT-MoE: Parallel Tracks Remove the Dependency Chain
+
+PT-MoE replaces sequential layers with parallel **tracks** — independent small transformers that process the same input simultaneously and merge at block boundaries. Because tracks share no activations mid-block, there is no inter-GPU dependency until the merge point — each GPU starts computing immediately.
+
+```
 PT-MoE (parallel tracks — no bubble):
+  Input → [Track A: small transformer] ──→ Merge → next block → Output
+        → [Track B: small transformer] ──→ ↑
+        → [Track C: small transformer] ──→ ↑
+
   GPU-0: [Track A]  ─┐
   GPU-1: [Track B]  ─┤→ Merge → next block
   GPU-2: [Track C]  ─┘
-  All GPUs compute simultaneously, near-zero synchronization overhead.
+  All GPUs compute simultaneously; synchronization only at merge points.
+  Each track has its own set of MoE layers.
 ```
 
-Track independence maps directly to hardware:
-- Each track runs on a separate GPU (or group of GPUs) with no inter-track communication until the merge point — tracks share no activations mid-block, so each GPU starts computing immediately without waiting on another stage.
-- Within each track, TP and EP still apply for the MoE layers.
+The bubble shrinks to near-zero because the blocking condition — "wait for the previous stage's activations" — no longer exists within a block. Within each track, TP and EP still apply for the MoE layers.
 
 ---
 
