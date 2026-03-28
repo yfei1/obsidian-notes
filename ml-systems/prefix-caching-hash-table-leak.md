@@ -111,7 +111,9 @@ The system is **correct** but accumulates hash keys for prefixes never queried a
 
 ## Why a Naive Fix in `_allocate_block` Is Wrong
 
-The naive fix purges the map entry for a block's old hash when that block is recycled:
+`hash_to_block_id` maps a hash to the *most recently written* block with that content — not to every block that has ever held it. Two requests sharing the same prefix each get their own physical block filled with identical tokens; the map updates to point to the newer block while the older block remains live with the same `.hash`. This means `block.hash` answers "what did this block last hold?" — not "does the map still point to this block?"
+
+The naive fix ignores this distinction:
 
 ```python
 def _allocate_block(self, block_id):
@@ -122,8 +124,6 @@ def _allocate_block(self, block_id):
     ...
 ```
 
-This is wrong because `hash_to_block_id` maps a hash to the *most recently written* block with that content — not exclusively to the block being recycled. Two blocks can hold identical content when two requests share the same prefix: each gets its own physical block filled with the same tokens. When that happens, the map is updated to point to the newer block while the older block remains live with the same `.hash`.
-
 Concrete failure sequence:
 
 1. Block 5, hash `0xABC`, deallocated → `hash_to_block_id[0xABC] = 5`
@@ -131,7 +131,7 @@ Concrete failure sequence:
 3. Block 5 is grabbed from the free list for different content
 4. Naive fix reads `block.hash == 0xABC` and runs `hash_to_block_id.pop(0xABC)` → **deletes the valid entry for block 7**
 
-The bug: `block.hash` records what *this block* last held, but the map may have already moved on to a different block with the same content. The fix uses the wrong ownership check — it asks "did this block ever hold hash H?" instead of "does the map still point to this block for hash H?".
+The fix asks "did this block ever hold hash H?" when the correct check is "does the map still point to *this block* for hash H?" — those diverge whenever two blocks have held identical content.
 
 ---
 
