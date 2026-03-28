@@ -307,3 +307,4 @@ Source: `ajax/vendor/axlearn/axlearn/common/attention.py` lines 3016-3022 (v2 at
 - [[ml-systems/vllm-distributed-groups]] — process group setup for PT's parallel execution
 - [[ml-systems/validating-parallelism-at-scale]] — correctness checks across track configurations
 - [[ml-systems/parallel-track-architecture]] — higher-level architectural framing
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — deep research transcript on fusing the 4-norm sandwich residual pattern with a custom Triton kernel

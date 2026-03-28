@@ -292,3 +292,4 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-gr
 - [[ml-systems/gpu-kernel-stack]] — PTX/Triton compilation pipeline that produces the store_kvcache kernel
 - [[ml-systems/kv-cache-kernel-and-addressing]] — Triton kernel that writes K/V vectors using flat 1D slot addressing pre-computed by the CPU scheduler
 - [[ml-systems/vllm-process-group-rebuild]]
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — uses KV cache semantics to explain why decode-time norm inputs are 1 token wide, making kernel launch overhead the dominant cost

@@ -1465,3 +1465,17 @@ So fusion helps decode for two different reasons depending on the op type:
 > amazing. can you summarize our back and forth, questions, follow ups, all these tables untouched and throw them into `~/GolandProjects/obsidian-notes/`?
 
 > i want the raw transcript untouched
+---
+
+## Connections
+
+- [[ml-systems/pt-moe-architecture]] — the PT-MoE model whose 4-norm sandwich residual pattern is the subject of this research
+- [[ml-systems/pt-moe-vllm-implementation]] — vLLM integration context for where the fused kernel would be deployed
+- [[ml-systems/norms-and-regularization]] — RMSNorm mechanics and the `fused_add_rms_norm` semantics analyzed here
+- [[ml-systems/fused-moe-vllm-implementation]] — `FusedMoE` CustomOp registration pattern used as the reference for how to integrate a custom Triton kernel
+- [[ml-systems/gpu-memory-hierarchy]] — HBM/SRAM hierarchy and bandwidth model underlying the kernel fusion savings analysis
+- [[ml-systems/gpu-kernel-stack]] — kernel launch overhead (~5–10 µs) that dominates norm op cost during decode
+- [[ml-systems/tensor-parallelism]] — TP all-reduce sync points and the `AllReduceFusionPass` AR+norm fusion opportunity
+- [[ml-systems/kv-cache-internals]] — KV cache explains why decode processes only 1 new token per step through the norms
+- [[ml-systems/vllm-model-integration]] — `CustomOp` dispatch, `direct_register_custom_op`, and weight loading patterns analyzed here
+- [[ml-systems/mixture-of-experts]] — PT-MoE architecture context; the MoE routing sits between the norm pairs

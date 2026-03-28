@@ -174,3 +174,4 @@ Similarly, `context_lens` tells the GPU exactly how many tokens to read per sequ
 - [[ml-systems/pytorch-module-hooks]] — kernel fusion decisions (and the cost of skipping them via graph breaks) depend on memory hierarchy properties
 - [[ml-systems/pytorch-module-hooks]] — hardware memory hierarchy provides context for why kernel fusion (exploited by `torch.compile`) reduces dispatch overhead in hook-heavy models
 - [[ml-systems/kv-cache-kernel-and-addressing]] — concrete example of CPU pre-computing slot indices to avoid GPU integer division on the critical decode path
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — worked example of HBM/SRAM round-trip costs for norm/add kernels, with concrete KB/token calculations for hidden_size=2048 bf16

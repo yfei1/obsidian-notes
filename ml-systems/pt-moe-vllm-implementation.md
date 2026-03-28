@@ -236,3 +236,4 @@ The merge operation matters: a plain sum scales activation magnitude by track co
 - [[ml-systems/kv-cache-internals]]
 - [[ml-systems/vllm-weight-loading]] — step-by-step walkthrough of the multi-track weight loading pattern PT-MoE uses
 - [[ml-systems/vllm-process-group-rebuild]]
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — deep research transcript analyzing kernel fusion opportunities for the 4-norm residual pattern in `afm_pt_moe.py`

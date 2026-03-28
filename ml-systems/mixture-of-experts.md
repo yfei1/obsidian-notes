@@ -257,3 +257,4 @@ Full implementation details — buffer shapes, shard_id mapping, per-expert load
 - [[ml-systems/flashinfer-vllm-integration]]
 - [[ml-systems/lora-vllm-serving]]
 - [[ml-systems/vllm-weight-loading]] — expert weight loading via FusedMoE.weight_loader: shard_id mapping, per-expert iteration, w13/w2 fused buffer layout
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — kernel fusion research for the PT-MoE sandwich-norm residual pattern that wraps each MoE block
