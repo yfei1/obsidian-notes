@@ -120,11 +120,15 @@ This works because `kv_cache[0, 3]` fixes the two **leftmost** dimensions of a r
 
 ## How Prefill and Decode Use the Cache Differently
 
-The two phases have opposite relationships to the cache — prefill produces K,V vectors for all N input tokens simultaneously (they are already in GPU SRAM), so attention reads them directly from those local tensors. The cache write is a **side effect**: populate now so future decode steps can read the history. Decode produces one token at a time — it has no local K,V history, so it must read every prior token's vectors from the cache.
+The two phases differ in what K,V vectors are available locally at attention time — and that determines whether attention reads from local tensors or the cache.
+
+**Prefill**: all N input tokens are processed in one forward pass, so their K,V vectors are freshly computed and live in GPU SRAM. Attention reads them directly — no cache read needed. The cache write is a **side effect**: store K,V now so future decode steps have the history available.
+
+**Decode**: one new token is generated per step. Its K,V vectors are computed, but the full attention context spans all prior tokens — which exist only in the cache. So decode must write the new token first, then read the entire cache to compute attention.
 
 ### Prefill — write N tokens, read from local tensors
 
-Because K,V were just computed and sit in SRAM, FlashAttention reads them directly rather than going back through the cache. The cache write happens first so the history is available to decode, but it does not affect the prefill attention computation itself.
+The cache write happens before the attention call because decode steps may follow immediately. The attention call itself uses the freshly computed local `k, v`, not the cache — because going through the cache would add an unnecessary round-trip.
 
 ```python
 # attention.py:62-70
@@ -139,11 +143,11 @@ if block_tables is not None:
     o = flash_attn_varlen_func(q, k, v, block_table=block_tables, ...)
 ```
 
-The prefix-cache branch is the exception: if a shared prompt prefix was cached by a prior request, those K,V vectors are not recomputed — `block_tables` redirects the read directly to the cache, skipping local computation.
+The prefix-cache branch is the exception: if a shared prompt prefix was cached by a prior request, those K,V vectors are not recomputed — `block_tables` redirects the read to the cache, skipping local computation.
 
 ### Decode — write 1 token, read ALL history from cache
 
-Decode writes the new token's K,V first — because FlashAttention must attend over the complete sequence including the current token. `context_lens` tells FlashAttention how many slots per sequence are valid, because the cache is pre-allocated to maximum sequence length and the remainder is uninitialized padding.
+The new token's K,V must be written before the attention call — because FlashAttention attends over the full sequence including the current token, so the cache must be complete before the read. `context_lens` tells FlashAttention how many slots per sequence are valid, because the cache is pre-allocated to maximum sequence length and trailing slots are uninitialized padding.
 
 ```python
 # attention.py:71-74
