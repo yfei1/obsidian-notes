@@ -436,14 +436,22 @@ def select_target(notes: list[Path], history: list[dict],
         rp = relative_path(note)
 
         # Use cached full scores (all 9 dims) when available, fall back to rule-based
+        subj_avg = None  # subjective (LLM-graded) average for crisis check
         if cached_scores and rp in cached_scores:
             scores = cached_scores[rp]
             valid = [s["score"] for s in scores.values() if s.get("score", 0) >= 0]
             avg = sum(valid) / max(len(valid), 1)
+            # Crisis check uses only subjective dimensions — rule-based scores
+            # (Cross-Linking, Code Quality, Uniqueness) are mechanical and can mask
+            # genuine content quality issues (e.g. Conciseness=2, Structure=3).
+            subj_valid = [s["score"] for dim, s in scores.items()
+                          if s.get("score", 0) >= 0 and dim not in RULE_BASED_DIMS]
+            subj_avg = sum(subj_valid) / max(len(subj_valid), 1)
         else:
             content = read_note(note)
             rule_scores = score_rule_based(note, content, notes)
             avg = sum(s["score"] for s in rule_scores.values()) / max(len(rule_scores), 1)
+            subj_avg = avg  # no cached subjective scores; use combined as fallback
 
         staleness = 1.0 / (1.0 + target_counts.get(rp, 0))
         weakness = 1.0 - (avg / 10.0)
@@ -452,11 +460,12 @@ def select_target(notes: list[Path], history: list[dict],
         # but weakness (quality gap) is the primary driver now.
         never_targeted = 0.05 if target_counts.get(rp, 0) == 0 else 0.0
 
-        # Quality floor: notes in "crisis" (avg < 5.5) never suffer staleness decay.
-        # Staleness is pinned to 1.0 so they always compete as if freshly discovered.
-        # This guarantees a crisis note gets targeted every round until it heals.
+        # Quality floor: notes in "crisis" (subjective avg < 5.5) never suffer
+        # staleness decay. Staleness is pinned to 1.0 so they always compete as
+        # if freshly discovered. Crisis is judged on LLM-graded dimensions only —
+        # high Cross-Linking or Code Quality must not mask structural weaknesses.
         CRISIS_THRESHOLD = 5.5
-        if avg < CRISIS_THRESHOLD:
+        if subj_avg is not None and subj_avg < CRISIS_THRESHOLD:
             staleness = 1.0
 
         # Weakness-first: fix the worst notes before exploring mediocre ones.
