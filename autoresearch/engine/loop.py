@@ -452,6 +452,13 @@ def select_target(notes: list[Path], history: list[dict],
         # but weakness (quality gap) is the primary driver now.
         never_targeted = 0.05 if target_counts.get(rp, 0) == 0 else 0.0
 
+        # Quality floor: notes in "crisis" (avg < 5.5) never suffer staleness decay.
+        # Staleness is pinned to 1.0 so they always compete as if freshly discovered.
+        # This guarantees a crisis note gets targeted every round until it heals.
+        CRISIS_THRESHOLD = 5.5
+        if avg < CRISIS_THRESHOLD:
+            staleness = 1.0
+
         # Weakness-first: fix the worst notes before exploring mediocre ones.
         combined = 0.85 * weakness + 0.1 * staleness + never_targeted
         candidates.append((combined, rp, note))
