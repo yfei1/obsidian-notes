@@ -163,7 +163,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. Each `GroupCoordinator` holds two process groups — one NCCL, one Gloo — because GPU collectives and CPU control-plane operations need separate communicators: NCCL runs kernels over NVLink/PCIe and requires an active GPU context; Gloo runs on CPU and handles barriers that fire before or after GPU kernels.
+A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. Each `GroupCoordinator` holds two process groups — one NCCL, one Gloo — because GPU collectives and CPU control-plane operations have incompatible resource requirements: NCCL runs kernels over NVLink/PCIe and requires an active GPU context; Gloo runs on CPU and handles barriers that fire before or after GPU kernels, where no GPU context exists yet.
 
 The constructor (parallel_state.py:316-395) iterates ALL group rank lists and creates both process groups for each, then stores only the group the current rank belongs to:
 
@@ -177,7 +177,7 @@ for ranks in group_ranks:
         self.rank_in_group = ranks.index(self.rank)
 ```
 
-Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must arrive before any proceed, even for groups they don't belong to.
+Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must arrive before any rank proceeds, even for groups the rank doesn't belong to. Skipping a group on one rank stalls all others indefinitely.
 
 Resources held per coordinator:
 
@@ -192,7 +192,7 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 
 ### Rank vs. Group Position Attributes
 
-`rank`, `local_rank`, and `rank_in_group` answer different questions and diverge whenever a group doesn't start at rank 0 — which is the common case for non-trivial topologies:
+Three attributes describe a rank's position, and they diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology. The distinction matters because model layers use `rank_in_group` to select weight shards, while `local_rank` is a hardware address set by the launcher.
 
 | Attribute | Question answered | Example (rank 12, TP group [12,13,14,15], node has GPUs 8–15) |
 |-----------|------------------|---------------------------------------------------------------|
@@ -202,7 +202,7 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 | `world_size` | How many ranks in this group? | 4 |
 | `ranks` | All global ranks in this group | [12, 13, 14, 15] |
 
-Rank 12 in TP group [12,13,14,15] has `local_rank=4` (physical GPU slot on its node) but `rank_in_group=0` (first position in the TP group) — because `rank_in_group` is computed from the group's rank list, not from the node boundary. This distinction matters for PT-MoE: the cross-track group for GPU slot 0 of each track is [0,4,8,12,16,20,24,28], so rank 12 has `rank_in_group=3` in that group. PT-MoE uses this value as the **track index** — which independent model replica this rank belongs to.
+Rank 12 in TP group [12,13,14,15] has `local_rank=4` (physical GPU slot on its node) but `rank_in_group=0` (first position in the TP group) — because `rank_in_group` is computed as `ranks.index(self.rank)`, indexing into the group's rank list, not from the node boundary. This distinction matters for PT-MoE: the cross-track group for GPU slot 0 of each track is [0,4,8,12,16,20,24,28], so rank 12 has `rank_in_group=3` in that group. PT-MoE uses this value as the **track index** — which independent model replica this rank belongs to.
 
 ---
 
