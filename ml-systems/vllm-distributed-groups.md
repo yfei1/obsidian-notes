@@ -163,7 +163,9 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. Each `GroupCoordinator` holds two process groups — one NCCL, one Gloo — because GPU collectives and CPU control-plane operations have incompatible resource requirements: NCCL runs kernels over NVLink/PCIe and requires an active GPU context; Gloo runs on CPU and handles barriers that fire before or after GPU kernels, where no GPU context exists yet.
+A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because the two communication planes have incompatible resource requirements: NCCL runs kernels over NVLink/PCIe and requires an active GPU context; Gloo runs on CPU and is used for control-plane barriers that fire before a GPU context exists. Mixing them into one communicator would either block CPU barriers on GPU availability or waste GPU resources on CPU-only synchronization.
+
+### Constructor: Why Every Rank Iterates Every Group
 
 The constructor (parallel_state.py:316-395) iterates ALL group rank lists and creates both process groups for each, then stores only the group the current rank belongs to:
 
@@ -192,17 +194,15 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 
 ### Rank vs. Group Position Attributes
 
-Three attributes describe a rank's position, and they diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology. The distinction matters because model layers use `rank_in_group` to select weight shards, while `local_rank` is a hardware address set by the launcher.
+`rank_in_group` and `local_rank` answer different questions and diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology. The distinction matters because model layers use `rank_in_group` to select weight shards, while `local_rank` is a hardware address set by the launcher.
 
-| Attribute | Question answered | Example (rank 12, TP group [12,13,14,15], node has GPUs 8–15) |
-|-----------|------------------|---------------------------------------------------------------|
-| `rank` | Which process globally? | 12 |
-| `local_rank` | Which physical GPU on this node? (set by `torchrun`) | 4 |
-| `rank_in_group` | Which position within this group? (computed from rank list) | 0 |
-| `world_size` | How many ranks in this group? | 4 |
-| `ranks` | All global ranks in this group | [12, 13, 14, 15] |
+- **`rank`**: global process index (e.g., 12)
+- **`local_rank`**: physical GPU slot on this node, set by `torchrun` from the node boundary (rank 12 on a node covering GPUs 8–15 → `local_rank=4`)
+- **`rank_in_group`**: position within this group's rank list, computed as `ranks.index(self.rank)` (rank 12 in TP group [12,13,14,15] → `rank_in_group=0`)
+- **`world_size`**: number of ranks in this group (4)
+- **`ranks`**: all global ranks in this group ([12, 13, 14, 15])
 
-Rank 12 in TP group [12,13,14,15] has `local_rank=4` (physical GPU slot on its node) but `rank_in_group=0` (first position in the TP group) — because `rank_in_group` is computed as `ranks.index(self.rank)`, indexing into the group's rank list, not from the node boundary. This distinction matters for PT-MoE: the cross-track group for GPU slot 0 of each track is [0,4,8,12,16,20,24,28], so rank 12 has `rank_in_group=3` in that group. PT-MoE uses this value as the **track index** — which independent model replica this rank belongs to.
+Rank 12 has `local_rank=4` but `rank_in_group=0` — `local_rank` counts from the node boundary, `rank_in_group` counts from the first entry in the group's rank list. This divergence drives the PT-MoE track index: the cross-track group for slot 0 of each track is [0,4,8,12,16,20,24,28], so rank 12 has `rank_in_group=3` in that group. PT-MoE uses this value as the **track index** — which independent model replica this rank belongs to.
 
 ---
 
