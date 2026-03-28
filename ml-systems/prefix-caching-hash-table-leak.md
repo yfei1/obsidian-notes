@@ -111,9 +111,9 @@ The system is **correct** but accumulates hash keys for prefixes never queried a
 
 ## Why a Naive Fix in `_allocate_block` Is Wrong
 
-`hash_to_block_id` maps a hash to the *most recently written* block with that content — not to every block that has ever held it. Two requests sharing the same prefix each get their own physical block filled with identical tokens; the map updates to point to the newer block while the older block remains live with the same `.hash`. This means `block.hash` answers "what did this block last hold?" — not "does the map still point to this block?"
+The natural fix site is `_allocate_block` — it runs every time a block is reused, so it seems like the right place to purge the old hash entry. The problem: `block.hash` records what the block *last held*, but `hash_to_block_id` records which block *most recently* wrote a given hash. Two blocks can hold identical content simultaneously — when that happens, the map points to the newer block while the older block retains the same `.hash`. Purging by `block.hash` alone conflates these two questions.
 
-The naive fix ignores this distinction:
+The naive fix:
 
 ```python
 def _allocate_block(self, block_id):
@@ -124,14 +124,14 @@ def _allocate_block(self, block_id):
     ...
 ```
 
-Concrete failure sequence:
+Concrete failure sequence showing the divergence:
 
 1. Block 5, hash `0xABC`, deallocated → `hash_to_block_id[0xABC] = 5`
-2. New request with identical prefix fills block 7 → `hash_to_block_id[0xABC] = 7` (map now points to block 7; block 5 still live)
+2. New request with identical prefix fills block 7 → `hash_to_block_id[0xABC] = 7` (map now points to block 7; block 5 still live with `hash == 0xABC`)
 3. Block 5 is grabbed from the free list for different content
 4. Naive fix reads `block.hash == 0xABC` and runs `hash_to_block_id.pop(0xABC)` → **deletes the valid entry for block 7**
 
-The fix asks "did this block ever hold hash H?" when the correct check is "does the map still point to *this block* for hash H?" — those diverge whenever two blocks have held identical content.
+The fix asks "did this block ever hold hash H?" when the correct question is "does the map still point to *this block* for hash H?" — those diverge whenever two blocks have held identical content, because the map is last-writer-wins while `block.hash` is per-block.
 
 ---
 
