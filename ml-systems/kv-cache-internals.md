@@ -248,7 +248,7 @@ DECODE (generating token 7):
 
 ## How vLLM Sizes the KV Cache (num_kv_heads Data Flow)
 
-A common misconception: the KV cache shape comes from the HF config's `num_key_value_heads`. It doesn't — vLLM reads from **live Attention layer objects** after the model is fully constructed. Custom models (like PT-MoE, see [[ml-systems/pt-moe-vllm-implementation]]) may rebuild **tensor-parallel (TP) process groups** (see [[ml-systems/tensor-parallelism]]) — the set of GPUs jointly computing a single layer by splitting its weight matrices and attention heads across them — inside `model.__init__()`. The **TP degree** (number of GPUs sharing a layer) determines how many heads each GPU owns; a higher TP degree means each GPU owns fewer heads, so each GPU's KV cache slice holds fewer head slots.
+The KV cache shape depends on how many KV heads each GPU owns — not on the checkpoint config's `num_key_value_heads` directly. The gap: custom models (like PT-MoE, see [[ml-systems/pt-moe-vllm-implementation]]) may rebuild **tensor-parallel (TP) process groups** (see [[ml-systems/tensor-parallelism]]) — the set of GPUs jointly computing a single layer by splitting its weight matrices and attention heads across them — inside `model.__init__()`, *after* config is parsed. Because **TP degree** (number of GPUs sharing a layer) determines how many heads each GPU owns, the config value is stale by the time the cache is sized. Reading from live `Attention` layer objects instead guarantees the correct post-TP head count.
 
 ```
 config.num_key_value_heads = N          (from checkpoint config.json)
@@ -268,9 +268,9 @@ Concrete values for Qwen3-0.6B on a single GPU (TP=1):
 - `M = max(1, 8 // 1) = 8` — each GPU's cache slice holds 8 KV head slots
 - Cache shape per layer: `[2441, 256, 8, 64]` — consistent with the `[2, 28, 2441, 256, 8, 64]` tensor above
 
-With TP=2 on the same model: `M = max(1, 8 // 2) = 4` — each GPU's cache slice shrinks to `[2441, 256, 4, 64]`, halving per-GPU KV cache memory from 610 MiB to 305 MiB per layer-slice.
+With TP=2 on the same model: `M = max(1, 8 // 2) = 4` — each GPU owns half the heads, so each GPU's cache slice shrinks to `[2441, 256, 4, 64]`, halving per-GPU KV cache memory from 610 MiB to 305 MiB per layer-slice.
 
-Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-groups]]), not from config (Phase 2), models that modify their effective TP after config validation automatically get correctly-sized KV cache — no manual edits to the checkpoint config are needed to fix the head count for cache sizing.
+Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-groups]]), not from config (Phase 2), models that modify their effective TP inside `__init__()` automatically get correctly-sized KV cache — no manual edits to the checkpoint config are needed to fix the head count for cache sizing.
 
 ---
 
