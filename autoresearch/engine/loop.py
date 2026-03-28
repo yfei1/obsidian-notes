@@ -542,13 +542,18 @@ def _check_gates_cross_file(winner: Delta, file_contents: dict[str, str],
             continue  # File being deleted — no content to gate-check
         if original == updated:
             continue
-        # For split: new files created by the strategy inherit the parent's
-        # baseline violations — duplicate headers / line-limit issues came from
-        # the source, not from the split itself (no regression).
         baseline_for_path = baseline_violations_map.get(path) if baseline_violations_map else None
         if baseline_for_path is None and winner.strategy == "split" and baseline_violations_map:
-            # path is a new file — use target (parent) baseline as proxy
-            baseline_for_path = baseline_violations_map.get(target_path)
+            # New file created by split — inherit the parent file's baseline violations.
+            # The parent is whichever affected path already exists in file_contents.
+            # Duplicate headers / line-limit issues in sub-notes came from the source
+            # material, not from the split op itself (no regression).
+            parent_path = next(
+                (p for p in winner.affected_paths() if file_contents.get(p)),
+                None,
+            )
+            if parent_path:
+                baseline_for_path = baseline_violations_map.get(parent_path)
         gate_result = check_all_gates(original, updated, path, all_note_paths,
                                       strategy=winner.strategy,
                                       baseline_violations=baseline_for_path)
