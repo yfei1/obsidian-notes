@@ -111,9 +111,9 @@ The executor broadcasts `("execute_model", (scheduler_output,), {}, output_rank)
 
 ## How Async Scheduling Hides Dispatch Latency
 
-Without async scheduling, each step is sequential: schedule → dispatch → GPU → process. The dispatch latency sits on the critical path.
+Without async scheduling, each step is sequential: schedule → dispatch → GPU → process. Dispatch (~100-300 us) sits on the critical path, so the GPU idles waiting for the next batch to arrive.
 
-With **async scheduling** (`core.py:419-535`), the engine uses a **batch queue** to overlap:
+With **async scheduling** (`core.py:419-535`), the engine maintains a **batch queue** — a buffer of pre-dispatched batches — so scheduling and dispatch of batch N+1 overlap with GPU execution of batch N:
 
 ```
 Without async (batch_queue_size=1):                    [core.py:378-407]
@@ -125,9 +125,9 @@ With async (batch_queue_size=2, e.g. PP=2):            [core.py:419-535]
                         |<-- overlapped with GPU_N -->|
 ```
 
-Batch queue size = `max_concurrent_batches`: `pp_size` for [[ml-systems/parallelism-strategies|pipeline parallelism]], or 2 when `async_scheduling` is enabled. The engine schedules batch N+1 while GPUs execute batch N.
+Batch queue size = `max_concurrent_batches`: `pp_size` for [[ml-systems/parallelism-strategies|pipeline parallelism]] (because PP keeps multiple micro-batches in flight simultaneously), or 2 when `async_scheduling` is enabled without PP.
 
-For MultiprocExecutor, `enqueue()` returns after a ~10-20 us SHM write — near-perfect overlap.
+MultiprocExecutor achieves near-perfect overlap because `enqueue()` returns after a ~10-20 us SHM write — the executor doesn't block waiting for workers to acknowledge. RayDistributedExecutor gets only partial overlap because the Compiled Graph channel writes block inline for ~300 us–1 ms before returning.
 
 ---
 
