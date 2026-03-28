@@ -291,3 +291,4 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-gr
 - [[ml-systems/cuda-graph-inference-optimization]] — how static slot_mapping tensors interact with CUDA graph capture
 - [[ml-systems/gpu-kernel-stack]] — PTX/Triton compilation pipeline that produces the store_kvcache kernel
 - [[ml-systems/kv-cache-kernel-and-addressing]] — Triton kernel that writes K/V vectors using flat 1D slot addressing pre-computed by the CPU scheduler
+- [[ml-systems/vllm-process-group-rebuild]]

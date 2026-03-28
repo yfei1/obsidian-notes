@@ -336,3 +336,4 @@ The shard header is the source of truth for storage convention (e.g. `[in, out]`
 - [[ml-systems/rotary-position-embedding]] — RoPE vs Global NoPE distinction that produces divergent checkpoint names
 - [[ml-systems/vllm-model-integration]] — how vLLM model classes register weight_loader on parameters during __init__
 - [[ml-systems/vllm-executor-architecture]] — executor initialization path that calls load_weights() before serving begins
+- [[ml-systems/vllm-process-group-rebuild]]

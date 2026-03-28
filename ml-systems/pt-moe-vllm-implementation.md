@@ -235,3 +235,4 @@ The merge operation matters: a plain sum scales activation magnitude by track co
 - [[ml-systems/fused-moe-vllm-implementation]]
 - [[ml-systems/kv-cache-internals]]
 - [[ml-systems/vllm-weight-loading]] — step-by-step walkthrough of the multi-track weight loading pattern PT-MoE uses
+- [[ml-systems/vllm-process-group-rebuild]]
