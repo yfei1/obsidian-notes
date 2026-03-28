@@ -2,7 +2,7 @@
 
 #ml-systems #inference #interview-prep
 
-**Prerequisites**: [[ml-systems/kv-cache-internals]] (block structure, ref counting), [[ml-systems/attention-mechanics]] (prefill vs. decode, cu_seqlens), [[ml-systems/gpu-memory-hierarchy]] (block allocation model)
+**Prerequisites**: [[ml-systems/kv-cache-internals]] (block structure, ref counting), [[ml-systems/attention-mechanics]] (prefill vs. decode, cu_seqlens), [[ml-systems/gpu-memory-hierarchy]] (block allocation model), [[ml-systems/vllm-executor-architecture]] (BlockManager lifecycle and scheduler integration)
 
 ## Core Intuition
 
@@ -252,9 +252,8 @@ print(f'flops_ratio={ratio:.1f}x')
 - [[ml-systems/llm-inference-engines]] — where prefix caching fits in the broader serving pipeline
 - [[ml-systems/vllm-model-integration]] — how `block_tables` are passed to the attention kernel
 - [[ml-systems/transformer-model-internals]] — KV head dimensions and layer counts used in the running example
-- [[ml-systems/kv-cache-kernel-and-addressing]] — physical slot mapping and how block_table indices translate to GPU memory addresses
+- [[ml-systems/kv-cache-kernel-and-addressing]] — physical slot mapping, how block_table indices translate to GPU memory addresses, and kernel-level handling where `slot == -1` skips the write and `block_tables` redirects prefill attention reads to cached K/V
 - [[ml-systems/flashinfer-vllm-integration]] — the variable-length attention kernel that reads cached KV via block_tables during prefill
 - [[ml-systems/prefix-caching-hash-table-leak]] — deep dive into the unbounded-growth bug and correct fix patterns
 - [[ml-systems/vllm-executor-architecture]] — the executor drives the scheduler and BlockManager that prefix caching hooks into
 - [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture must account for the variable-length prefill path that prefix cache hits produce
-- [[ml-systems/kv-cache-kernel-and-addressing]] — kernel-level handling of prefix cache hits: `slot == -1` skips the write; `block_tables` redirects prefill attention reads to cached K/V
