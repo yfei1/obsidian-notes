@@ -800,6 +800,15 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                         "pseudocode comment block immediately above it that summarizes its "
                         "logic in 3-5 plain English lines. Do not change the code itself."
                     )
+                # Generic fallback retry for any strategy that returned nothing
+                if retry_fb is None:
+                    retry_fb = (
+                        f"You returned no output for the '{strategy.name}' strategy. "
+                        "You MUST produce at least one valid edit_file op. "
+                        "The note may be long — focus on ONE specific paragraph or section "
+                        "that most needs improvement and apply exactly one targeted change. "
+                        "Do not try to rewrite the entire note."
+                    )
                 if retry_fb:
                     print(f"  {strategy.name}: retrying with failure feedback...", flush=True)
                     ops, _ = generate_delta(
