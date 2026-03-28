@@ -172,3 +172,4 @@ Similarly, `context_lens` tells the GPU exactly how many tokens to read per sequ
 - [[ml-systems/torch-compile-cuda-graphs-hook-interaction]]
 - [[ml-systems/cuda-graph-inference-optimization]]
 - [[ml-systems/pytorch-module-hooks]] — kernel fusion decisions (and the cost of skipping them via graph breaks) depend on memory hierarchy properties
+- [[ml-systems/pytorch-module-hooks]] — hardware memory hierarchy provides context for why kernel fusion (exploited by `torch.compile`) reduces dispatch overhead in hook-heavy models

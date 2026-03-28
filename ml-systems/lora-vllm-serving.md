@@ -321,3 +321,6 @@ Models with custom TP topologies (e.g., within-track parallelism) don't need a c
 - [[ml-systems/gpu-kernel-stack]] — Triton, custom ops, CUDA graphs
 - [[ml-systems/mixture-of-experts]] — FusedMoE architecture, expert parallelism
 - [[ml-systems/parallelism-strategies]] — TP column/row slicing patterns
+## Connections
+
+- [[ml-systems/pytorch-module-hooks]] — LoRA adapter swapping relies on `nn.Module` hook and `__call__` dispatch to redirect weight reads without modifying `forward()` directly

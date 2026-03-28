@@ -230,3 +230,6 @@ _PT = GroupCoordinator()   # only rebinds module-level, not local
 - [[ml-systems/vllm-model-integration]] — where the monkey-patching pattern is used
 - [[ml-systems/pt-moe-vllm-implementation]] — the PT-MoE integration that requires this pattern
 - [[ml-systems/vllm-distributed-groups]] — process group lifecycle that _PT participates in
+## Connections
+
+- [[ml-systems/pytorch-module-hooks]] — `nn.Module.__call__` aliasing to `_wrapped_call_impl` is a direct instance of Python attribute binding mechanics described here

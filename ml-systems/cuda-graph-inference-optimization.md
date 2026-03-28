@@ -135,3 +135,4 @@ See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of p
 - [[ml-systems/vllm-model-integration]] — model integration layer wires the forward pass that gets recorded into the CUDA graph
 - [[ml-systems/parallel-track-architecture]] — parallel prefill/decode tracks determine which execution paths are CUDA-graph-eligible
 - [[ml-systems/transformer-model-internals]] — the transformer layers (linear, MLP, attention) whose kernels are recorded in the graph
+- [[ml-systems/pytorch-module-hooks]] — hooks run during CUDA graph capture but not during replay, because they are Python calls rather than recorded GPU kernel launches

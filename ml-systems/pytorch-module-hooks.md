@@ -267,3 +267,5 @@ See [[ml-systems/vllm-torch-compile-integration]] for how `torch.compile` integr
 - [[ml-systems/llm-inference-engines]] — broader inference engine architecture
 - [[ml-systems/transformer-model-internals]] — module hierarchy hooks operate on
 - [[ml-systems/vllm-model-integration]] — how vLLM registers hooks during model initialization and forward passes
+- [[ml-systems/python-import-binding]] — Python binding mechanics underlying `__call__` aliasing and attribute lookup dispatch
+- [[ml-systems/lora-vllm-serving]] — LoRA adapter swapping in vLLM uses hooks to redirect weight reads at forward time

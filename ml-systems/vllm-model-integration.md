@@ -372,3 +372,4 @@ All assertions passed.
 - [[ml-systems/kv-cache-kernel-and-addressing]] — how slot_mapping is assembled in the model runner and consumed by the Triton cache-write kernel
 - [[ml-systems/pytorch-module-hooks]] — `nn.Module` hook registration mechanics underlying vLLM's model initialization and forward-pass instrumentation
 - [[ml-systems/cuda-graph-inference-optimization]] — the model forward pass recorded into CUDA graphs during decode; static tensor shapes required at capture time
+- [[ml-systems/pytorch-module-hooks]] — vLLM model initialization and forward passes use `nn.Module` hooks; the `__call__` vs `forward()` distinction determines whether those hooks fire

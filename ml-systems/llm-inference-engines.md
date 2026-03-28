@@ -342,3 +342,4 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 - [[ml-systems/torch-compile-cuda-graphs-hook-interaction]]
 - [[ml-systems/vllm-weight-loading]] — weight loading pipeline that runs during engine initialization before serving begins
 - [[ml-systems/pytorch-module-hooks]] — `nn.Module` hook dispatch is the low-level mechanism inference engines use for feature extraction, shape debugging, and compile integration
+- [[ml-systems/pytorch-module-hooks]] — inference engines built on `nn.Module` depend on the `__call__` dispatch chain; bypassing it via `.forward()` silently disables instrumentation hooks

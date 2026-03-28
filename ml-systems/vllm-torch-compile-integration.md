@@ -173,3 +173,4 @@ Dynamic input marking (`decorators.py:381-418`) tells Dynamo which tensor dimens
 - [[ml-systems/cuda-graph-inference-optimization]]
 - [[ml-systems/attention-mechanics]] — attention prefill/decode kernels are the primary compute targets that torch.compile and CUDA graph capture optimize
 - [[ml-systems/pytorch-module-hooks]] — `__call__` vs `forward()` dispatch and how `module.compile()` differs from `@torch.compile` on `forward()`
+- [[ml-systems/pytorch-module-hooks]] — the `@torch.compile` vs `module.compile()` distinction determines whether hook dispatch is inside or outside the compiled region

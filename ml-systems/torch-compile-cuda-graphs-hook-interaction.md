@@ -212,3 +212,4 @@ print("All assertions passed")
 - [[ml-systems/vllm-torch-compile-integration]] — vLLM's `@support_torch_compile` decorator: opt-in contract, inner vs outer class placement
 - [[ml-systems/cuda-graph-inference-optimization]]
 - [[ml-systems/pytorch-module-hooks]] — `__call__` dispatch chain, hook registration, and why hooks run during CUDA graph capture but not replay
+- [[ml-systems/pytorch-module-hooks]] — source note covering the `__call__` dispatch chain and hook registration mechanics that underlie the compile/CUDA-graph/hook interaction
