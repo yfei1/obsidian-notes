@@ -111,3 +111,4 @@ vLLM and SGLang don't support ZeRO/FSDP for this reason: there's nothing to shar
 - [[ml-systems/parallelism-strategies]] — ZeRO/FSDP in context of all seven parallelism dimensions; composition recipes
 - [[ml-systems/tensor-parallelism]] — the inference-time alternative for parameter distribution
 - [[ml-systems/transformer-model-internals]] — model structure that determines parameter/gradient sizes
+- [[ml-systems/parallelism-strategies]] — ZeRO/FSDP placed in the full parallelism taxonomy; composition with DP, TP, PP

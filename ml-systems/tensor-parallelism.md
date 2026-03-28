@@ -292,3 +292,4 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/vllm-executor-architecture]]
 - [[ml-systems/kv-cache-internals]]
 - [[ml-systems/vllm-weight-loading]] — how ColumnParallelLinear / RowParallelLinear attach weight_loader callables that slice tensors per TP rank at load time
+- [[ml-systems/parallelism-strategies]] — full parallelism taxonomy: DP, TP, SP, PP, EP, CP and how they compose

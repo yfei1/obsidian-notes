@@ -326,4 +326,6 @@ Track independence maps directly to hardware:
 - [[ml-systems/lora-vllm-serving]]
 - [[ml-systems/ray-compiled-graph-in-vllm]]
 - [[ml-systems/vllm-executor-architecture]]
-- [[ml-systems/vllm-weight-loading]] — weight_loader pattern that encapsulates TP sharding during checkpoint loading
+- [[ml-systems/tensor-parallelism]] — column/row split mechanics, all-reduce cost, NVLink vs InfiniBand bandwidth
+- [[ml-systems/sequence-and-context-parallelism]] — SP activation sharding and Ring Attention for long-context
+- [[ml-systems/zero-fsdp-memory-optimization]] — ZeRO/FSDP stage-by-stage breakdown and ZeRO vs FSDP comparison

@@ -107,3 +107,4 @@ SP and CP are composable: SP reduces LayerNorm activation memory, CP distributes
 - [[ml-systems/attention-mechanics]] — CP's Ring Attention distributes the attention computation this note defines
 - [[ml-systems/tensor-parallelism]] — SP is always paired with TP; understanding the All-Reduce ↔ All-Gather/Reduce-Scatter swap requires TP context
 - [[ml-systems/gpu-memory-hierarchy]] — memory pressure at long sequences motivates both SP and CP
+- [[ml-systems/parallelism-strategies]] — overview of all parallelism strategies; SP and CP in context of TP, PP, DP
