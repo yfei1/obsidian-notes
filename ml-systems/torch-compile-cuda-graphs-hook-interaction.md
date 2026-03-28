@@ -211,3 +211,4 @@ print("All assertions passed")
 - [[ml-systems/gpu-kernel-stack]] — Triton, Inductor, CUDA graphs composition with experiments and generated code
 - [[ml-systems/vllm-torch-compile-integration]] — vLLM's `@support_torch_compile` decorator: opt-in contract, inner vs outer class placement
 - [[ml-systems/cuda-graph-inference-optimization]]
+- [[ml-systems/pytorch-module-hooks]] — `__call__` dispatch chain, hook registration, and why hooks run during CUDA graph capture but not replay

@@ -127,3 +127,4 @@ See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of p
 - [[ml-systems/vllm-torch-compile-integration]] — how vLLM's compile pipeline interacts with CUDA graph capture
 - [[ml-systems/ray-compiled-graph-in-vllm]]
 - [[ml-systems/ray-compiled-graph-in-vllm]] — PP tensor transfer (via CG channels or isend/irecv) is excluded from CUDA graph capture because it crosses graph boundaries between pipeline stages
+- [[ml-systems/pytorch-module-hooks]] — hooks fire during CUDA graph capture but are absent from replay; the `__call__` dispatch chain explains why

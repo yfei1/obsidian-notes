@@ -261,6 +261,9 @@ Full benchmarks, stack traces, and the three-mechanism comparison table: [[ml-sy
 See [[ml-systems/vllm-torch-compile-integration]] for how `torch.compile` integrates with a production inference engine, including graph capture, CUDA graph interaction, and compile-time trade-offs.
 
 - [[ml-systems/torch-compile-graph-breaks]] — Empirical test results: what patterns break `fullgraph=True` vs compile fine
+- [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture/replay mechanics and the CPU dispatch overhead hooks bypass during replay
 - [[ml-systems/gpu-memory-hierarchy]] — hardware context for kernel fusion decisions
+- [[ml-systems/gpu-kernel-stack]] — kernel launch overhead and fusion that `torch.compile` exploits
 - [[ml-systems/llm-inference-engines]] — broader inference engine architecture
 - [[ml-systems/transformer-model-internals]] — module hierarchy hooks operate on
+- [[ml-systems/vllm-model-integration]] — how vLLM registers hooks during model initialization and forward passes

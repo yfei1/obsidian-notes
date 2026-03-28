@@ -402,3 +402,4 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/lora-vllm-serving]]
 - [[ml-systems/vllm-torch-compile-integration]]
 - [[ml-systems/vllm-weight-loading]] — how `named_parameters()` module-tree walk underpins checkpoint-to-parameter name remapping
+- [[ml-systems/pytorch-module-hooks]] — hooks attach to the `nn.Module` hierarchy described here; `__call__` dispatch chain determines when they fire

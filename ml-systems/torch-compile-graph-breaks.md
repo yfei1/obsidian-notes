@@ -139,3 +139,4 @@ This is better than removing the check entirely because eager-mode callers still
 - [[ml-systems/gpu-kernel-stack]] — how torch.compile, Triton, and CUDA graphs compose in vLLM's serving stack
 - [[ml-systems/vllm-torch-compile-integration]] — vLLM's `@support_torch_compile` decorator: the opt-in contract and detection path
 - [[ml-systems/torch-compile-cuda-graphs-hook-interaction]]
+- [[ml-systems/pytorch-module-hooks]] — `module.compile()` vs `@torch.compile` on `forward()`: which path traces hook dispatch and causes graph breaks

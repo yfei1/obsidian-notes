@@ -200,3 +200,4 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 - [[ml-systems/kv-cache-internals]]
 - [[ml-systems/attention-mechanics]] — concrete Triton KV cache write kernel and Flash Attention prefill/decode dispatch as worked examples of the kernel stack
 - [[ml-systems/kv-cache-kernel-and-addressing]] — worked example of a Triton kernel (`store_kvcache_kernel`) using flat 1D slot addressing to write K/V vectors into the cache with zero GPU-side division
+- [[ml-systems/pytorch-module-hooks]] — `torch.compile` fuses small ops into fewer GPU kernels; graph breaks in hook code defeat this optimization
