@@ -245,7 +245,9 @@ EP is 100% independent of CG. `grep "compiled_dag|forward_dag"` across `vllm/dis
 
 ### The Async Scheduling Interaction
 
-Async scheduling (v0.15.0) overlaps CPU scheduling of step N+1 with GPU execution of step N, hiding dispatch latency behind GPU compute. Once dispatch is hidden, CG's faster-dispatch advantage disappears — and its O(TP) write cost and sync bubble become pure overhead.
+Async scheduling (v0.15.0) overlaps CPU scheduling of step N+1 with GPU execution of step N — because GPU forward takes ~10-20 ms while dispatch takes ~150-500 us, the scheduler can hide dispatch latency entirely behind GPU compute. Once dispatch is hidden, CG's faster-dispatch advantage disappears, and its O(TP) write cost and sync bubble become pure overhead with no compensating benefit.
+
+**The 10-15% Anyscale claim predates async scheduling** — back then `ray.remote()` overhead (~1-5 ms) was on the critical path; CG reduced it to ~300 us. Async scheduling zeroes out this advantage.
 
 ### Benchmark Data (PR #36836, Qwen3-8B, TP=4, L4 GPUs)
 
@@ -255,11 +257,9 @@ Async scheduling (v0.15.0) overlaps CPU scheduling of step N+1 with GPU executio
 | TTFT — time to first token (ms) | 117 | **86** | 119 |
 | TPOT — time per output token (ms) | **41** | 46 | **41** |
 
-**Why CG wins on TTFT (86 vs 117 ms)** *(code-path analysis — the 31 ms delta is observed from the benchmark; the attribution below is inference from tracing the code, not a profiled measurement)*: MultiprocExecutor with async scheduling uses `step_with_batch_queue()` (`core.py:419`). With `batch_queue_size=2`, after dispatching batch 0, the engine checks "is the queue full?" and "is the oldest future done?" at `core.py:478-479`, then returns to try scheduling another batch. With nothing to schedule, it falls through to `core.py:492` and blocks on `future.result()`. That extra scheduling cycle adds latency before the first token. Ray CG uses the simpler `step()` (`core.py:378`) because `max_concurrent_batches=1` for this TP-only config — straight from schedule → dispatch → block on GPU → emit token.
+**Why CG wins on TTFT (86 vs 117 ms)** *(code-path inference, not profiled)*: MultiprocExecutor with async scheduling uses `step_with_batch_queue()` (`core.py:419`). After dispatching batch 0, the engine checks queue state at `core.py:478-479`, finds nothing to schedule, then falls through to `core.py:492` and blocks on `future.result()`. That extra scheduling cycle adds latency before the first token. CG uses the simpler synchronous `step()` (`core.py:378`) — `max_concurrent_batches=1` for this TP-only config — so the path is schedule → dispatch → block on GPU → emit token, with no queue overhead.
 
-**Why CG loses on TPOT (46 vs 41 ms)** *(same caveat)*: In steady-state decode, async scheduling's batch queue pays off. MultiprocExecutor dispatches batch N (~150 us SHM write, fire-and-forget), immediately schedules batch N+1, and only blocks when the queue is full or GPU finishes. CG's `step()` is fully synchronous: schedule → CG dispatch (~500 us O(TP) blocking writes) → wait for GPU → process → repeat.
-
-**The 10-15% Anyscale claim predates async scheduling** — back then `ray.remote()` overhead (~1-5 ms) was on the critical path; CG reduced it to ~300 us. Async scheduling zeroes out this advantage.
+**Why CG loses on TPOT (46 vs 41 ms)** *(same caveat)*: In steady-state decode, async scheduling's batch queue pays off because MultiprocExecutor dispatches batch N (~150 us SHM write, fire-and-forget) and immediately schedules batch N+1 while the GPU runs. CG's `step()` is fully synchronous — schedule → CG dispatch (~500 us O(TP) blocking writes) → wait for GPU → repeat — so the O(TP) write cost lands on the critical path every step.
 
 ### Edge Cases Where Async Scheduling Fails to Hide Dispatch
 
@@ -267,14 +267,14 @@ Async scheduling (v0.15.0) overlaps CPU scheduling of step N+1 with GPU executio
 
 - **PP=1 without async scheduling config**: `max_concurrent_batches` returns 1 (`multiproc_executor.py:468-472`), so `batch_queue` is `None` (`core.py:187-189`). Engine uses `step()` — fully synchronous. Every step pays dispatch latency (~150 us) on the critical path.
 - **Cold start (first batch)**: Even with `batch_queue_size=2`, the first batch has nothing to overlap with. Dispatch latency (~150 us MQ, ~500 us CG) is fully exposed for the first step.
-- **Very short decode steps**: With a tiny model where GPU forward takes <1 ms, `batch_queue[-1][0].done()` at `core.py:479` returns `True` before the engine finishes scheduling the next batch — the overlap window closes. Every step becomes effectively synchronous.
+- **Very short decode steps**: With a tiny model where GPU forward takes <1 ms, `batch_queue[-1][0].done()` at `core.py:479` returns `True` before the engine finishes scheduling the next batch — the overlap window closes and every step becomes effectively synchronous.
 
 ### RFC #35848: Removal Is Sound
 
 PR #36836 (RayExecutorV2 inheriting MultiprocExecutor) is open with maintainer LGTM:
 
-- **Throughput parity**: 1193 vs 1193 tok/s
-- **PP routing exists**: `gpu_worker.isend/irecv_tensor_dict` (`gpu_worker.py:807-848`) — same NCCL
+- **Throughput parity**: 1193 vs 1193 tok/s — no regression
+- **PP routing exists**: `gpu_worker.isend/irecv_tensor_dict` (`gpu_worker.py:807-848`) uses the same NCCL, so no data-plane capability is lost
 - **Cross-node works**: MessageQueue ZMQ TCP path (`shm_broadcast.py:409-426`) already handles remote workers; ZMQ PUB/SUB is fire-and-forget (likely faster than CG's synchronous channel writes)
 - **Nothing lost**: `overlap_comm` disabled by default (`envs.py:58`); CG background thread unnecessary
 - **Risk**: No cross-node PP benchmarks in PR #36836 (only TP=4 single-node on L4 GPUs). Multi-node PP regression is theoretically unlikely (same NCCL, faster dispatch) but unproven.
