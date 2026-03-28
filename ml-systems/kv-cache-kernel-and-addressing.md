@@ -2,7 +2,7 @@
 
 #ml-systems #inference #triton
 
-**Prerequisites**: [[ml-systems/kv-cache-internals]] (6-D tensor layout, block table, slot addressing), [[ml-systems/gpu-memory-hierarchy]] (why CPU pre-computation avoids GPU division cost), [[ml-systems/attention-mechanics]] (prefill vs decode attention paths).
+**Prerequisites**: [[ml-systems/kv-cache-internals]] (6-D tensor layout, block table, slot addressing), [[ml-systems/gpu-memory-hierarchy]] (why CPU pre-computation avoids GPU division cost), [[ml-systems/attention-mechanics]] (prefill vs decode attention paths), [[ml-systems/gpu-kernel-stack]] (Triton DSL, thread block model, tl.program_id semantics).
 
 ## Core Intuition
 
