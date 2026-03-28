@@ -2,6 +2,10 @@
 
 #ml-systems #inference #interview-prep
 
+**Scope**: nano-vLLM's KV cache implementation — tensor layout, VRAM sizing, per-layer view assignment, and the Triton write kernel. For the attention math that motivates the cache, see [[ml-systems/attention-mechanics]]; for the BlockManager and PagedAttention abstraction, see [[ml-systems/llm-inference-engines]].
+
+**Prerequisites**: [[ml-systems/attention-mechanics]] (Q/K/V projections, prefill vs. decode), [[ml-systems/gpu-memory-hierarchy]] (VRAM hierarchy, warp coalescing), [[ml-systems/transformer-model-internals]] (decoder layer structure).
+
 ## TL;DR
 
 **Problem**: autoregressive generation recomputes K and V for every prior token at every step — O(N²) total compute. **Fix**: store each token's K and V the first time they're computed and reuse them. nano-vLLM allocates the cache as a single 6-D tensor `[2, layers, blocks, block_size, kv_heads, head_dim]`, sized by running a warmup forward pass and measuring remaining VRAM. Each Attention module receives a **view** (not copy) of its layer's slice. A **Triton** kernel (Triton: a GPU programming language that compiles Python-like code to GPU machine code, OpenAI 2021) writes new K/V vectors into the cache using **flat 1D addressing**: each token is pre-assigned a physical slot index (`slot_mapping`) by the CPU, and the kernel writes directly to `slot * D` in the flat array — no block/position math on the GPU. The **BlockManager** is the CPU-side component that tracks which 256-token blocks are free or in use and pre-computes `slot_mapping` before each kernel launch.
@@ -53,9 +57,9 @@ self.kv_cache = torch.empty(
 # >>> t.numel() * 2 / 1024**3
 # 33.3837890625
 # >>> t[0, 0].numel()          # one layer's K slice
-# 319946752
+# 319946752  (= 2441 * 256 * 8 * 64)
 # >>> t[0, 0].numel() * 2 / 1024**2
-# 610.3515625
+# 610.3515625  # MiB per layer K-slice
 ```
 
 The `block_size=256` is the BlockManager's allocation granularity: a new block is assigned every 256 tokens. **Prefix-caching** (reusing cached K/V blocks for repeated prompt prefixes across requests) hashes and commits a block only when full, so a partial block is never reused.
@@ -169,12 +173,10 @@ if k_cache.numel() and v_cache.numel():
 # After allocation (Qwen3-0.6B, 2441 blocks):
 # >>> module.k_cache.numel()   # shape [2441, 256, 8, 64]
 # 319946752   ← truthy, cache writes proceed
-# Derivation: 2441 * 256 * 8 * 64
-#           = 2441 * 131072
-#           = 319,946,752
+# 319946752  (= 2441 * 256 * 8 * 64)
 ```
 
-`numel()` = number of elements. During warmup the cache is unallocated — writing to an empty tensor would crash. After allocation, `numel()` returns 319,946,752 (truthy) and writes proceed.
+`numel()` = number of elements. During warmup the cache is unallocated — writing to an empty tensor would crash. After allocation, `numel()` returns 319,946,752 (truthy) and writes proceed. Derivation: `2441 × 256 × 8 × 64 = 319,946,752`.
 
 ---
 
@@ -284,8 +286,8 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-gr
 - [[ml-systems/prefix-caching]] — hash-based block reuse, when block_tables is set during prefill
 - [[ml-systems/transformer-model-internals]] — where KV cache fits in the decoder layer data flow
 - [[ml-systems/vllm-distributed-groups]] — full startup lifecycle showing when cache is allocated relative to group rebuild
-- [[ml-systems/flashinfer-vllm-integration]]
-- [[ml-systems/prefix-caching-hash-table-leak]]
-- [[ml-systems/cuda-graph-inference-optimization]]
-- [[ml-systems/gpu-kernel-stack]]
+- [[ml-systems/flashinfer-vllm-integration]] — alternative attention backend that also consumes slot_mapping and block_tables
+- [[ml-systems/prefix-caching-hash-table-leak]] — block reuse bug rooted in BlockManager hash-table lifecycle
+- [[ml-systems/cuda-graph-inference-optimization]] — how static slot_mapping tensors interact with CUDA graph capture
+- [[ml-systems/gpu-kernel-stack]] — PTX/Triton compilation pipeline that produces the store_kvcache kernel
 - [[ml-systems/kv-cache-kernel-and-addressing]] — Triton kernel that writes K/V vectors using flat 1D slot addressing pre-computed by the CPU scheduler
