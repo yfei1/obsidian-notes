@@ -182,7 +182,9 @@ if k_cache.numel() and v_cache.numel():
 
 ### Why flat 1D addressing
 
-The GPU kernel needs to write each new K/V vector to the correct location in the cache tensor. The naive approach — computing block number and intra-block offset on the GPU — requires integer division and modulo per thread, which serializes warp execution. Instead, the **BlockManager** (CPU-side) pre-computes **`slot_mapping`** — a per-token integer giving each token's physical slot index in the flat cache array — before the kernel launches. The GPU then executes a single multiply-and-store: `offset = slot * D`. No branching, no division on the GPU.
+The GPU kernel must write each new K/V vector to the correct slot in the cache tensor. The naive approach — computing `block_number = slot // block_size` and `intra_block_offset = slot % block_size` on the GPU — requires integer division and modulo per thread. Because all threads in a **warp** (32 threads executing in lockstep) must execute the same instruction, a branch or division that varies per-thread serializes the warp, stalling the other 31 threads until the slowest finishes.
+
+Flat 1D addressing eliminates this: the **BlockManager** (CPU-side) pre-computes **`slot_mapping`** — a per-token integer giving each token's physical slot index in the flat cache array — before the kernel launches. The GPU then executes a single multiply-and-store: `offset = slot * D`. One instruction, no branching, no division.
 
 **Triton** (a GPU programming language that compiles Python-like code to PTX) expresses this write without CUDA boilerplate. The `store_kvcache` Triton kernel dispatches one CUDA thread block (a group of threads executing in parallel on the GPU) per token. Each thread block reads **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector) from the new K or V and writes them to `slot * D` in the flat array, where `D = 512`.
 
@@ -190,10 +192,10 @@ For a 5-token prefill with `slot_mapping = [10752, 10753, 10754, 10755, 10756]`,
 
 ### Prefill vs. decode cache usage
 
-The two generation phases use the cache differently because their attention inputs differ:
+The two phases differ because of what tokens are available as attention inputs:
 
-- **Prefill**: all N input tokens are present simultaneously, so attention reads from the local Q/K/V tensors computed in the same forward pass. Cache writes are a side effect — storing K/V for future decode steps.
-- **Decode**: only 1 new token is projected each step. The kernel writes that token's K/V to the cache, then `flash_attn_with_kvcache` reads all prior history from the cache via **`block_tables`** — a per-sequence lookup table mapping logical block index → physical block number in the cache tensor — to attend over the full context.
+- **Prefill**: all N input tokens are projected together in one forward pass, so the full K and V matrices are already in SRAM. Attention reads from those local tensors — going through the cache would be redundant. Cache writes happen as a side effect, storing K/V so decode steps can reuse them.
+- **Decode**: only 1 new token is projected per step, so local K/V covers only that token. To attend over the full prior context, `flash_attn_with_kvcache` reads all prior K/V from the cache via **`block_tables`** — a per-sequence lookup table mapping logical block index → physical block number in the cache tensor. Without the cache, decode would reproject all prior tokens every step — the O(N²) cost the cache eliminates.
 
 Full kernel code, `slot_mapping` computation, memory contiguity proof, and prefill/decode call-site details: [[ml-systems/kv-cache-kernel-and-addressing]].
 
