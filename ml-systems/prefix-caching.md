@@ -257,3 +257,4 @@ print(f'flops_ratio={ratio:.1f}x')
 - [[ml-systems/prefix-caching-hash-table-leak]] — deep dive into the unbounded-growth bug and correct fix patterns
 - [[ml-systems/vllm-executor-architecture]] — the executor drives the scheduler and BlockManager that prefix caching hooks into
 - [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture must account for the variable-length prefill path that prefix cache hits produce
+- [[ml-systems/kv-cache-kernel-and-addressing]] — kernel-level handling of prefix cache hits: `slot == -1` skips the write; `block_tables` redirects prefill attention reads to cached K/V

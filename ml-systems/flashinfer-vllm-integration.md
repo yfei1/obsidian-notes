@@ -316,3 +316,4 @@ assert total_mb == 768
 - [[ml-systems/kv-cache-kernel-and-addressing]]
 - [[ml-systems/prefix-caching]]
 - [[ml-systems/cuda-graph-inference-optimization]] — FlashInfer attention kernels are captured inside CUDA graphs during decode; the static tensor shapes required for graph capture constrain how FlashInfer receives sequence metadata
+- [[ml-systems/kv-cache-kernel-and-addressing]] — nano-vLLM baseline kernel (`flash_attn_with_kvcache`) that FlashInfer replaces in production

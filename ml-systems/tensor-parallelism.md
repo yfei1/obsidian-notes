@@ -294,3 +294,4 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/vllm-weight-loading]] — how ColumnParallelLinear / RowParallelLinear attach weight_loader callables that slice tensors per TP rank at load time
 - [[ml-systems/parallelism-strategies]] — full parallelism taxonomy: DP, TP, SP, PP, EP, CP and how they compose
 - [[ml-systems/ray-compiled-graph-in-vllm]] — TP allreduce/allgather within model layers runs through torch.distributed NCCL independently of Ray CG dispatch channels; CG only handles SchedulerOutput broadcast
+- [[ml-systems/kv-cache-kernel-and-addressing]] — KV head sharding in TP means each GPU's cache slice holds only its local head partition; slot addressing operates on that local view

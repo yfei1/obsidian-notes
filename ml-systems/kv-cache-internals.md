@@ -288,3 +288,4 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-gr
 - [[ml-systems/prefix-caching-hash-table-leak]]
 - [[ml-systems/cuda-graph-inference-optimization]]
 - [[ml-systems/gpu-kernel-stack]]
+- [[ml-systems/kv-cache-kernel-and-addressing]] — Triton kernel that writes K/V vectors using flat 1D slot addressing pre-computed by the CPU scheduler

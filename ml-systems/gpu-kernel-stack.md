@@ -202,3 +202,4 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 - [[ml-systems/kv-cache-kernel-and-addressing]] — worked example of a Triton kernel (`store_kvcache_kernel`) using flat 1D slot addressing to write K/V vectors into the cache with zero GPU-side division
 - [[ml-systems/pytorch-module-hooks]] — `torch.compile` fuses small ops into fewer GPU kernels; graph breaks in hook code defeat this optimization
 - [[ml-systems/pytorch-module-hooks]] — `torch.compile` kernel fusion decisions are the mechanism behind the compile-overhead vs. fusion-gain trade-off illustrated in the hooks note
+- [[ml-systems/kv-cache-kernel-and-addressing]] — worked example of a custom Triton kernel (`store_kvcache_kernel`) showing `tl.program_id`, `tl.load`, and `tl.store` in a real inference context

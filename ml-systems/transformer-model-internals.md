@@ -405,3 +405,4 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/pytorch-module-hooks]] — hooks attach to the `nn.Module` hierarchy described here; `__call__` dispatch chain determines when they fire
 - [[ml-systems/cuda-graph-inference-optimization]] — transformer layer kernels (linear, MLP, attention) are recorded into CUDA graphs during decode to eliminate Python dispatch overhead
 - [[ml-systems/pytorch-module-hooks]] — hooks attach to the `nn.Module` hierarchy that transformer layers are built from; the `__call__` dispatch pattern applies at every layer
+- [[ml-systems/kv-cache-kernel-and-addressing]] — kernel-level implementation of the KV cache write that occurs at each transformer layer during prefill and decode
