@@ -282,7 +282,9 @@ Global NoPE appears at odd segments, layer 3 (segments 1, 3, 5, 7, 9, 11).
 
 ## Peeking at Shapes Without Downloading Weights
 
-Safetensors stores a JSON header at the start of each file containing tensor names, shapes, dtypes, and byte offsets — weight bytes follow the header. The header is a few KB regardless of model size, so an HTTP range request (fetching only bytes 0 through header_end) retrieves the full metadata without downloading any weight data.
+Safetensors uses a **header-first layout**: the first 8 bytes store the header length as a little-endian uint64, followed immediately by a JSON header containing every tensor's name, shape, dtype, and byte offset. Weight bytes follow after. Because the header is a few KB regardless of model size, fetching only `bytes=0` through `header_end` via an HTTP range request returns the full metadata — no weight data transferred.
+
+This matters for debugging the transpose logic and dim-0 heuristic: verify actual storage shapes against the checkpoint before trusting documentation.
 
 ### Local file
 
@@ -301,7 +303,7 @@ for name, info in header.items():
 ### Remote S3 (range request — no full download)
 
 ```python
-# Fetch only the header bytes
+# Two requests: first 8 bytes → header length; then header bytes → metadata
 resp = client.get_object(Bucket=bucket, Key=key, Range="bytes=0-7")
 header_size = struct.unpack("<Q", resp["Body"].read())[0]
 resp = client.get_object(Bucket=bucket, Key=key, Range=f"bytes=8-{8 + header_size - 1}")
@@ -310,9 +312,9 @@ header = json.loads(resp["Body"].read())
 
 ### What the index JSON does NOT have
 
-`model.safetensors.index.json` maps tensor names → shard files but omits shapes. Read the shard header directly for shapes.
+`model.safetensors.index.json` maps tensor names → shard files but omits shapes — it exists only for routing, not inspection. Read each shard's header directly for shapes.
 
-The shard header is the source of truth for storage convention (e.g. `[in, out]` vs `[out, in]`) — validate the code's transpose logic against it, not against documentation. See `scripts/peek_safetensor_shapes.py` for a complete utility.
+The shard header is the source of truth for storage convention (e.g. `[in, out]` vs `[out, in]`) — validate transpose logic against it, not against documentation. See `scripts/peek_safetensor_shapes.py` for a complete utility.
 
 ---
 
