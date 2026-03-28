@@ -88,7 +88,7 @@ for i in range(seq.num_cached_blocks, seq.num_blocks):     # blocks 0–31 (all 
     # compute slot_mapping for every block
 ```
 
-The attention kernel receives two length parameters: `cu_seqlens_q` (cumulative query-sequence length — how many tokens are being *computed* this step) and `cu_seqlens_k` (cumulative key-sequence length — how many tokens the keys span, including any cached prefix). Here `cu_seqlens_q == cu_seqlens_k == 512` — every token is computed fresh, so the kernel operates *in-place* (Q, K, V are written and read within the same contiguous allocation, with no reference to external blocks). A `block_table` (a per-sequence array mapping logical block indices to physical GPU block IDs) is only passed to the kernel when cached blocks must be read; for a cold request there are none, so no `block_table` is passed. GPU computes 512 × 512 attention, writing 32 × 2 MB = 64 MB of KV data into the 32 allocated blocks.
+The attention kernel receives two length parameters: `cu_seqlens_q` (cumulative query-sequence length — how many tokens are being *computed* this step) and `cu_seqlens_k` (cumulative key-sequence length — how many tokens the keys span, including any cached prefix). Here both equal 512 — every token is computed fresh. When `cu_seqlens_q == cu_seqlens_k`, the kernel operates *in-place*: Q, K, and V are written and read within the same contiguous allocation, with no reference to external blocks. In-place execution requires no `block_table` (a per-sequence array mapping logical block indices to physical GPU block IDs), because there are no cached blocks to look up — all K/V is produced fresh in this pass. GPU computes 512 × 512 attention, writing 32 × 2 MB = 64 MB of KV data into the 32 allocated blocks.
 
 ---
 
