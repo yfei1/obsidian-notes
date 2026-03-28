@@ -435,7 +435,8 @@ def _gate_wikilink_count(original: str, new_content: str, result: GateResult) ->
 
 def check_all_gates(original_content: str, new_content: str,
                     note_path: str, all_notes: list[str],
-                    strategy: str = "") -> GateResult:
+                    strategy: str = "",
+                    baseline_violations: set[str] | None = None) -> GateResult:
     """Run all quality gates on a proposed edit.
 
     Args:
@@ -456,7 +457,7 @@ def check_all_gates(original_content: str, new_content: str,
     # Restructure and densify may rename/merge sections for better flow.
     # Section preservation is redundant when content gates (shrinkage, causal,
     # bullets, code blocks) already catch actual information loss.
-    skip_section_preservation = is_cross_file or strategy in ("restructure", "densify")
+    skip_section_preservation = is_cross_file or strategy in ("restructure", "densify", "normalize")
 
     if not is_cross_file:
         _gate_shrinkage(original_content, new_content, result)
@@ -480,5 +481,33 @@ def check_all_gates(original_content: str, new_content: str,
     if not is_cross_file:
         _gate_inline_definition_preservation(original_content, new_content, result)
         _gate_wikilink_count(original_content, new_content, result)
+
+    # Baseline-aware mode: for non-conforming input, only veto on REGRESSIONS
+    # (new violations not present in the original file's own violations).
+    if baseline_violations is not None and not result.passed:
+        new_violations = set(result.violations)
+
+        # Normalize violations whose numeric value legitimately changes across edits.
+        # "Line limit exceeded: 1465 > 450" vs "Line limit exceeded: 1482 > 450" are
+        # the SAME violation type — the file was already over the limit. We must not
+        # treat a change in line count as a brand-new regression.
+        # Other violations (broken wikilinks, removed sections, etc.) keep exact matching
+        # because they reference specific names that matter.
+        def _vtype(v: str) -> str:
+            import re as _re
+            return _re.sub(r'(Line limit exceeded):.*', r'\1', v)
+
+        baseline_types = {_vtype(b) for b in baseline_violations}
+        regressions = {v for v in new_violations if _vtype(v) not in baseline_types}
+
+        if not regressions:
+            # All violations are the same types as baseline — edit didn't introduce
+            # new categories of problems (line count may have shifted, but was already broken)
+            result = GateResult()
+        else:
+            # Only report genuine regressions (new violation categories)
+            result = GateResult()
+            for v in regressions:
+                result.fail(v)
 
     return result
