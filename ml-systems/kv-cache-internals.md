@@ -180,9 +180,20 @@ if k_cache.numel() and v_cache.numel():
 
 ## Triton Kernel and Cache Read/Write
 
-Triton (a GPU programming language that compiles Python-like code to PTX) lets the kernel express the write pattern without CUDA boilerplate. The `store_kvcache` Triton kernel uses **flat 1D addressing** driven by `slot_mapping` — a per-token integer pre-computed by the CPU, giving each token a physical slot index in the flat cache array. Each CUDA thread block (a group of threads executing in parallel on the GPU) handles one token: it reads **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector) from the new K or V and writes them to `slot * D` in the flat array, where `D = 512`. For a 5-token prefill, the kernel dispatches 5 thread blocks writing to offsets `{10752×512, 10753×512, 10754×512, 10755×512, 10756×512}` — each a contiguous 512-element write of **1,024 bytes** (512 elements × 2 bytes/fp16). The 5-token prefill writes `5 × 1,024 = 5,120 bytes` of K vectors (and identically 5,120 bytes of V vectors) per layer, across all 28 layers: `28 × 2 × 5,120 = 286,720 bytes = 280 KiB` total cache writes per prefill. No block or position math runs on the GPU — the CPU already resolved the mapping.
+### Why flat 1D addressing
 
-Prefill writes all N tokens to the cache as a side effect, but attention during prefill reads from the local Q/K/V tensors computed in the same forward pass, not from the cache. Decode writes 1 new token to the cache, then reads all prior token history from the cache via **`block_tables`** — a per-sequence lookup table mapping logical block index → physical block number in the cache tensor — to attend over the full context.
+The GPU kernel needs to write each new K/V vector to the correct location in the cache tensor. The naive approach — computing block number and intra-block offset on the GPU — requires integer division and modulo per thread, which serializes warp execution. Instead, the **BlockManager** (CPU-side) pre-computes **`slot_mapping`** — a per-token integer giving each token's physical slot index in the flat cache array — before the kernel launches. The GPU then executes a single multiply-and-store: `offset = slot * D`. No branching, no division on the GPU.
+
+**Triton** (a GPU programming language that compiles Python-like code to PTX) expresses this write without CUDA boilerplate. The `store_kvcache` Triton kernel dispatches one CUDA thread block (a group of threads executing in parallel on the GPU) per token. Each thread block reads **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector) from the new K or V and writes them to `slot * D` in the flat array, where `D = 512`.
+
+For a 5-token prefill with `slot_mapping = [10752, 10753, 10754, 10755, 10756]`, the kernel dispatches 5 thread blocks writing to offsets `{10752×512, …, 10756×512}` — each a contiguous 512-element write of **1,024 bytes** (512 elements × 2 bytes/fp16). Across all 28 layers, the 5-token prefill writes `28 × 2 × 5 × 1,024 = 286,720 bytes = 280 KiB` total.
+
+### Prefill vs. decode cache usage
+
+The two generation phases use the cache differently because their attention inputs differ:
+
+- **Prefill**: all N input tokens are present simultaneously, so attention reads from the local Q/K/V tensors computed in the same forward pass. Cache writes are a side effect — storing K/V for future decode steps.
+- **Decode**: only 1 new token is projected each step. The kernel writes that token's K/V to the cache, then `flash_attn_with_kvcache` reads all prior history from the cache via **`block_tables`** — a per-sequence lookup table mapping logical block index → physical block number in the cache tensor — to attend over the full context.
 
 Full kernel code, `slot_mapping` computation, memory contiguity proof, and prefill/decode call-site details: [[ml-systems/kv-cache-kernel-and-addressing]].
 
