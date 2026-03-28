@@ -12,7 +12,7 @@
 
 ## Core Intuition
 
-**`hash_to_block_id` is written on every allocation but never cleaned on deallocation — because the free-list design gives `deallocate()` no way to know which hash entries point to a given block.** When block 0 is recycled for new content, the old entry `{H1: 0}` persists: the map grows by one entry per unique prefix, forever. The entries are harmless (a content check in `allocate()` catches stale hits) but the map never shrinks, accumulating ~16 bytes per unique prefix seen over the process lifetime.
+**`hash_to_block_id` is written on every allocation but never cleaned on deallocation — because the free-list design (blocks are returned to an unordered pool of available IDs; `deallocate()` has no record of which hash entries point to a given block) gives `deallocate()` no way to trigger cleanup.** When block 0 is recycled for new content, the old entry `{H1: 0}` persists: the map grows by one entry per unique prefix, forever. The entries are harmless (a content check in `allocate()` catches stale hits) but the map never shrinks, accumulating ~16 bytes per unique prefix seen over the process lifetime.
 
 ---
 
