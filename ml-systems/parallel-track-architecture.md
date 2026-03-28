@@ -345,3 +345,4 @@ All assertions passed.
 - [[ml-systems/llm-inference-engines]] — how the serving engine orchestrates PT at runtime
 - [[ml-systems/attention-mechanics]] — multi-head attention; PT reduces heads-per-track, trading per-track capacity for fewer syncs
 - [[ml-systems/kv-cache-internals]]
+- [[ml-systems/cuda-graph-inference-optimization]] — CUDA graphs apply only to the decode track; prefill's variable sequence lengths make static graph capture impractical

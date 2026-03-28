@@ -132,3 +132,6 @@ See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of p
 - [[ml-systems/flashinfer-vllm-integration]] — FlashInfer attention kernels execute inside the recorded CUDA graph during decode
 - [[ml-systems/vllm-executor-architecture]] — the executor drives the decode loop that calls `graph.replay()` each step
 - [[ml-systems/prefix-caching]] — prefix cache hits produce variable-length prefill paths that constrain CUDA graph capture
+- [[ml-systems/vllm-model-integration]] — model integration layer wires the forward pass that gets recorded into the CUDA graph
+- [[ml-systems/parallel-track-architecture]] — parallel prefill/decode tracks determine which execution paths are CUDA-graph-eligible
+- [[ml-systems/transformer-model-internals]] — the transformer layers (linear, MLP, attention) whose kernels are recorded in the graph
