@@ -126,11 +126,11 @@ Split + reshape:
   v = qkv[:, 1536:2048]  → reshape →  [5,  8, 64]     ← 8 KV heads
 ```
 
-Q is 2× the size of K or V because GQA (Grouped-Query Attention; explained in detail below) uses 16 Q heads but only 8 KV heads.
+Q is 2× the size of K or V because GQA (Grouped-Query Attention — 16 Q heads share 8 KV heads; see below) halves the KV projection width.
 
 ### ② Per-Head RMSNorm + RoPE
 
-RMSNorm (Root Mean Square Normalization — normalizes a vector by dividing by its RMS magnitude, without centering; see [[ml-systems/norms-and-regularization]]) is applied per-head to Q and K before the dot product.
+RMSNorm (Root Mean Square Normalization — divides each vector by its RMS magnitude, no centering; see [[ml-systems/norms-and-regularization]]) is applied per-head to Q and K before the dot product.
 
 ```
 q_norm(q)                              [5, 16, 64] → [5, 16, 64]   (shape unchanged)
@@ -141,7 +141,7 @@ RoPE(q, k, positions)                  shapes unchanged; rotates each dim pair b
   k                                    [5,  8, 64] → [5,  8, 64]
 ```
 
-V is not normalized (its magnitude carries useful semantic information) and not rotated (position only affects "who attends to whom," not "what information is transmitted"). See [[ml-systems/rotary-position-embedding]] for the full derivation.
+V is not normalized because its magnitude carries semantic signal, not routing decisions. V is not rotated because position only affects which tokens attend to which, not what content is transmitted. See [[ml-systems/rotary-position-embedding]] for the full derivation.
 
 ### ③ GQA Expansion + Dot Product
 
@@ -154,7 +154,7 @@ Q heads [4, 5]  → KV head 2        Q heads [12, 13] → KV head 6
 Q heads [6, 7]  → KV head 3        Q heads [14, 15] → KV head 7
 ```
 
-Flash Attention (a memory-efficient fused kernel for attention; see [[ml-systems/gpu-memory-hierarchy]]) handles this grouping internally. K is expanded (repeated) so each Q head has a matching K:
+Flash Attention (a fused kernel that tiles Q/K/V through SRAM to avoid materializing the full [N,N] score matrix in HBM; see [[ml-systems/gpu-memory-hierarchy]]) handles GQA grouping internally. K is repeated so each Q head has a matching K:
 
 ```
 Q  (as batch of heads)                 [16, 5, 64]
@@ -237,7 +237,7 @@ output            [5, 1024]
 - **Q (Query)**: a token's search signal — "I need the subject noun"
 - **V (Value)**: a token's information payload — the actual content transmitted when selected
 
-K and V are decoupled because a token needs two independent degrees of freedom: *why it gets selected* (K) and *what it contributes when selected* (V). Consider a verb: its syntactic role ("I am past tense") is what causes other tokens to attend to it, but the semantic content it transmits (its meaning) is separate. Setting K=V collapses these — the same vector must serve as both the selection criterion and the information payload, so the model cannot independently optimize what makes a token findable versus what it communicates.
+K and V are decoupled because a token needs two independent degrees of freedom: *why it gets selected* (K) and *what it contributes when selected* (V). A verb's syntactic role ("I am past tense") determines which tokens attend to it; the semantic content it transmits is separate. K=V collapses these — the same vector must serve as both selection criterion and information payload, so the model cannot independently optimize findability versus content.
 
 ---
 
@@ -253,7 +253,7 @@ Head  2: "where is the closest adjective?"
 Head 15: "where is the opening bracket?"
 ```
 
-Each head independently finds different relevant tokens because each head has its own learned Q, K, V projection weights. The concatenated `[N, 16×64]` output passes through `o_proj` ([1024, 1024]) to mix perspectives across heads — without `o_proj`, each head's output adds independently to the residual stream with no cross-head coordination, wasting the diversity the multiple heads provide.
+Each head finds different relevant tokens because each has its own learned Q, K, V projection weights. The concatenated `[N, 16×64]` output passes through `o_proj` ([1024, 1024]) to mix perspectives across heads — without `o_proj`, each head's output adds independently to the residual stream with no cross-head coordination, discarding the diversity multiple heads provide.
 
 ---
 
@@ -285,7 +285,7 @@ assert mha_bytes // 1024**2 == 448   # 448 MB
 assert gqa_bytes // 1024**2 == 224   # 224 MB
 -->
 
-GQA halves cache without the quality regression MQA introduces by collapsing all Q heads to one shared key set.
+GQA halves KV cache versus MHA without the quality regression MQA introduces by collapsing all Q heads to one shared key set.
 
 ---
 
@@ -305,7 +305,7 @@ if context.is_prefill:
         softmax_scale=1/sqrt(64), causal=True)
 ```
 
-All N tokens' Q, K, V are available simultaneously; compute scales O(N²·d_k) → **compute-bound**. The `varlen` suffix packs variable-length sequences into one flat tensor without padding — rather than zero-padding all sequences to the longest one (which wastes compute on the padded positions), it stores sequences back-to-back and uses `cu_seqlens` offsets to tell the kernel where each sequence starts. This enables **continuous batching** (serving requests of different lengths together in one kernel call, adding new requests as old ones finish) without padding overhead.
+All N tokens' Q, K, V are available simultaneously; compute scales O(N²·d_k) → **compute-bound**. The `varlen` suffix packs variable-length sequences into one flat tensor: sequences are stored back-to-back and `cu_seqlens` offsets tell the kernel where each starts. Zero-padding to the longest sequence wastes compute on padded positions; packing eliminates that waste and enables **continuous batching** (mixing requests of different lengths in one kernel call, adding new requests as old ones finish).
 
 ### Decode — Generate One Token at a Time (Memory-Bound)
 
@@ -352,15 +352,15 @@ def store_kvcache_kernel(key_ptr, ..., slot_mapping_ptr, D):
     tl.store(v_cache_ptr + slot * D, value)
 ```
 
-`slot_mapping` is pre-computed by the CPU scheduler before the kernel launches, so the GPU does zero address arithmetic — just `cache[slot] = kv`. CPU-side precomputation avoids the alternative: GPU threads racing to a shared allocator would block on locks, serializing writes and stalling the entire kernel to memory-allocator throughput (~single-digit GB/s) rather than HBM bandwidth (~2TB/s on H100). See [[ml-systems/llm-inference-engines]] for paged allocation and [[ml-systems/gpu-memory-hierarchy]] for why addresses are CPU-side.
+`slot_mapping` is pre-computed by the CPU scheduler before the kernel launches, so the GPU does zero address arithmetic — just `cache[slot] = kv`. CPU-side precomputation avoids GPU threads racing a shared allocator: lock contention would serialize writes to memory-allocator throughput (~single-digit GB/s) instead of HBM bandwidth (~2 TB/s on H100). See [[ml-systems/llm-inference-engines]] for paged allocation and [[ml-systems/gpu-memory-hierarchy]] for the memory hierarchy that makes this tradeoff necessary.
 
 ---
 
 ## Tensor Parallelism for Attention
 
-**Why attention is TP-friendly**: each head's score matrix depends only on that head's own Q and K — head 3 never reads head 12's projections. Cross-head interaction happens only at o_proj, where outputs are concatenated and mixed. This independence means heads can be split across GPUs with zero communication during the attention computation itself, and only 1 all_reduce (at o_proj) per attention block.
+**Why attention is TP-friendly**: each head's score matrix depends only on that head's own Q and K — head 3 never reads head 12's projections. Cross-head interaction happens only at o_proj, where outputs are concatenated and mixed. Heads therefore split across GPUs with zero communication during attention itself, requiring only 1 all_reduce (at o_proj) per attention block.
 
-This maps directly to the Column→Row sharding pattern: ColumnParallel (each GPU takes a column slice of the weight matrix, no communication needed) for QKV projection, RowParallel + all_reduce (a collective that sums partial results across GPUs) for o_proj. With `tp_size=2`:
+This follows the Column→Row sharding pattern: ColumnParallel (each GPU takes a column slice of the weight matrix, no communication needed) for QKV projection, RowParallel + all_reduce (a collective that sums partial results across GPUs) for o_proj. With `tp_size=2`:
 
 **QKVParallelLinear** (ColumnParallel — each GPU computes a disjoint head slice, no inter-GPU communication):
 
