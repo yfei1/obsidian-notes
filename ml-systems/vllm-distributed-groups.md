@@ -70,7 +70,7 @@ _PP  (PP dim=2 transposed to innermost):
 
 Scaling to the 32-GPU running example (TP=32, all others=1): `all_ranks` has shape `(1,1,1,1,32)`. `_TP` extracts `view(-1, 32)` → one group `[0..31]`. `_DP` extracts `transpose(1,4).view(-1,1)` → 32 singleton groups (DP=1, so each rank is its own DP group).
 
-Verification — total ranks equal world_size, reshape arithmetic, and post-rebuild group structure:
+Verification — total ranks equal world_size, reshape arithmetic, post-rebuild group structure, and KV-head corruption arithmetic:
 
 ```python
 # --- 4-GPU toy: verify TP and DP group extraction ---
@@ -142,6 +142,16 @@ assert rank_in_cross_track == 3  # PT-MoE uses this as track index
 gpus_per_node = 8
 local_rank_rank12 = rank % gpus_per_node
 assert local_rank_rank12 == 4
+
+# KV cache corruption: config TP=32 vs actual TP=4, 32 KV heads
+num_kv_heads = 32
+config_tp = 32
+actual_tp = 4
+heads_per_gpu_config = num_kv_heads // config_tp   # 1 (wrong: what KV cache is sized for)
+heads_per_gpu_actual = num_kv_heads // actual_tp   # 8 (correct: what attention writes)
+assert heads_per_gpu_config == 1
+assert heads_per_gpu_actual == 8
+assert heads_per_gpu_actual - heads_per_gpu_config == 7  # heads corrupted per layer
 ```
 
 ---
@@ -228,7 +238,7 @@ Returns a `GroupCoordinator` scoped to whichever group the current rank belongs 
 
 Groups can be destroyed and recreated after `initialize_model_parallel()` by calling `.destroy()` on the old coordinator and assigning a new one to the module-level global (e.g., `ps._TP`). PT-MoE uses this to narrow `_TP` from 32 GPUs to 4 GPUs per track. The rebuild must happen inside `model.__init__()` before any layers are constructed. `_PP` and `_DP` must never be rebuilt — they cross TP boundaries and their replacement severs the global communicator topology.
 
-After rebuild, `parallel_config.tensor_parallel_size` (32) and `get_tp_group().world_size` (4) diverge — this causes silent KV cache corruption when `num_kv_heads > gpus_per_track`, and a Pydantic copy pitfall can silently undo runtime head-count inflation.
+After rebuild, `parallel_config.tensor_parallel_size` (32) and `get_tp_group().world_size` (4) diverge — e.g., 32 KV heads: config says 32/32=1 head/GPU but actual TP=4 gives 32/4=8 heads/GPU, so KV cache is allocated for 1 head while attention writes 8, silently corrupting 7 heads per layer. A Pydantic copy pitfall can also silently undo runtime head-count inflation.
 
 Full details, safety table, worked arithmetic, and the Pydantic fix: [[ml-systems/vllm-process-group-rebuild]].
 
@@ -239,7 +249,7 @@ Full details, safety table, worked arithmetic, and the Pydantic fix: [[ml-system
 1. All six groups derive from one rank tensor (`ExternalDP × DP × PP × PCP × TP`) via transpose + reshape — same data, different views.
 2. `GroupCoordinator` holds live NCCL communicators. `.destroy()` before replacing — leaked communicators consume GPU memory and can deadlock collective operations.
 3. **When to rebuild `_TP`**: TP scope changes (PT-MoE: 32→4 GPUs per track), EP membership changes, or DCP must match a new TP size. Never rebuild PP or DP — they cross TP boundaries and their replacement severs the global communicator topology. Only rebuild inside `model.__init__()`, before any layers are constructed and before `determine_available_memory()` runs.
-4. After rebuilding `_TP`, `parallel_config.tensor_parallel_size` (32) and `get_tp_group().world_size` (4) diverge. Scheduler and executor read the config (safe). KV cache head calculation also reads the config (silent corruption when `num_kv_heads > gpus_per_track`).
+4. After rebuilding `_TP`, `parallel_config.tensor_parallel_size` (32) and `get_tp_group().world_size` (4) diverge. Scheduler and executor read the config (safe). KV cache head calculation also reads the config — with 32 KV heads, config-based allocation gives 1 head/GPU instead of the correct 8 heads/GPU, corrupting 7 heads per layer silently.
 5. `rank_in_group` (logical position within a group, computed from rank list) ≠ `local_rank` (physical GPU slot, set by torchrun). PT-MoE uses `rank_in_group` of the cross-track group as the track index.
 
 ---
