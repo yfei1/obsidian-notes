@@ -64,7 +64,7 @@ self.kv_cache = torch.empty(
 
 The `block_size=256` is the BlockManager's allocation granularity: a new block is assigned every 256 tokens. **Prefix-caching** (reusing cached K/V blocks for repeated prompt prefixes across requests) hashes and commits a block only when full, so a partial block is never reused.
 
-**FlashAttention** (a fused attention kernel that avoids materializing the full N×N score matrix in VRAM) requires `block_size % 256 == 0` for aligned **block-table** (per-sequence array mapping logical block index → physical block number) lookups. Misaligned entries break **coalesced memory access** — where threads in a **warp** (32 threads executing in lockstep) read consecutive addresses in one transaction — forcing each warp to issue multiple transactions instead of one.
+**FlashAttention** (a fused attention kernel that avoids materializing the full N×N score matrix in VRAM) uses a **block-table** (per-sequence array mapping logical block index → physical block number) to locate each token's cached K/V vectors. Block-table lookups require `block_size % 256 == 0` because misaligned block boundaries break **coalesced memory access** — where threads in a **warp** (32 threads executing in lockstep) read consecutive addresses in a single transaction — forcing each warp to issue multiple transactions instead of one.
 
 ---
 
@@ -176,7 +176,7 @@ if k_cache.numel() and v_cache.numel():
 # 319946752  (= 2441 * 256 * 8 * 64)
 ```
 
-`numel()` = number of elements. During warmup the cache is unallocated — writing to an empty tensor would crash. After allocation, `numel()` returns 319,946,752 (truthy) and writes proceed. Derivation: `2441 × 256 × 8 × 64 = 319,946,752`.
+`numel()` = number of elements in a tensor. During warmup the cache is unallocated — writing to an empty tensor would crash. After allocation, `numel()` returns 319,946,752 (truthy) and writes proceed. Derivation: `2441 × 256 × 8 × 64 = 319,946,752`.
 
 ---
 
@@ -197,7 +197,7 @@ For a 5-token prefill with `slot_mapping = [10752, 10753, 10754, 10755, 10756]`,
 The two phases differ because of how many tokens are available locally during the forward pass:
 
 - **Prefill**: all N prompt tokens are projected in one batched pass, so the full K and V matrices for the entire prompt exist in SRAM simultaneously. Attention reads from those local tensors directly — routing through the cache would add a round-trip to VRAM for data already on-chip. Cache *writes* still happen as a side effect: the Triton kernel stores every token's K/V into the cache so decode steps can read them back later.
-- **Decode**: only 1 new token is projected per step, so local K/V covers only that single token. Attending over the full prior context requires reading all previously stored K/V vectors from the cache. `flash_attn_with_kvcache` does this via **`block_tables`** — a per-sequence lookup table mapping logical block index → physical block number in the cache tensor — because tokens from the same sequence may occupy non-contiguous physical blocks (the BlockManager assigns blocks as they become available). Without the cache, decode would reproject all prior tokens every step, restoring the O(N²) total compute the cache was built to eliminate.
+- **Decode**: only 1 new token is projected per step, so local K/V covers only that single token. Attending over the full prior context requires reading all previously stored K/V vectors from the cache. `flash_attn_with_kvcache` (FlashAttention's decode-phase API that accepts a pre-built cache tensor instead of recomputed K/V) does this via **`block_tables`** — a per-sequence lookup table mapping logical block index → physical block number in the cache tensor — because tokens from the same sequence may occupy non-contiguous physical blocks (the BlockManager assigns blocks as they become available). Without the cache, decode would reproject all prior tokens every step, restoring the O(N²) total compute the cache was built to eliminate.
 
 Full kernel code, `slot_mapping` computation, memory contiguity proof, and prefill/decode call-site details: [[ml-systems/kv-cache-kernel-and-addressing]].
 
@@ -244,7 +244,7 @@ DECODE (generating token 7):
 
 3. **"How does the Triton kernel write to the cache?"** — Flat 1D addressing. `slot_mapping` (pre-computed by CPU) gives each token a physical slot index. The kernel computes `offset = slot * D` where `D = 8 × 64 = 512` and writes 512 elements (1,024 bytes at fp16) in one vectorized store. No block/position math on the GPU.
 
-4. **"Why does flat addressing work?"** — The per-layer cache slice is memory-contiguous (fixing leftmost dims of a row-major tensor preserves contiguity). The stride assertion `k_cache.stride(1) == D` verifies that consecutive token slots are exactly D floats apart.
+4. **"Why does flat addressing work?"** — The per-layer cache slice is memory-contiguous (fixing leftmost dims of a row-major tensor preserves contiguity). For the per-layer slice (shape `[2441, 256, 8, 64]`), `stride(1) == 8 × 64 == 512 == D`, confirming that consecutive token slots (dim 1) are exactly D floats apart in memory.
 
 5. **"How do prefill and decode differ in cache usage?"** — Prefill writes all N tokens to cache but reads from local tensors (cache write is a side effect for future decode). Decode writes 1 new token and reads ALL history from cache via block_tables + context_lens.
 
@@ -252,7 +252,7 @@ DECODE (generating token 7):
 
 ## How vLLM Sizes the KV Cache (num_kv_heads Data Flow)
 
-The KV cache shape depends on how many KV heads each GPU owns — not on the checkpoint config's `num_key_value_heads` directly. The gap: custom models (like PT-MoE, see [[ml-systems/pt-moe-vllm-implementation]]) may rebuild **tensor-parallel (TP) process groups** (see [[ml-systems/tensor-parallelism]]) — the set of GPUs jointly computing a single layer by splitting its weight matrices and attention heads across them — inside `model.__init__()`, *after* config is parsed. Because **TP degree** (number of GPUs sharing a layer) determines how many heads each GPU owns, the config value is stale by the time the cache is sized. Reading from live `Attention` layer objects instead guarantees the correct post-TP head count.
+The KV cache shape depends on how many KV heads each GPU owns — not on the checkpoint config's `num_key_value_heads` directly. The gap: custom models (like PT-MoE, see [[ml-systems/pt-moe-vllm-implementation]]) may rebuild **tensor-parallel (TP) process groups** (see [[ml-systems/tensor-parallelism]]) — the set of GPUs jointly computing a single layer by splitting its weight matrices and attention heads across them — inside `model.__init__()`, *after* config is parsed. Because **TP degree** (number of GPUs sharing a layer) determines how many heads each GPU owns, the `num_key_value_heads` config value is stale by the time the cache is sized. Reading from live `Attention` layer objects instead guarantees the correct post-TP head count.
 
 ```
 config.num_key_value_heads = N          (from checkpoint config.json)
