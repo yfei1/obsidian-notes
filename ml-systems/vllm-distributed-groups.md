@@ -340,3 +340,4 @@ Memory profiling and scheduling happen after model init, so they see correct sta
 - [[ml-systems/ray-compiled-graph-in-vllm]]
 - [[ml-systems/vllm-cg-investigation-findings]]
 - [[ml-systems/vllm-executor-architecture]]
+- [[ml-systems/pt-moe-architecture]]
