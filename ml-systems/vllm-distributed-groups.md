@@ -342,3 +342,4 @@ Memory profiling and scheduling happen after model init, so they see correct sta
 - [[ml-systems/vllm-executor-architecture]]
 - [[ml-systems/pt-moe-architecture]]
 - [[ml-systems/vllm-weight-loading]] — uses `rank_in_group` from GroupCoordinator to select the per-track weight slice in PT-MoE 150B loading
+- [[ml-systems/ray-compiled-graph-in-vllm]] — CG delegates PP tensor routing to vLLM's existing NCCL groups via RayPPCommunicator; the NCCL data plane is identical to MultiprocExecutor's

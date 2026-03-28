@@ -126,3 +126,4 @@ See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of p
 - [[ml-systems/kv-cache-internals]] — block tables and slot mappings that must be fed into the graph each step
 - [[ml-systems/vllm-torch-compile-integration]] — how vLLM's compile pipeline interacts with CUDA graph capture
 - [[ml-systems/ray-compiled-graph-in-vllm]]
+- [[ml-systems/ray-compiled-graph-in-vllm]] — PP tensor transfer (via CG channels or isend/irecv) is excluded from CUDA graph capture because it crosses graph boundaries between pipeline stages

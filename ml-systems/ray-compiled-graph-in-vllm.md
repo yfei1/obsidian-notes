@@ -325,7 +325,8 @@ engine.step_with_batch_queue()                            [core.py:449]
 
 ## See Also
 
-- [[ml-systems/vllm-executor-architecture]] — MultiprocExecutor, MessageQueue, async scheduling
-- [[ml-systems/vllm-cg-investigation-findings]] — 12 investigation questions with code traces
-- [[ml-systems/vllm-distributed-groups]] — NCCL groups for TP, PP, EP (untouched by CG)
-- [[ml-systems/parallelism-strategies]] — TP, PP, EP concepts
+- [[ml-systems/vllm-executor-architecture]] — MultiprocExecutor, MessageQueue broadcast mechanism, and async scheduling that obsoletes CG's dispatch advantage
+- [[ml-systems/vllm-distributed-groups]] — NCCL groups for TP, PP, EP that CG delegates to and that survive CG removal unchanged
+- [[ml-systems/parallelism-strategies]] — PP and TP concepts underlying the DAG topology (PP=2, TP=4 running example)
+- [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture and why PP tensor transfer is excluded from captured graphs
+- [[ml-systems/tensor-parallelism]] — TP allreduce/allgather inside model forward runs through torch.distributed, independent of CG channels

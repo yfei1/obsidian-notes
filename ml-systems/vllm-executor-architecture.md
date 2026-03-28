@@ -152,3 +152,4 @@ Both use the same workers, same NCCL groups, same model runner. The difference i
 - [[ml-systems/parallelism-strategies]] — TP, PP, EP concepts
 - [[ml-systems/tensor-parallelism]]
 - [[ml-systems/vllm-weight-loading]] — executor initialization path that constructs the model and calls load_weights() before the serving loop starts
+- [[ml-systems/ray-compiled-graph-in-vllm]] — Ray Compiled Graph as an alternative dispatch path to MultiprocExecutor's MessageQueue; being removed because async scheduling hides the latency CG was built to reduce

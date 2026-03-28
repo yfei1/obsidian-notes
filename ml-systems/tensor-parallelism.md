@@ -293,3 +293,4 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/kv-cache-internals]]
 - [[ml-systems/vllm-weight-loading]] — how ColumnParallelLinear / RowParallelLinear attach weight_loader callables that slice tensors per TP rank at load time
 - [[ml-systems/parallelism-strategies]] — full parallelism taxonomy: DP, TP, SP, PP, EP, CP and how they compose
+- [[ml-systems/ray-compiled-graph-in-vllm]] — TP allreduce/allgather within model layers runs through torch.distributed NCCL independently of Ray CG dispatch channels; CG only handles SchedulerOutput broadcast
