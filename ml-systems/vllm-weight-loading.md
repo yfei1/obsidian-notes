@@ -236,7 +236,9 @@ def needs_transpose(name: str) -> bool:
 
 ### Expert Weight Loading (FusedMoE)
 
-Expert weights are 3D after track slicing: `[300, 2048, 768]`. In a gated expert MLP, each expert applies three projections: gate (controls information flow via element-wise multiply), up (expands the input), and down (projects back to model dimension). `FusedMoE` packs all 300 experts into two fused weight matrices: `w13` concatenates each expert's gate and up projections along the output dimension, and `w2` holds each expert's down projection. This layout lets a single **batched GEMM** — one large matrix multiply that covers all experts simultaneously, replacing 300 separate matmuls — execute on the GPU. Iterating per-expert lets `weight_loader` place each `[2048, 768]` slice at the correct offset in the fused buffer.
+After track slicing, expert weights are 3D: `[300, 2048, 768]`. `FusedMoE` cannot receive this directly — it stores all 300 experts in two fused weight matrices (`w13` for gate+up projections, `w2` for down), because that layout enables a single **batched GEMM** (one matrix multiply covering all experts) instead of 300 separate matmuls. Each expert's slice must be placed at the correct offset within those fused buffers, so the outer loop iterates per-expert and passes `expert_id` so `weight_loader` knows where to write.
+
+`shard_id` identifies which projection the slice belongs to (`"w1"`=gate, `"w3"`=up, `"w2"`=down) — `FusedMoE.weight_loader` uses it to route the slice into `w13` or `w2`:
 
 ```python
 # After track slice: [300, 2048, 768]
@@ -244,7 +246,7 @@ for expert_id in range(num_experts):
     expert_tensor = tensor[expert_id]  # [2048, 768]
     weight_loader(param, expert_tensor, name,
                   shard_id=shard_id,    # "w1"=gate, "w3"=up, "w2"=down
-                  expert_id=expert_id)
+                  expert_id=expert_id)  # offset into fused w13/w2 buffer
 ```
 
 ### Verified Checkpoint Shapes (from safetensor headers)
