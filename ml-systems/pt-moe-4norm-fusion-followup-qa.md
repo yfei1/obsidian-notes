@@ -6,15 +6,19 @@
 
 Follow-up Q&A from the [[ml-systems/pt-moe-4norm-fusion-deep-research]] session. Covers three topics: (1) whether the 4-norm pattern benefits from AR+norm fusion under TP (yes, but only for TP≥2 per track); (2) the GPU HBM/SRAM memory model that explains where kernel fusion savings come from; (3) why decode is memory-bound on weights while prefill is compute-bound on tensor cores — and why kernel launch overhead (~5–10 µs) dominates norm op cost during decode regardless.
 
+## Core Intuition
+
+The 4-norm Post-LN pattern sits entirely after the all-reduce boundary — the norms are local, redundant, and cheap to fuse. The dominant cost during decode is not arithmetic but kernel launch overhead (~5–10 µs per launch vs. nanoseconds of actual compute), making norm fusion valuable even when the tensors involved are tiny. AR+norm fusion (Phase 2) only pays off when within-track TP ≥ 2; for single-GPU-per-track configs, simple Triton fusion captures most of the gain.
+
 ---
 
-## User
+## 4-Norm Fusion vs AR+Norm Fusion Under Tensor Parallelism
 
 > question: what if we have TP enabled? IIUC some custom ops exists for the sake of minimizing synchronization when TP/PP/EP is enabled. i.e. instead of doing 1 sync per call they fuse all ops into one kernel with just one sync. that does require changing the weight loading logic, right? my question is would our four norm benefit from writing custom op and custom weight loading like what mergedcolumnlinear layer does.
 
 ---
 
-## Assistant
+## TP Sync Placement and AR+Norm Fusion Opportunity
 
 Great question — you're asking about fusing across the **all-reduce boundary**. Let me check vLLM's existing allreduce+norm fusion infrastructure.
 
@@ -123,13 +127,13 @@ Let me quantify the difference between the two approaches:
 
 ---
 
-## User
+## Clarification: Do the 4 Norms Require TP Sync?
 
 > iiuc our current four norm does requires one sync on each call if TP is enabled, right?
 
 ---
 
-## Assistant
+## Norms Are Local: Zero TP Sync After All-Reduce
 
 No — the 4 norms themselves are **purely local elementwise ops with zero TP sync**. The syncs happen inside the linear layers (o_proj, down_proj), not the norms.
 
@@ -137,13 +141,13 @@ No — the 4 norms themselves are **purely local elementwise ops with zero TP sy
 
 ---
 
-## User
+## Redundant Norm Execution Across TP Ranks
 
 > ok so if TP=4, you mean after o_project's all_reduce sync the activations, norm happens on all 4 gpu on exactly the same activation in parallel?
 
 ---
 
-## Assistant
+## Identical Hidden State on All Ranks Post-AR
 
 Yes, exactly. After `o_proj`'s `RowParallelLinear` does `tensor_model_parallel_all_reduce()` (`linear.py:1517-1518`), **all 4 GPUs hold identical copies of the full hidden state**. Then each GPU runs the same norm on the same data independently — pure redundant computation.
 
@@ -167,7 +171,7 @@ So the norms add zero communication cost — but they do add **latency** on the 
 
 ---
 
-## User
+## Three Questions: Fusion Savings, AllReduceFusionPass Mechanics, Llama vs PT-MoE Norm Order
 
 > help me understand three things: 1.
 >
@@ -204,7 +208,7 @@ So the norms add zero communication cost — but they do add **latency** on the 
 
 ---
 
-## Assistant
+## GPU Memory Hierarchy, Kernel Fusion Savings, and Llama vs PT-MoE Norm Order
 
 Great questions. Let me ground-truth everything carefully with the actual code, and teach the GPU memory model from scratch.
 
@@ -412,13 +416,13 @@ then: norm(sum)                             <- NORM third
 
 ---
 
-## User
+## Where Does the 4 KB/Token Figure Come From?
 
 > HBM -> read h (4 KB/token) -> SRAM -> compute norm -> write normed_h -> HBM (4 KB) what does 4kb means? where it comes from?
 
 ---
 
-## Assistant
+## Hidden State Size: hidden_size × dtype Bytes
 
 Hidden size x bytes per element.
 
@@ -435,7 +439,7 @@ For context, V11 660B would be `2560 x 2 = 5 KB/token`.
 
 ---
 
-## User
+## Correcting the HBM Read Count: 4 Reads Not 6
 
 > What happens with 6 separate kernels (current code)
 >
@@ -458,7 +462,7 @@ For context, V11 660B would be `2560 x 2 = 5 KB/token`.
 
 ---
 
-## Assistant
+## Corrected HBM Traffic: 4 Reads + 3 Writes = 28 KB/Token
 
 You're right, let me recount properly.
 
@@ -482,13 +486,13 @@ The "6 reads" I said earlier was wrong — I was double-counting. Thanks for cat
 
 ---
 
-## User
+## Bandwidth Cost vs Kernel Launch Overhead: Which Dominates?
 
 > is 5 KB/token equivalent to each token will just take 5KB/token / 2TB/s = 2.5e-9 second per token for the transfer? that doesnt sound a lot. even if i have 1000 token thats just 2.5 microsecond?
 
 ---
 
-## Assistant
+## Kernel Launch Overhead (~5–10 µs) Dominates Norm Cost During Decode
 
 Your math is correct for raw bandwidth. But bandwidth isn't the main cost — **kernel launch overhead** is.
 
@@ -540,7 +544,7 @@ At that scale, eliminating HBM round-trips (the AR+norm fusion) starts to give r
 
 ---
 
-## User
+## Decode Norm Input Is 1 Token, Not the Full Prompt Length
 
 > hold on. During token generation (decode), you're often processing 1 token at a time (or a small batch). Then:
 >
@@ -551,7 +555,7 @@ At that scale, eliminating HBM round-trips (the AR+norm fusion) starts to give r
 
 ---
 
-## Assistant
+## KV Cache Absorbs Prior Tokens; Norms See Only New Tokens Per Step
 
 You're right to push back. Let me be precise.
 
@@ -577,13 +581,13 @@ So yes — during decode, the norm really does operate on just the new token(s).
 
 ---
 
-## User
+## Decode Is Weight-Load Bound; Prefill Is Compute-Bound on Tensor Cores
 
 > lots of ppl say decode is HBM read sensitive as it needs to load KVCache per step. but IIUC prefill is also HBM sensitive - as it takes more tokens than decode per forward pass, no?
 
 ---
 
-## Assistant
+## Arithmetic Intensity: Matrix-Vector vs Matrix-Matrix Multiply
 
 Both are memory-bound, but for different reasons.
 
@@ -610,13 +614,13 @@ That said — you're right that prefill isn't purely compute-bound. Attention it
 
 ---
 
-## User
+## Why Kernel Fusion Helps Decode: GEMM Weight Loads vs Norm Launch Overhead
 
 > ok so in decode every kernel launched requires fetching its own weight from HBM? thats why kernel fuse benefits decode as well right?
 
 ---
 
-## Assistant
+## Fusion Savings by Op Type: Weight Loads (GEMMs) vs Launch Overhead (Norms)
 
 Exactly right for the **GEMM kernels** (linear layers). Each one loads its full weight matrix from HBM:
 
@@ -644,7 +648,7 @@ So fusion helps decode for two different reasons depending on the op type:
 
 ---
 
-## See Also
+## Connections
 
 - [[ml-systems/pt-moe-4norm-fusion-deep-research]] — the primary research note this Q&A follows up; contains the full investigator reports, Triton kernel design, and integration decision matrix
 - [[ml-systems/gpu-memory-hierarchy]] — HBM/SRAM hierarchy and bandwidth model
