@@ -589,28 +589,28 @@ So yes — during decode, the norm really does operate on just the new token(s).
 
 ## Arithmetic Intensity: Matrix-Vector vs Matrix-Matrix Multiply
 
-Both are memory-bound, but for different reasons.
+**Arithmetic intensity** — FLOPs performed per byte loaded from HBM — determines whether an op is memory-bound or compute-bound. The key insight: both decode and prefill load the same weight matrices, but they do vastly different amounts of compute on each byte loaded.
 
-**Decode** is memory-bound because of **weight loading**. Each token needs to multiply through every weight matrix (qkv_proj, o_proj, gate_up_proj, down_proj — billions of parameters), but it's doing a matrix-vector multiply (`[1, hidden] x [hidden, hidden]`). The arithmetic intensity is ~1 FLOP per byte loaded. The GPU loads massive weights from HBM but does very little compute per weight element. KV cache loading adds to this but is secondary to the weight loading cost.
+**Decode** processes 1 token per step, so each linear layer is a matrix-vector multiply: `[1, hidden] × [hidden, hidden]`. You load ~8 MB of weights (for hidden=2048, bf16) but execute only `2 × 2048²` FLOPs — roughly 1 FLOP per byte. The GPU cores finish their work and sit idle waiting for the next weight tile to arrive from HBM. Weight loading is the bottleneck, not compute.
 
-**Prefill** is **compute-bound**, not memory-bound. With 2000 tokens, you're doing matrix-matrix multiplies (`[2000, hidden] x [hidden, hidden]`). You load the same weights once but do 2000x more compute on them. The arithmetic intensity is ~2000 FLOPs per byte loaded — the GPU cores are fully saturated. HBM bandwidth is not the bottleneck; the tensor cores are.
+**Prefill** processes all 2000 prompt tokens in parallel, so each linear layer is a matrix-matrix multiply: `[2000, hidden] × [hidden, hidden]`. You load the same ~8 MB of weights once, but now execute `2000 × 2 × 2048²` FLOPs — ~2000 FLOPs per byte. The tensor cores are fully saturated; HBM bandwidth is not the bottleneck.
 
 ```
                     Decode (1 token)           Prefill (2000 tokens)
                     -----------------          ---------------------
-Weight load cost    same                       same (weights loaded once either way)
-Compute per weight  1 multiply                 2000 multiplies
-Bottleneck          HBM bandwidth              GPU compute (tensor cores)
+Weight bytes loaded same (~8 MB per GEMM)      same (~8 MB per GEMM)
+FLOPs per GEMM      2 × 2048²  ≈ 8M            2000 × 2 × 2048²  ≈ 16B
 Arithmetic          ~1 FLOP/byte               ~2000 FLOPs/byte
 intensity           (memory-bound)             (compute-bound)
+Bottleneck          HBM bandwidth              tensor cores
 ```
 
-The norm/add ops we've been discussing are always memory-bound regardless of batch size (they're elementwise, ~1 FLOP/byte). But they matter more during **decode** because:
-1. The big GEMMs are also memory-bound during decode, so everything is fighting for HBM bandwidth
-2. Kernel launch overhead is a larger fraction of total time when each op processes tiny tensors
-3. During prefill, the norms are a rounding error compared to the massive GEMMs
+Norm/add ops are always memory-bound regardless of batch size — they're elementwise at ~1 FLOP/byte. But they hurt more during decode because:
+1. The GEMMs are also memory-bound, so norms compete for the same scarce HBM bandwidth
+2. Kernel launch overhead (~5–10 µs) dwarfs the actual compute when tensors are tiny (`[1, 2048]`)
+3. During prefill, norms are a rounding error next to the massive compute-bound GEMMs
 
-That said — you're right that prefill isn't purely compute-bound. Attention itself is `O(n^2)` in sequence length and the KV cache for long contexts can push prefill toward memory-bound too. It's a spectrum, not binary.
+Prefill isn't purely compute-bound in all cases: attention is `O(n²)` in sequence length, and long-context KV cache reads can push prefill toward memory-bound. But for the GEMM-heavy linear layers, the matrix-matrix vs matrix-vector distinction is the dominant factor.
 
 ---
 
