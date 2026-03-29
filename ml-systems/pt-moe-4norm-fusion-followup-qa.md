@@ -4,11 +4,13 @@
 
 ## TL;DR
 
-Follow-up Q&A from the [[ml-systems/pt-moe-4norm-fusion-deep-research]] session. Covers three topics: (1) whether the 4-norm pattern benefits from AR+norm fusion under TP (yes, but only for TP≥2 per track); (2) the GPU HBM/SRAM memory model that explains where kernel fusion savings come from; (3) why decode is memory-bound on weights while prefill is compute-bound on tensor cores — and why kernel launch overhead (~5–10 µs) dominates norm op cost during decode regardless.
+Follow-up Q&A from the [[ml-systems/pt-moe-4norm-fusion-deep-research]] session. Covers three topics: (1) whether the 4-norm pattern benefits from AR+norm fusion under TP (yes, but only for TP≥2 per track — where TP, tensor parallelism, splits a layer's weight matrix across multiple GPUs that must all-reduce their partial outputs before the norm); (2) the GPU HBM/SRAM memory model that explains where kernel fusion savings come from; (3) why decode is memory-bound on weights while prefill is compute-bound on tensor cores — and why kernel launch overhead (~5–10 µs) dominates norm op cost during decode regardless.
 
 ## Core Intuition
 
-The 4-norm Post-LN pattern sits entirely after the all-reduce boundary — the norms are local, redundant, and cheap to fuse. The dominant cost during decode is not arithmetic but kernel launch overhead (~5–10 µs per launch vs. nanoseconds of actual compute), making norm fusion valuable even when the tensors involved are tiny. AR+norm fusion (Phase 2) only pays off when within-track TP ≥ 2; for single-GPU-per-track configs, simple Triton fusion captures most of the gain.
+The 4-norm Post-LN pattern sits entirely after the all-reduce boundary — the point where TP ranks synchronize partial GEMM outputs into a single full hidden state. Because the all-reduce happens inside the linear layers (`o_proj`, `down_proj`), the norms see already-reduced data and require zero additional synchronization. They are local, redundant across TP ranks, and cheap to fuse.
+
+The dominant cost during decode is not arithmetic but kernel launch overhead (~5–10 µs per launch vs. nanoseconds of actual compute), making norm fusion valuable even when the tensors involved are tiny. AR+norm fusion (Phase 2 below) only pays off when within-track TP ≥ 2 (i.e., when `o_proj` actually performs an all-reduce); for single-GPU-per-track configs, simple Triton fusion captures most of the gain.
 
 ---
 
@@ -22,13 +24,13 @@ The 4-norm Post-LN pattern sits entirely after the all-reduce boundary — the n
 
 The question is whether the 4-norm block can benefit from fusing across the **all-reduce boundary** — the same optimization vLLM already applies to Llama via `allreduce_rms_fusion.py`.
 
-First, a clarification: the 4 norms themselves require **zero TP sync** — they are purely local elementwise ops. The all-reduce happens inside `RowParallelLinear` in `o_proj` (`afm_pt_moe.py:239-245`) and `down_proj`/`FusedMoE`, before the norms ever see the data. The norms operate on already-reduced hidden states. Full TP sync placement is in [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]].
+First, a clarification: the 4 norms themselves require **zero TP sync** — they are purely local elementwise ops. The all-reduce (a collective operation where each GPU broadcasts its partial result so every rank ends up with the full sum) happens inside `RowParallelLinear` in `o_proj` (`afm_pt_moe.py:239-245`) and `down_proj`/`FusedMoE`, before the norms ever see the data. The norms operate on already-reduced hidden states. Full TP sync placement is in [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]].
 
-The AR+norm fusion opportunity is different: it's about eliminating the HBM round-trip *between* the all-reduce result and the immediately-following norm. When the all-reduce and norm run as separate kernels, the all-reduced tensor is written to HBM, then read back for the norm — a round-trip that serves no purpose other than the kernel boundary.
+The AR+norm fusion opportunity is different: it's about eliminating the HBM round-trip *between* the all-reduce result and the immediately-following norm. When the all-reduce and norm run as separate kernels, the all-reduced tensor is written to HBM (the GPU's main off-chip memory), then read back for the norm — a round-trip that serves no purpose other than the kernel boundary.
 
 ### The allreduce+norm fusion that vLLM already does
 
-I just read `allreduce_rms_fusion.py` — vLLM has an **Inductor pattern matcher** that fuses `all_reduce -> fused_add_rms_norm` into a single FlashInfer kernel (`AllReduceFusedAddRMSNormPattern`, line 306-372). This is the pattern for **Llama**:
+I just read `allreduce_rms_fusion.py` — vLLM has an **Inductor pattern matcher** (a PyTorch compilation pass that recognizes specific op sequences in the compute graph and replaces them with a fused implementation) that fuses `all_reduce -> fused_add_rms_norm` into a single FlashInfer kernel (`AllReduceFusedAddRMSNormPattern`, line 306-372). This is the pattern for **Llama**:
 
 ```
 o_proj partial output -> all_reduce -> fused_add_rms_norm(output, residual)
@@ -70,7 +72,7 @@ return h                    <- both hidden_states and residual
 
 2. **You'd need custom weight loading** — the `load_weights()` method would need to route `attn_pre_residual_norm.weight` -> shard 0 and `attn_post_norm.weight` -> shard 1 of the merged buffer, similar to `stacked_params_mapping` in `afm_pt_moe.py:443-447`.
 
-3. **You'd need to register as a proper custom op** — to participate in vLLM's `AllReduceFusionPass` Inductor pattern matching (`allreduce_rms_fusion.py:706`), you'd need:
+3. **You'd need to register as a proper custom op** — to participate in vLLM's `AllReduceFusionPass` (the Inductor compilation pass at `allreduce_rms_fusion.py:706` that rewrites matching op sequences into fused kernels), you'd need:
    - `direct_register_custom_op()` for the kernel
    - A new pattern class like `AllReducePostLNPattern` that matches `all_reduce -> rms_norm -> add -> rms_norm`
    - Register it alongside the existing patterns at line 824-835
@@ -113,9 +115,7 @@ Let me quantify the difference between the two approaches:
 
 ## Norms Are Local: Zero TP Sync After All-Reduce
 
-No — the 4 norms themselves are **purely local elementwise ops with zero TP sync**. The syncs happen inside the linear layers (o_proj, down_proj), not the norms.
-
-[same TP sync diagram as above]
+No — the 4 norms themselves are **purely local elementwise ops with zero TP sync**. The syncs happen inside the linear layers (`o_proj`, `down_proj`), not the norms. See the TP sync diagram in the section above ("TP Sync Placement and AR+Norm Fusion Opportunity").
 
 ---
 
@@ -188,8 +188,6 @@ So the norms add zero communication cost — but they do add **latency** on the 
 
 ## GPU Memory Hierarchy, Kernel Fusion Savings, and Llama vs PT-MoE Norm Order
 
-Great questions. Let me ground-truth everything carefully with the actual code, and teach the GPU memory model from scratch.
-
 ---
 
 ### Question 1: Where do the savings come from? (GPU memory 101)
@@ -221,7 +219,7 @@ A GPU has two levels of memory that matter here:
 2. **Compute** on SRAM/registers (essentially free for simple ops like norm/add)
 3. **Write** output tensor from SRAM/registers -> HBM
 
-For RMSNorm and elementwise add, the compute is trivial — a few multiplies and a reduction. The bottleneck is **moving data between HBM and SRAM**. These ops are "memory-bound": the GPU cores are idle most of the time, waiting for data to arrive from HBM.
+For RMSNorm and elementwise add, the compute is trivial — a few multiplies and a reduction. The bottleneck is **moving data between HBM and SRAM**. These ops are **memory-bound** (the GPU cores finish their arithmetic faster than HBM can supply the next data tile, so the cores idle waiting for HBM).
 
 #### What happens with 6 separate kernels (current code)
 
@@ -303,7 +301,8 @@ Between Kernel A ending and Kernel B starting, there's:
 The fused FlashInfer kernel is ONE kernel that:
 ```
 Single kernel: {
-  step 1: do the all-reduce (via NVLink/NVSwitch, data arrives in SRAM)
+  step 1: do the all-reduce (via NVLink/NVSwitch — the high-speed GPU interconnect)
+          data arrives in SRAM
   step 2: immediately compute norm on the data sitting in SRAM
   step 3: write only the final normed output to HBM
 }
@@ -541,7 +540,7 @@ You're right to push back. Let me be precise.
 
 **Decode** (generating new tokens after the prompt): Each forward pass processes only the **new token(s)** being generated — not the full 2000. Previous tokens' key/value states are cached in the KV cache. So the hidden state tensor flowing through the norms is `[1, 2048]` (or `[batch_size, 2048]` if serving multiple requests concurrently via continuous batching).
 
-The previous tokens' results are needed, but they're consumed through the **KV cache** in the attention layer, not by re-running them through norms/MLPs. The norm only sees the current step's tokens.
+The previous tokens' results are needed, but they're consumed through the **KV cache** (a persistent store of each prior token's attention key and value vectors, so attention over past tokens doesn't require re-running those tokens through the full network) in the attention layer, not by re-running them through norms/MLPs. The norm only sees the current step's tokens.
 
 ```
 Prefill (prompt = 2000 tokens):
@@ -551,7 +550,7 @@ Decode (generating token 2001):
   norm input: [1, 2048]       -> 1 x 4 KB = 4 KB         -> launch overhead dominates
   (tokens 1-2000 are in KV cache, only used inside attention)
 
-Decode with continuous batching (e.g., 64 concurrent requests):
+Decode with continuous batching (e.g., 64 concurrent requests batched into one forward pass):
   norm input: [64, 2048]      -> 64 x 4 KB = 256 KB      -> still launch-dominated
 ```
 
