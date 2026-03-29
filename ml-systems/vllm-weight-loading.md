@@ -155,7 +155,7 @@ class AFMTextV9ForCausalLM(nn.Module):
         return loaded
 ```
 
-TAMM's 56 layers span two segments. Segment 0 (layers 0–34, `num_regular_layers=35`) computes full QKV projections at every layer (`qkv_transform.fused_linear`). Segment 1 (layers 35–55) reuses the **key/value vectors** — the K and V projections from layer 34 are held constant for all subsequent layers — so each of those 21 layers computes only a fresh Q projection (`q_transform`) against those fixed K/V values, eliminating 2 of 3 projection matmuls per layer in segment 1. The regex maps `segment_1.layer_M` → `model.layers.(35+M)`.
+TAMM's 56 layers span two segments. Segment 0 (layers 0–34, `num_regular_layers=35`) computes full QKV projections at every layer (`qkv_transform.fused_linear`). Segment 1 (layers 35–55) reuses the **key/value vectors** — the K and V projections from layer 34 are held constant for all subsequent layers — so each of those 21 layers computes only a fresh Q projection (`q_transform`) against those fixed K/V values, eliminating 2 of 3 projection matmuls per layer in segment 1. The regex maps `segment_1.layer_M` → `model.layers.(35+M)` — e.g. `segment_1.layer_5` → `model.layers.40` (idx = 5 + 35).
 
 ---
 
