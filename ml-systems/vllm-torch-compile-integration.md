@@ -142,11 +142,11 @@ Dynamic input marking (`decorators.py:381-418`) tells Dynamo which tensor dimens
 
 ## Key Trade-offs & Decisions
 
-**Compile overhead**: First forward pass is slow (30–120s depending on model size) because `torch.compile` runs two internal phases: **Dynamo** (traces the Python `forward()` into a graph IR) and **Inductor** (lowers that IR to fused CUDA kernels). Subsequent calls use the cached compiled function. vLLM amortizes this cost during a warmup phase before serving traffic.
+**Compile overhead**: First forward pass is slow (30–120s depending on model size) because `torch.compile` runs two sequential phases: **Dynamo** traces the Python `forward()` into a graph IR, then **Inductor** lowers that IR to fused CUDA kernels. Both phases run once; subsequent calls use the cached compiled function. vLLM pays this cost during a warmup phase before serving traffic, so no live request absorbs the latency.
 
-**Piecewise compilation**: If the model has unavoidable graph breaks (e.g., `all_reduce` — a collective that synchronizes tensors across GPUs — in PT-MoE's cross-track communication), Dynamo splits the graph at break points and compiles each piece separately. Each piece still gets kernel fusion. The cost: more compilation time and slightly more CPU dispatch overhead (the CPU must launch each compiled piece as a separate call) between pieces.
+**Piecewise compilation**: If the model has unavoidable graph breaks — e.g., `all_reduce` (a cross-GPU collective that synchronizes tensors) in PT-MoE's cross-track communication — Dynamo splits the graph at each break and compiles each piece separately. Each piece still gets kernel fusion within its boundaries. The cost is additive: more total compilation time upfront, and higher CPU dispatch overhead at runtime because the CPU must launch each compiled piece as a separate call rather than one continuous graph.
 
-**`enable_if` for conditional compilation**: Some submodules should only compile under specific configs. The `enable_if` callback receives `VllmConfig` and returns a bool — useful for models that are only compile-safe with certain feature flags.
+**`enable_if` for conditional compilation**: Some submodules are only compile-safe under specific configs. The `enable_if` callback receives `VllmConfig` and returns a bool — when it returns `False`, the wrapped `__init__` sets `do_not_compile = True` and skips the counter increment, so vLLM treats that class as undecorated.
 
 ---
 
