@@ -4,9 +4,11 @@
 
 ## TL;DR
 
-`model(x)` routes through `__call__` → `_wrapped_call_impl` → `_call_impl`, firing **pre-hooks → forward() → post-hooks**. `model.forward(x)` bypasses `__call__` entirely, silently skipping all hooks. Hooks are empty `OrderedDict`s by default; register via `register_forward_pre_hook()` / `register_forward_hook()`.
+`model(x)` routes through `__call__` → `_wrapped_call_impl` → `_call_impl`, firing **pre-hooks → forward() → post-hooks**. `model.forward(x)` skips `__call__` entirely — all hooks silently don't fire because the dispatch wrapper is never reached. Hooks are empty `OrderedDict`s by default; register via `register_forward_pre_hook()` / `register_forward_hook()`.
 
-`@torch.compile` is PyTorch's JIT compiler: it traces Python execution into a **static computation graph** — a fixed sequence of ops that the GPU can run without Python involvement. Applied to `forward()`, it leaves `_compiled_call_impl = None`, so hooks run as normal CPU Python outside the compiled region and are never traced. `module.compile()` instead compiles `_call_impl` itself, tracing through hook dispatch logic; non-traceable Python in hooks — e.g., `.item()`, which forces a GPU→CPU scalar transfer whose value is unknown at trace time — causes a **graph break** (the compiler abandons tracing and falls back to slow Python execution for the rest of the call). Separately, **CUDA graphs** (`torch.cuda.CUDAGraph`) eliminate **CPU dispatch overhead** — the per-GPU-kernel Python/CUDA-runtime cost of launching each op — by recording the kernel launch sequence once and replaying it with no CPU involvement. This is distinct from **kernel fusion** (merging multiple small ops into one GPU kernel to reduce total launch count).
+Two compile paths interact with hooks differently. **`@torch.compile` on `forward()`** leaves `_compiled_call_impl = None`, so hook dispatch runs as normal CPU Python *outside* the compiled region — hooks are never traced. **`module.compile()`** compiles `_call_impl` itself, tracing through hook dispatch; non-traceable Python in hooks — e.g., `.item()` (a GPU→CPU scalar transfer whose value is unknown at trace time) — causes a **graph break**, abandoning the compiled region and falling back to slow Python execution.
+
+**CUDA graphs** (`torch.cuda.CUDAGraph`) eliminate **CPU dispatch overhead** — the per-kernel Python/CUDA-runtime launch cost — by recording the kernel sequence once and replaying it with no CPU involvement. Hooks are Python calls, not kernel launches, so they are absent from the recorded sequence and silently don't fire on replay. This is distinct from **kernel fusion** (merging multiple small ops into one GPU kernel to reduce total launch count).
 
 ---
 
