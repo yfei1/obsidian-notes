@@ -4,7 +4,7 @@
 
 ## Core Intuition
 
-PT-MoE's 4-norm sandwich residual pattern (norm→add→norm per sub-layer) is incompatible with vLLM's existing `fused_add_rms_norm` — that kernel (a GPU function launched from the CPU) returns an un-normed residual (Pre-LN: normalize *before* adding to the residual stream), but PT-MoE requires a normed residual (Post-LN: normalize *after* adding). A single custom Triton kernel (Triton: a Python-embedded GPU kernel language) `fused_add_rmsnorm_postln` fuses the add+post_norm pairs, saving 2 kernel launches and reducing HBM (High Bandwidth Memory — the GPU's main DRAM) passes from 6→4 per decoder layer. Each eliminated kernel removes one full read+write roundtrip over the residual tensor — for a hidden dim of 4096 × bf16, that is 2 × 4096 × 2 = 16 KB per token saved per fused pair — with no new vLLM layer required.
+PT-MoE's 4-norm sandwich residual pattern (norm→add→norm per sub-layer) is incompatible with vLLM's existing `fused_add_rms_norm` — that kernel (a GPU function launched from the CPU) returns an un-normed residual (Pre-LN: normalize *before* adding to the residual stream), but PT-MoE requires a normed residual (Post-LN: normalize *after* adding). A single custom Triton kernel (Triton: a Python-embedded GPU kernel language) `fused_add_rmsnorm_postln` fuses the add+post_norm pairs, reducing HBM (High Bandwidth Memory — the GPU's main DRAM) passes from 6→4 per decoder layer and eliminating 2 kernel launches. Each eliminated pair removes one read+write roundtrip: hidden_dim=4096, dtype=bf16 → 2 × 4096 × 2 B = **16 KB per token per fused pair** (×2 pairs = 32 KB/token/layer) — with no new vLLM layer required.
 
 ---
 
