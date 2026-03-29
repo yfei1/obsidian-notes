@@ -8,7 +8,7 @@
 
 ## TL;DR
 
-Standard Tensor Parallelism (TP) syncs GPUs after every layer — 96 times for a 48-layer model — because each GPU holds only a **shard** (a slice of the full weight matrix) and must combine partial results via **all_reduce** (a collective op that sums tensors across all GPUs) before the next layer can run. At scale, this communication dominates latency. Parallel Track (PT) solves this by splitting the model into N independent smaller transformers ("tracks"), each living entirely on its own GPU(s), so tracks need no coordination between layers. Tracks all_reduce only every D layers, reducing syncs from 2×48=96 to 48/4=12 — 8× fewer at D=4, 16× fewer at D=8. PT is orthogonal to TP: you can apply TP within each track AND PT across tracks. Used by AFM 150B model (8 tracks, D=4, 300 MoE experts).
+Standard Tensor Parallelism (TP) syncs GPUs after every layer — 96 times for a 48-layer model — because each GPU holds only a **shard** (a slice of the full weight matrix) and must combine partial results via **all_reduce** (a collective op that sums tensors across all GPUs) before the next layer can run. At scale, this communication dominates latency. Parallel Track (PT) solves this by splitting the model into N independent smaller transformers ("tracks"), each living entirely on its own GPU(s), so tracks need no coordination between layers. Tracks all_reduce only every D layers, reducing syncs from 2×48=96 to 48/4=12 — 8× fewer at D=4, 16× fewer at D=8. PT is orthogonal to TP: you can apply TP within each track AND PT across tracks. Used by AFM 150B model (8 tracks, D=4, 300 MoE experts — MoE defined in [[ml-systems/mixture-of-experts]]).
 
 **Running example** (used throughout): 30B model, 8 tracks, 48 layers, hidden_dim=7168, 64 attention heads (head_dim=112), batch=1, seq_len=1024. Per-track: 8 heads, hidden_dim=7168, ~3.75B params.
 
@@ -18,7 +18,7 @@ Standard Tensor Parallelism (TP) syncs GPUs after every layer — 96 times for a
 
 ### Why standard TP hits a communication wall
 
-Standard TP splits a layer's weight matrix across GPUs so each GPU computes a partial result. Because no single GPU has the full result, every layer ends with an all_reduce — a blocking network call that stalls all GPUs until every participant has contributed. With 48 layers and 2 syncs per layer (attention + MLP), that's 96 blocking all_reduces per forward pass. Across slower inter-node links, these syncs serialize the pipeline and GPU compute idles waiting for the network. PT avoids this by giving each GPU a *complete* small model — no partial results, no mandatory per-layer sync.
+Standard TP splits a layer's weight matrix across GPUs so each GPU computes a partial result. Because no single GPU has the full result, every layer ends with an all_reduce — a blocking network call that stalls all GPUs until every participant has contributed. With 48 layers and 2 syncs per layer (attention + MLP), that's 96 blocking all_reduces per forward pass. Across slower inter-node links, these syncs stall all GPUs — each GPU must wait for every other GPU to contribute before the next layer can start. PT avoids this by giving each GPU a *complete* small model — no partial results, no mandatory per-layer sync.
 
 Standard TP splits **one layer** across GPUs — each GPU holds a shard of the weight matrix and must sync (all_reduce) after every attention and MLP block:
 
@@ -66,7 +66,7 @@ PT's activation tensor is the same size as TP's per sync — the savings come en
 
 ### Why a plain average — no learned gating?
 
-Tracks diverge freely between sync points because each has independent weights. A plain average collapses them back to a shared activation with zero extra parameters — unlike MoE routing, which adds a trainable router. The only design variable is D: larger D means fewer syncs (faster) but more divergence before averaging (higher quality risk).
+Tracks diverge freely between sync points because each has independent weights. A plain average collapses them back to a shared activation with zero extra parameters — unlike MoE routing, which adds a trainable router. The only design variable is D: larger D means fewer syncs (faster) but more divergence before averaging (higher quality risk). (MoE routing — where a learned router selects which expert sub-network processes each token — is defined in [[ml-systems/mixture-of-experts]].)
 
 From the PT paper (Feb 2026):
 
@@ -108,7 +108,7 @@ Dense baseline:  64 attention heads, 8 KV heads, hidden_dim=7168
                  Q projection: [7168, 64×112] = [7168, 7168]  → 51.4M params
                  KV projection: [7168, 8×112] = [7168, 896]   →  6.4M params each
 
-Per track:       8 attention heads, 1 KV head, hidden_dim=7168
+Per track (GQA — multiple Q heads share 1 KV head):  8 attention heads, 1 KV head, hidden_dim=7168
                  Q projection: [7168, 8×112]  = [7168, 896]   →  6.4M params
                  KV projection: [7168, 1×112] = [7168, 112]   →  0.8M params each
                  Attention params/track ≈ 1/8 of dense attention params
@@ -117,7 +117,7 @@ Each track has its own independent weights — NOT a shard of the dense model.
 Total params across all tracks ≈ dense model params.
 ```
 
-"KV heads" here refers to the key/value projection heads in grouped-query attention (GQA — a post-2016 variant where multiple query heads share one key/value head to cut memory). PT reduces both Q and KV heads proportionally.
+GQA (grouped-query attention — a post-2016 variant where multiple query heads share one key/value head to cut memory) reduces KV projection size. PT reduces both Q and KV heads proportionally across tracks.
 
 From the paper's Table 1 (all use n=8 tracks): <!-- source: PT paper Table 1, Feb 2026 -->
 
@@ -135,7 +135,7 @@ Params/track = total params ÷ 8 tracks (approximate — shared embeddings are c
 
 ### Why do small models collapse but large ones don't?
 
-Each track must independently model the full context window with fewer attention heads. Attention heads capture different dependency patterns (local syntax, long-range coreference, etc.) — reduce the head count too far and the track loses the capacity to model long-range dependencies. At 6B ÷ 8 tracks = 750M params/track, the track is smaller than most capable standalone models, so quality collapses. At 30B ÷ 8 = 3.75B params/track, each track is still a capable model, so the periodic averaging only nudges activations rather than correcting fundamentally broken representations.
+Each track must independently model the full context window with fewer attention heads. Attention heads capture different dependency patterns (local syntax, long-range semantic agreement between distant words, etc.) — reduce the head count too far and the track loses the capacity to model those long-range dependencies. At 6B ÷ 8 tracks = 750M params/track, the track is too small to model long-range dependencies reliably, so quality collapses. At 30B ÷ 8 = 3.75B params/track, each track is still a capable model, so the periodic averaging only nudges activations rather than correcting fundamentally broken representations.
 
 PT sacrifices per-layer capacity (fewer heads per track) for inference speed (fewer syncs). The quality impact depends on model scale, measured on **MMLU** (Massive Multitask Language Understanding — a multiple-choice benchmark across 57 subjects, scored 0–1):
 
