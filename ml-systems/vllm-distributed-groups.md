@@ -187,7 +187,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 | `_TP`  | parallel_state.py:1213 | IS TP | `all_ranks.view(-1, tp_size)` | 1 group: [0..31] |
 | `_DCP` | parallel_state.py:1221 | Subdivides TP | `all_ranks.reshape(-1, dcp_size)` | DCP=1: 32 singleton groups |
 | `_PCP` | parallel_state.py:1230 | Same level as TP, PCP axis | `transpose(3,4).reshape(-1, pcp_size)` | PCP=1: 32 singleton groups |
-| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP (routes tokens across all GPUs holding expert sub-networks — the distinct feed-forward specialists in a MoE layer) | `transpose(1,2).reshape(-1, dp*pcp*tp)` | EP=32: 1 group [0..31] |
+| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP (routes tokens across all GPUs holding MoE expert sub-networks) | `transpose(1,2).reshape(-1, dp*pcp*tp)` | EP=32: 1 group [0..31] |
 | `_PP`  | parallel_state.py:1233 | Above TP (crosses TP boundaries) | `transpose(2,4).reshape(-1, pp_size)` | PP=1: 32 singleton groups |
 | `_DP`  | parallel_state.py:1240 | Above TP (crosses TP boundaries) | `transpose(1,4).reshape(-1, dp_size)` | DP=1: 32 singleton groups |
 
@@ -197,7 +197,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo (Meta's CPU collective library) — because vLLM needs collectives at two distinct phases that have incompatible hardware requirements.
 
-**Phase 1 — control-plane (CPU, pre-GPU):** `init_distributed_environment` (vLLM's startup routine that establishes process groups before any model code runs) issues a barrier before `torch.cuda.set_device` has been called. NCCL requires an active **CUDA context** — the GPU driver state that must be initialized before any GPU kernel can run — plus a dedicated GPU memory allocation per communicator; neither exists yet at this phase. Gloo runs entirely on CPU with no CUDA dependency, so it handles these early barriers.
+**Phase 1 — control-plane (CPU, pre-GPU):** `init_distributed_environment` — vLLM's startup routine that establishes process groups before any model code runs — issues a barrier before `torch.cuda.set_device` has been called. NCCL requires an active **CUDA context** (the GPU driver state initialized before any GPU kernel can run) plus a dedicated GPU memory allocation per communicator; neither exists yet at this phase. Gloo runs entirely on CPU with no CUDA dependency, so it handles these early barriers.
 
 **Phase 2 — data-plane (GPU, forward pass):** Once GPUs are initialized, NCCL takes over for all data-plane collectives (all-reduce, broadcast) because it uses NVLink/PCIe directly and runs orders of magnitude faster than Gloo for large tensors. Merging both roles into one communicator would either stall early CPU barriers on GPU availability or waste GPU memory on CPU-only synchronization — so each logical group gets one of each.
 
@@ -212,7 +212,7 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 
 ### Constructor: Why Every Rank Iterates Every Group
 
-`torch.distributed.new_group` is a **collective barrier** — every rank in the entire job must call it before any rank proceeds, regardless of whether the rank belongs to the group being created. This is because NCCL's communicator setup requires a globally synchronized handshake: the library exchanges device topology and buffer addresses across all participants at creation time, so skipping the call on even one rank stalls all others indefinitely. This means the constructor (parallel_state.py:316-395) iterates ALL group rank lists, calling `new_group` twice per group (once for NCCL, once for Gloo), and stores only the group the current rank belongs to. For TP=32 that is 1 group × 2 backends = 2 calls per rank; after the PT-MoE rebuild into 8 tracks × TP=4 it is 8 groups × 2 backends = 16 calls per rank.
+`torch.distributed.new_group` is a **collective barrier** — every rank in the entire job must call it before any rank proceeds, regardless of whether that rank belongs to the group being created. NCCL's communicator setup requires a globally synchronized handshake: the library exchanges device topology and buffer addresses across all participants at creation time, so skipping the call on even one rank stalls all others indefinitely. This means the constructor (parallel_state.py:316-395) iterates ALL group rank lists, calling `new_group` twice per group (once for NCCL, once for Gloo), and stores only the group the current rank belongs to. For TP=32 that is 1 group × 2 backends = 2 calls per rank; after the PT-MoE rebuild into 8 tracks × TP=4 it is 8 groups × 2 backends = 16 calls per rank.
 
 ```python
 for ranks in group_ranks:
@@ -238,7 +238,9 @@ Two concrete cases show where the wrong choice corrupts behavior silently.
 
 **Weight sharding** uses `rank_in_group` because weight shards are indexed by position *within the TP group* — shard 0 goes to the first rank in the group, not the first rank on the node. `local_rank` is wrong here: rank 12 has `local_rank=4` but `rank_in_group=0`, so using `local_rank` would load the fifth shard instead of the first — silently wrong on every rank outside the first TP group.
 
-**PT-MoE track assignment** also uses `rank_in_group`, but from a different group. After rebuilding into 8 tracks × TP=4, each track's forward pass is independent — ranks in different tracks process different inputs and must not share all-reduce results. A rank needs to know *which track it belongs to*, but `local_rank` is node-scoped and `rank` is job-scoped — neither encodes track membership directly. PT-MoE solves this by defining a **slot index** — a rank's position within its own track's rank list (0–3 for TP=4). Each slot value appears exactly once per track, so PT-MoE forms a **cross-track group** for each slot value by collecting the rank at that slot from every track. Slot 0 of every track forms the group [0,4,8,12,16,20,24,28]. Rank 12 sits at slot 0 of track 3, so it is the fourth entry in this cross-track group → `rank_in_group=3`. PT-MoE uses this value as the **track index** because `rank_in_group` within the cross-track group counts exactly which track a rank belongs to across the full 32-GPU fleet, independent of node boundaries.
+**PT-MoE track assignment** also uses `rank_in_group`, but from a different group. After rebuilding into 8 tracks × TP=4, each track's forward pass is independent — ranks in different tracks process different inputs and must not share all-reduce results. A rank needs to know *which track it belongs to*, but `local_rank` is node-scoped and `rank` is job-scoped — neither encodes track membership directly.
+
+PT-MoE solves this by defining a **slot index** — a rank's position within its own track's rank list (0–3 for TP=4). Each slot value appears exactly once per track. PT-MoE then forms a **cross-track group** for each slot value by collecting the rank at that slot from every track: slot 0 of every track forms the group [0,4,8,12,16,20,24,28]. Rank 12 sits at slot 0 of track 3, so it is the fourth entry in this cross-track group → `rank_in_group=3`. PT-MoE uses this value as the **track index** because `rank_in_group` within the cross-track group counts exactly which track a rank belongs to across the full 32-GPU fleet, independent of node boundaries.
 
 ---
 
