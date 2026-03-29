@@ -109,7 +109,7 @@ ForCausalLM                          ← NOT here
 
 | | Inner | Outer |
 |---|---|---|
-| Compilation scope | Transformer layers + norm only | Embedding + layers + norm + lm_head |
+| Compilation scope | `[T, d_model]` hidden states through 32 attn+FFN layers + RMSNorm | vocab embedding gather + 32 layers + lm_head projection |
 | Uncompiable ops outside scope | Run eagerly, no graph break | Must be traced; any break creates piecewise graphs |
 | CUDA graph complexity | Single compiled region | Multiple piecewise graphs to capture |
 | Cross-boundary fusion | Misses embed→layer, layer→lm_head | Can fuse across boundaries |
