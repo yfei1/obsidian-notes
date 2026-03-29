@@ -123,14 +123,16 @@ Source: [B站下一代多模态数据工程架构](https://mp.weixin.qq.com/s/A3
 
 Their use case: video → frames → OCR → embeddings → aggregate per-video → training dataset. Runs for **weeks**. Cluster crash is guaranteed.
 
-### Mode 1: Barrier (map-only, same as Flink)
-- Barriers flow through stateless map operators
-- Two-phase commit (2PC — coordinator first asks "can you commit?", then issues the final commit) happens **at the sink only** via Lance + Iceberg
-- Maps don't write anything — they're pure functions
+The pipeline has three structural shapes that need different checkpoint strategies: stateless maps (no cross-worker state), shuffle stages (cross-worker data movement that breaks barrier alignment), and aggregations (global stats that *look* like shuffles but can be replaced with storage reads). Each mode targets one shape.
+
+### Mode 1: Barrier (map-only pipelines)
+
+Stateless map operators carry no state between records — barriers flow through without alignment issues. **Two-phase commit** (2PC — coordinator first asks "can you commit?", then issues the final commit) happens **at the sink only** via Lance + Iceberg. Maps don't write anything because they're pure functions; only the final committed output matters for recovery.
 
 ### Mode 2: Identifier ACK (pipelines with shuffle)
 
-Step by step:
+Shuffle breaks barrier-based checkpointing: once records are repartitioned across workers, there's no clean "before/after" boundary to snapshot. Bilibili sidesteps this by tracking records by identity rather than position.
+
 ```
 1. Record "video_42" enters the pipeline
    → Coordinator registers: { video_42: IN_FLIGHT }
@@ -149,11 +151,11 @@ Step by step:
    → Replay only IN_FLIGHT records from source
 ```
 
-At-Least-Once semantics — a record might be processed twice, so sinks must be idempotent (producing the same result whether applied once or multiple times, e.g., an upsert keyed on `video_id`).
+**At-Least-Once semantics** — a record might be processed twice if it crashes after writing but before ACK, so sinks must be **idempotent** (producing the same result whether applied once or multiple times, e.g., an upsert keyed on `video_id`).
 
 ### Mode 3: Column Link (replace shuffle with storage join)
 
-This is the clever one. Walk through a concrete example:
+Some aggregations (GroupBy, global average) require seeing all data — traditionally a shuffle. Column Link avoids the shuffle entirely by writing partial results to durable storage, then reading them back. Because the intermediate write is durable, a crash at any point just resumes from the last written column.
 
 **Goal**: compute per-video quality score that requires a global average.
 
@@ -187,10 +189,13 @@ Column Link approach:
 **Why Lance, not Parquet?** Lance stores columns as separate **fragment files** — each fragment is an independent chunk of rows written by one worker, so multiple workers can write simultaneously without contention. Adding a column = write new fragment + update manifest. Parquet requires rewriting the entire file. See [[data-processing/lance-vs-parquet]] for details.
 
 ### Limitations of Column Link
-- + Works for GroupBy/aggregate (replace with storage read)
-- - Does NOT work for global sort (ordering requires seeing all data)
-- - Does NOT work for repartition (data movement, not aggregation)
-- ~ At extreme scale: manifest updates serialize, S3 prefix throttling (~5500 PUT/s)
+
+| | Reason |
+|---|---|
+| Works: GroupBy/aggregate | Replaced by a storage read — no data movement needed |
+| Fails: global sort | Ordering requires seeing all data simultaneously; can't be split into fragments |
+| Fails: repartition | Data movement required, not just aggregation |
+| Degrades at scale | Manifest updates serialize; S3 prefix throttling caps at ~5500 PUT/s |
 
 ---
 
