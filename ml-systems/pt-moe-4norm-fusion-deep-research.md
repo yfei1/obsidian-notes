@@ -10,14 +10,14 @@ PT-MoE's 4-norm sandwich residual pattern (norm→add→norm per sub-layer) is i
 
 ## Research Notes
 
-Deep research session (2026-03-27) investigating kernel fusion opportunities for the 4-norm residual pattern in `afm_pt_moe.py`. Read the sub-notes in dependency order:
+Deep research session (2026-03-27) investigating kernel fusion opportunities for the 4-norm residual pattern in `afm_pt_moe.py`. Each sub-note depends on the one before it — the dependency order below is the reading order:
 
-1. **[[ml-systems/pt-moe-4norm-postnorm-semantic-mismatch]]** — The root constraint: establishes why existing fusion fails (Post-LN semantic mismatch, sequential dependency chain) and derives the custom kernel design with HBM traffic analysis. Everything downstream assumes this mismatch is understood.
-2. **[[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]** — Read second because the savings only make sense once the kernel design is fixed: HBM/SRAM model, 6→4→2 kernel reduction, Llama vs PT-MoE norm order comparison. This cost model is what justifies the integration effort in note 4.
-3. **[[ml-systems/pt-moe-decode-kernel-launch-analysis]]** — Decode vs prefill cost model: kernel launch overhead dominates during decode, so fusion ROI is higher there than arithmetic intensity alone suggests. Explains why the integration targets decode paths first.
-4. **[[ml-systems/pt-moe-4norm-fused-kernel-integration]]** — Integration path once kernel design and cost model are established: CustomOp tiers, torch.compile interaction, hybrid implementation code, action plan.
-5. **[[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]** — TP-specific extension that builds on note 4: AR+norm fusion, norm locality under tensor parallelism, redundant execution across ranks, Phase 1 vs Phase 2 recommendations.
-6. **[[ml-systems/pt-moe-4norm-fusion-followup-qa]]** — Extended Q&A covering all of the above topics in conversational format.
+1. **[[ml-systems/pt-moe-4norm-postnorm-semantic-mismatch]]** — Start here. Establishes the root constraint: why the existing `fused_add_rms_norm` kernel cannot be reused (Post-LN vs Pre-LN semantics, sequential dependency chain), and derives the custom kernel design with HBM traffic analysis. Every downstream note assumes this mismatch and the resulting kernel interface are understood.
+2. **[[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]** — Read after note 1 because the savings figures only make sense once the kernel design is fixed. Covers the HBM/SRAM cost model, the 6→4→2 kernel reduction, and a Llama vs PT-MoE norm-order comparison. The resulting cost model is what justifies the integration effort in note 4.
+3. **[[ml-systems/pt-moe-decode-kernel-launch-analysis]]** — Read after note 2 because the decode vs prefill ROI comparison requires the cost model from note 2. Kernel launch overhead dominates during single-token decode, making fusion ROI higher there than arithmetic intensity alone predicts — this is why the integration targets decode paths first.
+4. **[[ml-systems/pt-moe-4norm-fused-kernel-integration]]** — Read after notes 1–3. Covers the integration path given the kernel design and cost model: CustomOp tiers, torch.compile interaction, hybrid implementation code, and action plan.
+5. **[[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]** — Read after note 4. TP-specific extension: AR+norm fusion, norm locality under tensor parallelism, redundant execution across ranks, and Phase 1 vs Phase 2 recommendations. Requires note 4's CustomOp framing.
+6. **[[ml-systems/pt-moe-4norm-fusion-followup-qa]]** — Extended Q&A covering all of the above topics. No new dependencies; use as a reference after reading notes 1–5.
 
 ---
 
