@@ -135,19 +135,22 @@ The single matmul (`[4,512] × [512,512]`) regresses 4% because cuBLAS is alread
 
 ## CUDA Graphs — Separate from `torch.compile`
 
-nano-vllm uses three independent GPU acceleration mechanisms:
+CUDA graphs eliminate **CPU dispatch overhead** — a bottleneck distinct from kernel efficiency. The Python interpreter pays ~2–3µs per kernel launch to issue commands to the CUDA driver. A LLaMA-7B decode step dispatches ~300 kernels, so Python overhead alone costs ~840µs. `graph.replay()` replays the entire recorded sequence with one CPU call, reducing that to near zero.
+
+nano-vllm uses three independent GPU acceleration mechanisms — they compose without conflict:
 
 | Mechanism | API | What it does | Where in nano-vllm |
 |---|---|---|---|
 | `@torch.compile` | Decorator on methods | Fuses Python element-wise ops into GPU kernels | RMSNorm, SiluAndMul, RoPE, Sampler |
-| `torch.cuda.CUDAGraph` | capture() / replay() | Records a sequence of GPU kernel launches, replays as one call | `model_runner.py:capture_cudagraph()` |
+| `torch.cuda.CUDAGraph` | capture() / replay() | Records kernel launch sequence; replays as one call | `model_runner.py:capture_cudagraph()` |
 | Flash Attention / Triton | Library calls | Hand-written fused GPU kernels | `attention.py` |
 
-CUDA graphs don't optimize individual kernels — they eliminate **CPU dispatch overhead**: the Python interpreter pays ~2–3µs per kernel launch to issue commands to the CUDA driver. `graph.replay()` replays the entire recorded sequence with one CPU call, bypassing the driver entirely for subsequent launches.
+Capture runs the model once through the normal `_wrapped_call_impl` → `_call_impl` → `forward()` path, recording every GPU kernel dispatch at the driver level. Replay fires the same ~300 kernels without Python involvement:
 
 ```python
 # capture_cudagraph() — model_runner.py:216-251
 # input_ids: [bs, seq_len=1]  positions: [bs]  (decode phase: one token per step)
+# outputs: pre-allocated output buffer, shape [max_bs, vocab_size]
 graph = torch.cuda.CUDAGraph()
 with torch.cuda.graph(graph, self.graph_pool):
     outputs[:bs] = self.model(input_ids[:bs], positions[:bs])  # record all kernels
@@ -155,7 +158,7 @@ with torch.cuda.graph(graph, self.graph_pool):
 graph.replay()  # replay all recorded kernels with one CPU call
 ```
 
-Concrete numbers (A100, LLaMA-7B — a 7-billion-parameter language model, batch=4, decode step):
+Concrete numbers (A100, LLaMA-7B, batch=4, decode step):
 
 ```
  Without CUDA graph: ~850µs/step  (Python dispatches ~300 kernels × ~2.8µs each)
@@ -163,7 +166,7 @@ Concrete numbers (A100, LLaMA-7B — a 7-billion-parameter language model, batch
  Speedup:            4.0×
 ```
 
-During capture, `self.model(...)` runs the normal `_wrapped_call_impl` → `_call_impl` → `forward()` path. The CUDA graph records every GPU kernel dispatch at the driver level. On replay, the same ~300 kernels fire without Python involvement. Hooks execute during capture but are **not** replayed — they are Python code, not GPU kernels, so the graph has no record of them.
+Hooks fire during capture but are **not** replayed — because hooks are Python code, not GPU kernels. The CUDA graph records only driver-level kernel launches; the Python hook calls leave no trace in the graph. This means hook side-effects (logging, shape checks) run once at capture time and are silently skipped on every subsequent replay.
 
 ---
 
