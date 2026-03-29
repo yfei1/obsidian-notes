@@ -102,8 +102,8 @@ weight_loader(param, tensor)
 
 | Layer Type | What weight_loader Does (3B, TP=4 example) |
 |---|---|
-| `QKVParallelLinear` | Full tensor `[2304, 2048]` (Q+K+V packed, 768 rows each); splits into Q/K/V then slices each: rank r gets rows `[r*192:(r+1)*192]` of each → `[576, 2048]` per rank |
-| `ColumnParallelLinear` | Slice output (dim 0): `gate_proj [5888, 2048]` → each of 4 ranks gets `[1472, 2048]` |
+| `QKVParallelLinear` | Full tensor `[2560, 2048]` (Q=2048 + K=256 + V=256 rows); splits into Q/K/V then slices each by TP: rank r gets Q `[r*512:(r+1)*512]`, K `[r*64:(r+1)*64]`, V `[r*64:(r+1)*64]` → `[640, 2048]` per rank |
+| `ColumnParallelLinear` | Slice output (dim 0): `gate_proj [6656, 2048]` → each of 4 ranks gets `[1664, 2048]` |
 | `RowParallelLinear` | Slice input (dim 1): `o_proj [2048, 2048]` → each of 4 ranks gets `[2048, 512]` |
 | `VocabParallelEmbedding` | Slice vocab (dim 0): `[153600, 2048]` → each of 4 ranks gets `[38400, 2048]` |
 | `RMSNorm` | No sharding — just copy (falls through to `default_weight_loader`) |
