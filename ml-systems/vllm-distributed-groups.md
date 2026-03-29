@@ -2,6 +2,10 @@
 
 #ml-systems #distributed-systems #interview-prep
 
+**Scope**: How vLLM constructs and manages its six distributed process groups — the rank layout tensor, `GroupCoordinator` internals, and runtime group rebuild (PT-MoE pattern).
+
+**Prerequisites**: [[ml-systems/parallelism-strategies]] (TP/PP/DP concepts), [[ml-systems/tensor-parallelism]] (all-reduce semantics), [[ml-systems/pt-moe-architecture]] (why track-scoped TP is needed).
+
 ## TL;DR
 
 vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP` — where **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). A **collective** is an operation — like all-reduce (sum a tensor across all ranks, give every rank the result) or broadcast — that every rank in a group executes together. Each group is a `GroupCoordinator` holding two process groups: one backed by NCCL (NVIDIA's GPU collective library, runs kernels over NVLink/PCIe) and one backed by Gloo (Meta's CPU collective library, used for control-plane barriers where no GPU context is needed). Groups can be destroyed and rebuilt at runtime — PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** (one independent model replica within a PT-MoE deployment, running its own forward pass in parallel with other tracks) without forking vLLM.
@@ -257,21 +261,20 @@ Full details, safety table, worked arithmetic, and the Pydantic fix: [[ml-system
 ## See Also
 
 - [[ml-systems/parallelism-strategies]] — TP, PP, EP fundamentals
-- [[ml-systems/pt-moe-vllm-implementation]] — PT-MoE process group setup that uses this rebuild pattern
+- [[ml-systems/tensor-parallelism]] — all-reduce mechanics and shard semantics
+- [[ml-systems/pt-moe-architecture]] — why track-scoped TP groups are needed
+- [[ml-systems/pt-moe-vllm-implementation]] — uses the `GroupCoordinator` `new_group` loop to scope `_TP` all-reduces to the correct cross-track group per rank
+- [[ml-systems/vllm-process-group-rebuild]] — full rebuild safety table, KV cache corruption arithmetic, Pydantic pitfall
+- [[ml-systems/vllm-weight-loading]] — uses `rank_in_group` from `GroupCoordinator` to select the per-track weight slice
 - [[ml-systems/vllm-model-integration]] — model registration and loading
-- [[ml-systems/vllm-weight-loading]] — weight loading uses `rank_in_group` for track slicing
+- [[ml-systems/kv-cache-internals]] — KV cache head allocation affected by TP config/actual divergence
+- [[ml-systems/python-import-binding]] — import binding behavior for accessing rebuilt process groups
+- [[ml-systems/vllm-executor-architecture]] — executor layer that initializes these groups
+- [[ml-systems/ray-compiled-graph-in-vllm]] — CG delegates PP tensor routing to vLLM's existing NCCL groups via RayPPCommunicator
+- [[ml-systems/vllm-cg-investigation-findings]]
 - [[ml-systems/validating-parallelism-at-scale]]
 - [[ml-systems/parallel-track-architecture]]
-- [[ml-systems/tensor-parallelism]]
-- [[ml-systems/kv-cache-internals]]
-- [[ml-systems/python-import-binding]] — import binding behavior for accessing rebuilt process groups
 
 ## Connections
 
-- [[ml-systems/pt-moe-vllm-implementation]] — uses the `GroupCoordinator` `new_group` loop to scope `_TP` all-reduces to the correct cross-track group per rank
-- [[ml-systems/ray-compiled-graph-in-vllm]]
-- [[ml-systems/vllm-cg-investigation-findings]]
-- [[ml-systems/vllm-executor-architecture]]
-- [[ml-systems/pt-moe-architecture]]
-- [[ml-systems/vllm-weight-loading]] — uses `rank_in_group` from GroupCoordinator to select the per-track weight slice in PT-MoE 150B loading
-- [[ml-systems/ray-compiled-graph-in-vllm]] — CG delegates PP tensor routing to vLLM's existing NCCL groups via RayPPCommunicator; the NCCL data plane is identical to MultiprocExecutor's
+See **See Also** above — consolidated to avoid duplication.
