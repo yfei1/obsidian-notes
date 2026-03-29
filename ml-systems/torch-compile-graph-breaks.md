@@ -33,17 +33,19 @@ Tested on PyTorch 2.10 (CUDA 12.8) using `torch.compile(fn, fullgraph=True, back
 **Key insight**: `.item()` alone does NOT break the graph. Only `.item()` **followed by data-dependent branching** (`if`, `while`, `assert` on that value) breaks. The tracer can carry `.item()` as a symbolic integer — it just can't decide which branch to take.
 
 ```python
+# x = torch.randn(4, 512)  — shape [4, 512], dtype float32
+
 # BREAKS — data-dependent branch
-def bad(x):
+def bad(x):            # x: [4, 512]
     val = x.max().item()
     if val > 0:        # tracer can't resolve this
         return x * 2
     return x
 
 # COMPILES — .item() without branching
-def ok(x):
+def ok(x):             # x: [4, 512]
     val = x.max().item()
-    return x * 2       # no branch on val
+    return x * 2       # val carried as symbolic int; no branch
 ```
 
 ```
@@ -128,7 +130,7 @@ This is better than removing the check entirely because eager-mode callers still
 
 3. **"How do you debug graph breaks?"** — `torch.compile(fn, fullgraph=True, backend="eager")` raises on the first break with the exact reason. `TORCH_LOGS=graph_breaks` logs all breaks without failing. For production, wrap debug-only code in `if not torch.compiler.is_compiling():`.
 
-4. **"torch.compile vs CUDA graphs — when do you use which?"** — torch.compile fuses multiple small element-wise ops into fewer GPU kernels (reducing memory round-trips). CUDA graphs eliminate CPU-side kernel launch overhead by replaying a recorded command buffer. They're complementary: vLLM uses torch.compile for kernel fusion and CUDA graphs for decode-step replay. The combined speedup is typically 1.5-2x for decode-bound workloads.
+4. **"torch.compile vs CUDA graphs — when do you use which?"** — torch.compile fuses multiple small element-wise ops into fewer GPU kernels (reducing memory round-trips per fused op, e.g., SiLU + multiply → 1 kernel instead of 2). CUDA graphs eliminate CPU-side kernel launch overhead by replaying a recorded command buffer — removing one `cudaLaunchKernel` call per op per step. They're complementary: vLLM uses torch.compile for kernel fusion and CUDA graphs for decode-step replay, because decode is bottlenecked by both memory bandwidth and CPU dispatch latency.
 
 ---
 
