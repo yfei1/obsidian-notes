@@ -14,7 +14,7 @@ vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank
 
 ## Core Intuition
 
-Distributed inference requires different communication patterns for different parallelism axes. TP ranks **all-reduce** (sum a tensor across all ranks and distribute the result) activations within a **pipeline stage** (a contiguous slice of the model's layers assigned to one GPU in a pipeline-parallel setup); PP ranks send activations forward from one stage to the next; DP ranks synchronize gradients across replicas. Each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups. The constraint is that PP and DP must never be rebuilt — those groups cross TP boundaries, so replacing them severs the rank-to-rank paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet.
+Distributed inference requires different communication patterns for different parallelism axes. TP ranks **all-reduce** (sum a tensor across all ranks and distribute the result) activations within a **pipeline stage** (a contiguous slice of the model's layers assigned to one GPU in a pipeline-parallel setup); PP ranks send activations forward from one stage to the next; DP ranks synchronize gradients across replicas (identical copies of the model running on separate GPU sets, each processing different input batches). Each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups. The constraint is that PP and DP must never be rebuilt — those groups cross TP boundaries, so replacing them severs the rank-to-rank paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet.
 
 ---
 
@@ -175,7 +175,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 | `_TP`  | parallel_state.py:1213 | IS TP | `all_ranks.view(-1, tp_size)` | 1 group: [0..31] |
 | `_DCP` | parallel_state.py:1221 | Subdivides TP | `all_ranks.reshape(-1, dcp_size)` | DCP=1: 32 singleton groups |
 | `_PCP` | parallel_state.py:1230 | Same level as TP, PCP axis | `transpose(3,4).reshape(-1, pcp_size)` | PCP=1: 32 singleton groups |
-| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP (routes tokens to expert sub-networks) | `transpose(1,2).reshape(-1, dp*pcp*tp)` | EP=32: 1 group [0..31] |
+| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP (routes tokens across all GPUs holding expert sub-networks — the distinct feed-forward specialists in a MoE layer) | `transpose(1,2).reshape(-1, dp*pcp*tp)` | EP=32: 1 group [0..31] |
 | `_PP`  | parallel_state.py:1233 | Above TP (crosses TP boundaries) | `transpose(2,4).reshape(-1, pp_size)` | PP=1: 32 singleton groups |
 | `_DP`  | parallel_state.py:1240 | Above TP (crosses TP boundaries) | `transpose(1,4).reshape(-1, dp_size)` | DP=1: 32 singleton groups |
 
@@ -183,7 +183,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because the two communication planes have incompatible resource requirements: NCCL requires an active CUDA context and a GPU memory allocation per communicator <!-- source: NCCL developer guide -->; Gloo runs entirely on CPU and fires before any GPU context exists (e.g., the barrier in `init_distributed_environment` before `torch.cuda.set_device`). Mixing them into one communicator would either block CPU barriers on GPU availability or waste GPU resources on CPU-only synchronization.
+A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because the two communication planes have incompatible resource requirements: NCCL requires an active CUDA context and a GPU memory allocation per communicator; Gloo runs entirely on CPU and fires before any GPU context exists (e.g., the barrier in `init_distributed_environment` before `torch.cuda.set_device`). Mixing them into one communicator would either block CPU barriers on GPU availability or waste GPU resources on CPU-only synchronization.
 
 Resources held per coordinator:
 
@@ -191,14 +191,14 @@ Resources held per coordinator:
 |-------|---------|--------|
 | `device_group` | NCCL | GPU collectives (all-reduce, broadcast) — weight sharding and activation exchange during the forward pass |
 | `cpu_group` | Gloo | CPU-side barriers — no GPU context required, used for control-plane synchronization |
-| `device_communicator` | — | Custom comm buffers (optional) |
+| `device_communicator` | — | Custom communication buffers for specialized collectives (optional) |
 | `mq_broadcaster` | — | Message queue for weight broadcasting (optional) |
 
 Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU memory and thread resources until explicitly released, so leaked communicators cause out-of-memory (OOM) errors and can deadlock subsequent collective operations.
 
 ### Constructor: Why Every Rank Iterates Every Group
 
-`torch.distributed.new_group` is a **collective barrier**: every rank in the world must call it before any rank proceeds, even for groups it doesn't belong to, because NCCL's communicator setup requires a globally synchronized handshake across all participants. Skipping a call on one rank stalls all others indefinitely. The constructor (parallel_state.py:316-395) therefore iterates ALL group rank lists and creates both process groups for each, storing only the group the current rank belongs to:
+`torch.distributed.new_group` is a **collective barrier** (a synchronization point where every rank must arrive before any rank proceeds): every rank in the world must call it before any rank proceeds, even for groups it doesn't belong to, because NCCL's communicator setup requires a globally synchronized handshake across all participants. Skipping a call on one rank stalls all others indefinitely. The constructor (parallel_state.py:316-395) therefore iterates ALL group rank lists and creates both process groups for each, storing only the group the current rank belongs to:
 
 ```python
 # TP=32 initial: 1 group × 2 backends = 2 new_group calls/rank
@@ -240,7 +240,7 @@ init_model_parallel_group(
 )
 ```
 
-Returns a `GroupCoordinator` scoped to whichever group the current rank belongs to. All ranks must call this collectively because `torch.distributed.new_group` is a **barrier** (a synchronization point where every rank must arrive before any rank proceeds) — every rank must enter it, even for groups it doesn't belong to.
+Returns a `GroupCoordinator` scoped to whichever group the current rank belongs to. All ranks must call this collectively because `torch.distributed.new_group` is a **barrier** — every rank must enter it, even for groups it doesn't belong to.
 
 ---
 
