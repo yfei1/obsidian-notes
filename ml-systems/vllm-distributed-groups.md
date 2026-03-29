@@ -192,7 +192,7 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 
 ### Constructor: Why Every Rank Iterates Every Group
 
-`torch.distributed.new_group` is a **collective barrier** — every rank in the world must call it before any rank proceeds, even for groups the rank doesn't belong to. Skipping a group on one rank stalls all others indefinitely. The constructor (parallel_state.py:316-395) therefore iterates ALL group rank lists, creates both process groups for each, then stores only the group the current rank belongs to:
+`torch.distributed.new_group` is a **collective barrier**: every rank in the world must call it before any rank proceeds, even for groups it doesn't belong to, because NCCL's communicator setup requires a globally synchronized handshake across all participants. Skipping a call on one rank stalls all others indefinitely. The constructor (parallel_state.py:316-395) therefore iterates ALL group rank lists and creates both process groups for each, storing only the group the current rank belongs to:
 
 ```python
 for ranks in group_ranks:
