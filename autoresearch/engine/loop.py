@@ -465,12 +465,19 @@ def select_target(notes: list[Path], history: list[dict],
         # but weakness (quality gap) is the primary driver now.
         never_targeted = 0.05 if target_counts.get(rp, 0) == 0 else 0.0
 
-        # Quality floor: notes in "crisis" (subjective avg < 5.5) never suffer
-        # staleness decay. Staleness is pinned to 1.0 so they always compete as
-        # if freshly discovered. Crisis is judged on LLM-graded dimensions only —
-        # high Cross-Linking or Code Quality must not mask structural weaknesses.
-        CRISIS_THRESHOLD = 5.5
-        if priority_avg < CRISIS_THRESHOLD:
+        # Quality floor: a note is in "crisis" if its subjective avg is low OR
+        # any single subjective dimension is critically bad (score < 4).
+        # The "any dim < 4" rule catches notes that scored a bad average once
+        # but got noisy high scores in other dims on re-eval (e.g. Coherence=3
+        # despite Clarity=7 → avg=5.83 which would otherwise escape the floor).
+        # Staleness is pinned to 1.0 so crisis notes always compete as freshly
+        # discovered, guaranteeing they are targeted every round until they heal.
+        CRISIS_AVG_THRESHOLD = 5.5
+        CRISIS_DIM_THRESHOLD = 4      # any single subjective dim below this = crisis
+        in_crisis = priority_avg < CRISIS_AVG_THRESHOLD
+        if not in_crisis and subj_valid:
+            in_crisis = min(subj_valid) < CRISIS_DIM_THRESHOLD
+        if in_crisis:
             staleness = 1.0
 
         # Weakness-first: fix the worst notes before exploring mediocre ones.
