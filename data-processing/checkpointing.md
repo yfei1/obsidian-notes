@@ -119,6 +119,8 @@ Flink requires a **replayable source** — one that can re-emit records from a p
 
 ## 3. Bilibili's Ray Data Extension
 
+Ray Data is the distributed data-processing library in the Ray framework — it executes pipelines as a streaming DAG over a cluster, keeping only a bounded window of data in memory at once.
+
 Source: [B站下一代多模态数据工程架构](https://mp.weixin.qq.com/s/A34mQDtx6yqMzqKf4-ChCQ)
 
 Their use case: video → frames → OCR → embeddings → aggregate per-video → training dataset. Runs for **weeks**. Cluster crash is guaranteed.
@@ -127,7 +129,7 @@ The pipeline has three structural shapes that need different checkpoint strategi
 
 ### Mode 1: Barrier (map-only pipelines)
 
-Stateless map operators carry no state between records — barriers flow through without alignment issues. **Two-phase commit** (2PC — coordinator first asks "can you commit?", then issues the final commit) happens **at the sink only** via Lance + Iceberg. Maps don't write anything because they're pure functions; only the final committed output matters for recovery.
+Stateless map operators carry no state between records — barriers flow through without alignment issues. **Two-phase commit** (2PC — coordinator first asks "can you commit?", then issues the final commit) happens **at the sink only** via Lance + Iceberg (Apache Iceberg — a table format that tracks committed files in a metadata log, enabling atomic visibility of new data). Maps don't write anything because they're pure functions; only the final committed output matters for recovery.
 
 ### Mode 2: Identifier ACK (pipelines with shuffle)
 
@@ -136,7 +138,7 @@ Shuffle breaks barrier-based checkpointing: once records are repartitioned acros
 ```
 1. Record "video_42" enters the pipeline
    → Coordinator registers: { video_42: IN_FLIGHT }
-   → Stored in Redis WAL
+   → Stored in Redis WAL (Write-Ahead Log — a durable append-only record of state changes, so the coordinator can reconstruct which records were in-flight after a crash)
 
 2. Record passes through Map → Shuffle → Map
    Shuffle reorders, repartitions — doesn't matter.
@@ -181,7 +183,7 @@ Column Link approach:
   Step 3: Each worker independently computes score = brightness / 0.6,
           writes a NEW COLUMN via Column Link:
           Lance table becomes: | video_id | brightness | quality_score |
-          Column Link = write new fragment + update manifest (metadata-only)
+          Column Link = write new fragment + update manifest (manifest — Lance's metadata file listing all fragment files that constitute the current table; updating it is a metadata-only operation, not a data rewrite)
 
   On crash: Lance table is durable. Just re-read and resume.
 ```
@@ -201,7 +203,7 @@ Column Link approach:
 
 ## 4. Morsel-Lease Model (map-only, zero I/O overhead)
 
-A design for morsel-driven engines (Daft) where map pipelines dominate. A **morsel** is a fixed-size batch of rows — typically 10k–100k rows — that a single worker processes end-to-end. See [[data-processing/morsel-driven-parallelism]] for the underlying execution model.
+A design for morsel-driven engines — Daft is an open-source DataFrame engine that schedules work in morsels — where map pipelines dominate. A **morsel** is a fixed-size batch of rows — typically 10k–100k rows — that a single worker processes end-to-end. See [[data-processing/morsel-driven-parallelism]] for the underlying execution model.
 
 ### How it works, step by step
 
