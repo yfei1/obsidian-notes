@@ -824,9 +824,9 @@ def forward(self, hidden_states, positions, residual):
 
 ---
 
-## User
+## Follow-Up: TP Fusion, GPU Memory Model, and Decode vs Prefill
 
-> question: what if we have TP enabled? IIUC some custom ops exists for the sake of minimizing synchronization when TP/PP/EP is enabled. i.e. instead of doing 1 sync per call they fuse all ops into one kernel with just one sync. that does require changing the weight loading logic, right? my question is would our four norm benefit from writing custom op and custom weight loading like what mergedcolumnlinear layer does.
+The follow-up Q&A covers: whether the 4-norm pattern benefits from AR+norm fusion under TP, the GPU HBM/SRAM memory model underlying kernel fusion savings, why kernel launch overhead dominates during decode, and when prefill is compute-bound vs memory-bound. See [[ml-systems/pt-moe-4norm-fusion-followup-qa]].
 
 ---
 
@@ -1469,6 +1469,7 @@ So fusion helps decode for two different reasons depending on the op type:
 
 ## Connections
 
+- [[ml-systems/pt-moe-4norm-fusion-followup-qa]] — follow-up Q&A: TP/AR fusion opportunity, GPU memory model 101, decode vs prefill memory-boundedness
 - [[ml-systems/pt-moe-architecture]] — the PT-MoE model whose 4-norm sandwich residual pattern is the subject of this research
 - [[ml-systems/pt-moe-vllm-implementation]] — vLLM integration context for where the fused kernel would be deployed
 - [[ml-systems/norms-and-regularization]] — RMSNorm mechanics and the `fused_add_rms_norm` semantics analyzed here
