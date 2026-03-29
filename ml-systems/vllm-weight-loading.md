@@ -179,11 +179,11 @@ TAMM's 56 layers span two segments. Segment 0 (layers 0–34, `num_regular_layer
 
 ## PT-MoE 150B: Track-Parallel Weight Loading
 
-PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks train jointly and export into a single checkpoint with per-track weights concatenated on dim 0, because the export pipeline has no per-track file split.
+PT-MoE 150B is a **multi-track model** — each **track** is an independent set of transformer layers that shares the same input embedding but produces a distinct output distribution. 8 tracks train jointly, so the export pipeline concatenates per-track weights on dim 0 into a single checkpoint rather than splitting into per-track files.
 
-This breaks `weight_loader` dispatch in two ways. First, a per-track weight like `gate_proj` has checkpoint shape `[8, 2048, 5888]`, but the model's `nn.Parameter` expects `[2048, 5888]` — one track's worth. `weight_loader` slices by TP rank assuming the leading dimension is the output dimension, so passing the full `[8, ...]` tensor causes it to slice across the track index instead of the output dimension, producing wrong shards and silent corruption. Second, shared weights (embedding, output norm) carry no track dimension, so a blanket dim-0 slice on every tensor would corrupt them instead.
+This creates a shape mismatch that breaks `weight_loader` dispatch. A per-track weight like `gate_proj` has checkpoint shape `[8, 2048, 5888]`, but the model's `nn.Parameter` expects `[2048, 5888]` — one track's worth — because each GPU owns exactly one track. `weight_loader` assumes the leading dimension is the output dimension and slices by TP rank, so passing the full `[8, ...]` tensor causes it to slice across the track index instead, producing wrong shards silently. Shared weights (embedding, output norm) have no track dimension, so a blanket dim-0 slice on every tensor would corrupt them.
 
-The fix is a pre-dispatch slice: detect whether a tensor is per-track (dim-0 size equals `num_tracks`), extract this GPU's track slice, then delegate to `weight_loader` unchanged — which then applies TP sharding correctly on the single-track-shaped tensor.
+The fix inserts a pre-dispatch step: detect whether a tensor is per-track by checking `tensor.shape[0] == num_tracks`, extract this GPU's track slice, then delegate to `weight_loader` — which applies TP sharding on the now-correct single-track-shaped tensor without modification.
 
 ### Checkpoint Shape Convention
 
