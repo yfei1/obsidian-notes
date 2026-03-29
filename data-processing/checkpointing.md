@@ -11,7 +11,7 @@ Three fundamentally different strategies, each for a different pipeline shape:
 | **Recompute** (Spark) | Store DAG recipe, redo lost partitions | Short batch jobs |
 | **Barrier snapshot** (Flink) | Inject markers, snapshot operator state | Infinite streams |
 | **Materialize intermediates** (Bilibili) | Write each stage's output to storage | Long-running ETL with shuffles |
-| **Morsel-lease** (proposed for Daft) | Workers lease input chunks, output existence = checkpoint | Map-only pipelines |
+| **Morsel-lease** (proposed for Daft) | Workers lease input chunks (morsels — fixed-size row batches), output existence = checkpoint | Map-only pipelines |
 
 **The hard problem is always shuffle**, not map. Maps are stateless — you can always redo them. Shuffle requires cross-worker coordination.
 
@@ -65,7 +65,7 @@ Jobs are assumed to be minutes-to-hours. At that scale, recompute is cheaper tha
 
 ## 2. Flink: Chandy-Lamport Barriers
 
-See [[distributed-systems/chandy-lamport]] for the underlying algorithm.
+Flink uses the Chandy-Lamport algorithm — a protocol for taking a consistent global snapshot of a distributed system by injecting marker messages — adapted for streaming pipelines. See [[distributed-systems/chandy-lamport]] for the full derivation.
 
 ### How it works, step by step
 
@@ -113,7 +113,7 @@ Unaligned checkpoint (Flink 1.11+):
 ```
 
 ### Key constraint
-Flink requires a **replayable source** (Kafka, Kinesis). If your source is "files on S3," you'd need to shove them through Kafka first — which is why Flink is a poor fit for batch file processing.
+Flink requires a **replayable source** — one that can re-emit records from a past offset on demand (Kafka, Kinesis). If your source is "files on S3," you'd need to shove them through Kafka first — which is why Flink is a poor fit for batch file processing.
 
 ---
 
@@ -125,7 +125,7 @@ Their use case: video → frames → OCR → embeddings → aggregate per-video 
 
 ### Mode 1: Barrier (map-only, same as Flink)
 - Barriers flow through stateless map operators
-- 2PC happens **at the sink only** via Lance + Iceberg
+- Two-phase commit (2PC — coordinator first asks "can you commit?", then issues the final commit) happens **at the sink only** via Lance + Iceberg
 - Maps don't write anything — they're pure functions
 
 ### Mode 2: Identifier ACK (pipelines with shuffle)
@@ -149,7 +149,7 @@ Step by step:
    → Replay only IN_FLIGHT records from source
 ```
 
-At-Least-Once semantics — a record might be processed twice, so sinks must be idempotent.
+At-Least-Once semantics — a record might be processed twice, so sinks must be idempotent (producing the same result whether applied once or multiple times, e.g., an upsert keyed on `video_id`).
 
 ### Mode 3: Column Link (replace shuffle with storage join)
 
@@ -184,7 +184,7 @@ Column Link approach:
   On crash: Lance table is durable. Just re-read and resume.
 ```
 
-**Why Lance, not Parquet?** Lance stores columns as separate fragment files. Adding a column = write new fragment + update manifest. Parquet requires rewriting the entire file. See [[data-processing/lance-vs-parquet]] for details.
+**Why Lance, not Parquet?** Lance stores columns as separate **fragment files** — each fragment is an independent chunk of rows written by one worker, so multiple workers can write simultaneously without contention. Adding a column = write new fragment + update manifest. Parquet requires rewriting the entire file. See [[data-processing/lance-vs-parquet]] for details.
 
 ### Limitations of Column Link
 - + Works for GroupBy/aggregate (replace with storage read)
@@ -196,7 +196,7 @@ Column Link approach:
 
 ## 4. Morsel-Lease Model (map-only, zero I/O overhead)
 
-A design for morsel-driven engines (Daft) where map pipelines dominate. See [[data-processing/morsel-driven-parallelism]] for the underlying execution model.
+A design for morsel-driven engines (Daft) where map pipelines dominate. A **morsel** is a fixed-size batch of rows — typically 10k–100k rows — that a single worker processes end-to-end. See [[data-processing/morsel-driven-parallelism]] for the underlying execution model.
 
 ### How it works, step by step
 
