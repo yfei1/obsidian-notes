@@ -24,27 +24,7 @@ Great question — you're asking about fusing across the **all-reduce boundary**
 
 [reads allreduce_rms_fusion.py, linear.py, custom_op.py]
 
-No — the 4 norms themselves are **purely local elementwise ops with zero TP sync**. Let me trace where the syncs actually happen:
-
-```
-                                          TP sync points (within-track)
-                                          ----------------------------
-qkv_proj (ColumnParallel, no sync)  ->
-attn                                ->
-o_proj (RowParallel)                ->     * all_reduce here (linear.py:1517-1518)
-attn_pre_residual_norm              ->     (local -- no sync)
-+ residual                          ->     (local)
-attn_post_norm                      ->     (local)
-gate_up_proj (MergedColumn, no sync)->
-SwiGLU                              ->
-down_proj (RowParallel)             ->     * all_reduce here
-  OR FusedMoE (reduce_results=True) ->     * all_reduce here (afm_pt_moe.py:176)
-mlp_pre_residual_norm               ->     (local)
-+ residual                          ->     (local)
-mlp_post_norm                       ->     (local)
-```
-
-The norms operate on **already-reduced** hidden states. The `RowParallelLinear` in `o_proj` (`afm_pt_moe.py:239-245`) and `down_proj`/`FusedMoE` do the all-reduce internally, before the norms ever see the data.
+No — the 4 norms themselves are **purely local elementwise ops with zero TP sync**. The full TP sync placement diagram and analysis are in [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]. The norms operate on **already-reduced** hidden states. The `RowParallelLinear` in `o_proj` (`afm_pt_moe.py:239-245`) and `down_proj`/`FusedMoE` do the all-reduce internally, before the norms ever see the data.
 
 **But** — I think your real question is about the `allreduce + norm` fusion opportunity. And this is where it gets interesting.
 
