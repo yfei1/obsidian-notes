@@ -177,11 +177,22 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because the two communication planes have incompatible resource requirements: NCCL runs kernels over NVLink/PCIe and requires an active GPU context; Gloo runs on CPU and is used for control-plane barriers that fire before a GPU context exists. Mixing them into one communicator would either block CPU barriers on GPU availability or waste GPU resources on CPU-only synchronization.
+A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because the two communication planes have incompatible resource requirements: NCCL runs kernels over NVLink/PCIe and requires an active GPU context; Gloo runs on CPU for control-plane barriers that fire before any GPU context exists. Mixing them into one communicator would either block CPU barriers on GPU availability or waste GPU resources on CPU-only synchronization.
+
+Resources held per coordinator:
+
+| Field | Backend | Purpose |
+|-------|---------|--------|
+| `device_group` | NCCL | GPU collectives (all-reduce, broadcast) — weight sharding and activation exchange during the forward pass |
+| `cpu_group` | Gloo | CPU-side barriers — no GPU context required, used for control-plane synchronization |
+| `device_communicator` | — | Custom comm buffers (optional) |
+| `mq_broadcaster` | — | Message queue for weight broadcasting (optional) |
+
+Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU memory and thread resources until explicitly released, so leaked communicators cause OOM and can deadlock subsequent collective operations.
 
 ### Constructor: Why Every Rank Iterates Every Group
 
-The constructor (parallel_state.py:316-395) iterates ALL group rank lists and creates both process groups for each, then stores only the group the current rank belongs to:
+`torch.distributed.new_group` is a **collective barrier** — every rank in the world must call it before any rank proceeds, even for groups the rank doesn't belong to. Skipping a group on one rank stalls all others indefinitely. The constructor (parallel_state.py:316-395) therefore iterates ALL group rank lists, creates both process groups for each, then stores only the group the current rank belongs to:
 
 ```python
 for ranks in group_ranks:
@@ -193,19 +204,6 @@ for ranks in group_ranks:
         self.rank_in_group = ranks.index(self.rank)
 ```
 
-Every rank iterates every group — because `torch.distributed.new_group` is a collective barrier, all ranks must arrive before any rank proceeds, even for groups the rank doesn't belong to. Skipping a group on one rank stalls all others indefinitely.
-
-Resources held per coordinator:
-
-| Field | Backend | Purpose |
-|-------|---------|--------|
-| `device_group` | NCCL | GPU collectives (all-reduce, broadcast). Used for weight sharding and activation exchange during the forward pass. |
-| `cpu_group` | Gloo | CPU-side barriers. No GPU context required — used for control-plane synchronization. |
-| `device_communicator` | — | Custom comm buffers (optional) |
-| `mq_broadcaster` | — | Message queue for weight broadcasting (optional) |
-
-Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU memory and thread resources until explicitly released, so leaked communicators cause OOM and can deadlock subsequent collective operations.
-
 ### Rank vs. Group Position Attributes
 
 Three attributes name a rank's position, each counting from a different origin — confusing them causes incorrect weight shard selection or wrong track assignment.
@@ -216,11 +214,11 @@ Three attributes name a rank's position, each counting from a different origin �
 - **`world_size`**: number of ranks in this group (4)
 - **`ranks`**: all global ranks in this group ([12, 13, 14, 15])
 
-`local_rank` and `rank_in_group` diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology. In the running example, rank 12 sits on a node covering GPUs 8–15, so `local_rank=4`. But rank 12's TP group after rebuild is [12,13,14,15], so `rank_in_group=0`.
+`local_rank` and `rank_in_group` diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology. Rank 12 sits on a node covering GPUs 8–15, so `local_rank=4`; but its rebuilt TP group is [12,13,14,15], so `rank_in_group=0`.
 
-Model layers use `rank_in_group` to select weight shards — not `local_rank` — because weight sharding must be consistent within the group regardless of which physical node the group starts on. Using `local_rank` would assign the wrong shard to every rank except those on the first node.
+Model layers use `rank_in_group` to select weight shards — not `local_rank` — because weight sharding must be consistent within the group regardless of which node the group starts on. Using `local_rank` assigns the wrong shard to every rank except those on the first node.
 
-PT-MoE extends this to track assignment via the cross-track group. After rebuild, each TP slot index (0–3 within a track) has one representative per track: slot 0 gives the cross-track group [0,4,8,12,16,20,24,28]. Rank 12 is the fourth entry in that list, so `rank_in_group=3` within the cross-track group. PT-MoE uses this as the **track index** — which independent model replica this rank belongs to — because `rank_in_group` within the cross-track group uniquely identifies which track the rank serves across the full 32-GPU fleet, independent of node boundaries.
+PT-MoE extends this to track assignment via the cross-track group. After rebuild, each TP slot index (0–3 within a track) has one representative per track: slot 0 gives the cross-track group [0,4,8,12,16,20,24,28]. Rank 12 is the fourth entry, so `rank_in_group=3` within that group. PT-MoE uses this as the **track index** — which independent model replica this rank belongs to — because `rank_in_group` within the cross-track group uniquely identifies track membership across the full 32-GPU fleet, independent of node boundaries.
 
 ---
 
