@@ -214,7 +214,7 @@ for ranks in group_ranks:
 
 ### Rank vs. Group Position Attributes
 
-Three attributes name a rank's position, each counting from a different origin. The distinction matters because model layers use `rank_in_group` — not `local_rank` — to select weight shards, and PT-MoE uses `rank_in_group` to assign track membership. Within a track of 4 GPUs, each GPU occupies a **slot index** — its position within the track's rank list (0, 1, 2, or 3). A **cross-track group** then contains one rank from each track at the same slot index (e.g., slot 0 of every track); PT-MoE uses a rank's position within this group as its track index. Confusing the three attributes causes wrong shard selection or wrong track assignment.
+Weight sharding and track assignment both require knowing a rank's *position within a specific group* — not its position on a node. Three attributes serve three different counting origins, and using the wrong one produces silent failures: wrong weight shard loaded, wrong track assigned.
 
 - **`rank`**: global process index across the entire job (e.g., 12)
 - **`local_rank`**: physical GPU slot on this node, set by `torchrun` from the node boundary — rank 12 on a node covering GPUs 8–15 → `local_rank=4`
@@ -224,9 +224,9 @@ Three attributes name a rank's position, each counting from a different origin. 
 
 `local_rank` and `rank_in_group` diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology. Rank 12: `local_rank=4` (node boundary at 8), `rank_in_group=0` (group [12,13,14,15] starts at 12).
 
-Weight sharding uses `rank_in_group` because shards must be assigned consistently within the group regardless of which node it lands on — `local_rank` would assign the wrong shard to every rank except those on the first node.
+Weight sharding uses `rank_in_group` because each GPU must receive the shard corresponding to its position *within the TP group*, not its position on a node — `local_rank` would assign the wrong shard to every rank except those in the first TP group.
 
-PT-MoE extends this to track assignment via the cross-track group. After rebuild, slot 0 of each track forms the group [0,4,8,12,16,20,24,28]. Rank 12 is the fourth entry → `rank_in_group=3`. PT-MoE uses this as the **track index** — which independent model replica this rank belongs to — because `rank_in_group` within the cross-track group uniquely identifies track membership across the full 32-GPU fleet, independent of node boundaries.
+PT-MoE uses `rank_in_group` for track assignment via the **cross-track group** — a group containing one rank from each track at the same **slot index** (position within the track's rank list). After rebuild into 8 tracks × TP=4, slot 0 of each track forms the group [0,4,8,12,16,20,24,28]. Rank 12 is at slot 0 of track 3, so it is the fourth entry in this cross-track group → `rank_in_group=3`. PT-MoE uses this as the **track index** — which independent model replica this rank belongs to — because `rank_in_group` within the cross-track group uniquely identifies track membership across the full 32-GPU fleet, independent of node boundaries.
 
 ---
 
