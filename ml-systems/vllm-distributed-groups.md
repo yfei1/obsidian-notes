@@ -203,7 +203,7 @@ A **process group** is a named subset of ranks that can issue collective operati
 
 | Field | Backend | Purpose |
 |-------|---------|--------|
-| `device_group` | NCCL | GPU collectives (all-reduce, broadcast) — e.g. all-reduce of a `[batch, seq, hidden]` activation tensor across TP=32 ranks during the forward pass |
+| `device_group` | NCCL | GPU collectives (all-reduce, broadcast) — e.g. all-reduce of a `[1, 512, 8192]` bf16 activation tensor (8 MB <!-- source: 1×512×8192×2 bytes -->) across TP=32 ranks during the forward pass |
 | `cpu_group` | Gloo | CPU-side barriers — no GPU context required, used for control-plane synchronization |
 | `device_communicator` | — | Custom communication buffers for specialized collectives (optional) |
 | `mq_broadcaster` | — | Message queue for weight broadcasting (optional) |
