@@ -171,11 +171,14 @@ assert num_tracks * 2 == 16
 num_kv_heads = 32
 config_tp = 32
 actual_tp = 4
-heads_per_gpu_config = num_kv_heads // config_tp   # 1 (wrong: what KV cache is sized for)
-heads_per_gpu_actual = num_kv_heads // actual_tp   # 8 (correct: what attention writes)
+heads_per_gpu_config = num_kv_heads // config_tp   # 1 head/GPU (what KV cache is sized for)
+heads_per_gpu_actual = num_kv_heads // actual_tp   # 8 heads/GPU (what attention writes)
 assert heads_per_gpu_config == 1
 assert heads_per_gpu_actual == 8
-assert heads_per_gpu_actual - heads_per_gpu_config == 7  # heads corrupted per layer
+assert heads_per_gpu_actual - heads_per_gpu_config == 7  # 7 heads/layer land in unallocated memory
+# memory overrun per layer per GPU (bf16, seq=512, head_dim=128):
+# 7 heads × 512 tokens × 128 dims × 2 bytes = 917,504 bytes ≈ 0.875 MiB
+assert 7 * 512 * 128 * 2 == 917504
 ```
 
 ---
@@ -205,7 +208,7 @@ A **process group** is a named subset of ranks that can issue collective operati
 
 | Field | Backend | Purpose |
 |-------|---------|--------|
-| `device_group` | NCCL | GPU collectives (all-reduce, broadcast) — e.g. all-reduce of a `[1, 512, 8192]` bf16 activation tensor (8 MB <!-- source: 1×512×8192×2 bytes -->) across TP=32 ranks during the forward pass |
+| `device_group` | NCCL | GPU collectives (all-reduce, broadcast) — e.g. all-reduce of a `[1, 512, 8192]` bf16 activation tensor (8,388,608 bytes = 8 MiB; `1×512×8192×2`) across TP=32 ranks during the forward pass |
 | `cpu_group` | Gloo | CPU-side barriers — no GPU context required, used for control-plane synchronization |
 | `device_communicator` | — | Custom communication buffers for specialized collectives (optional) |
 | `mq_broadcaster` | — | Message queue for weight broadcasting (optional) |
