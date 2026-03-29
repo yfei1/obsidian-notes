@@ -183,11 +183,11 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because vLLM's startup sequence requires collective barriers before any GPU is available.
+A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because vLLM needs collectives at two distinct phases that have incompatible hardware requirements.
 
-`init_distributed_environment` (vLLM's startup routine that establishes process groups before any model code runs) issues a barrier before `torch.cuda.set_device` has been called. NCCL requires an active **CUDA context** (the GPU driver state that must be initialized before any GPU kernel can run) and a dedicated GPU memory allocation per communicator, so it cannot run at this point. Gloo runs entirely on CPU with no CUDA dependency, so it handles these early control-plane barriers. Once GPUs are initialized, NCCL takes over for all data-plane collectives (all-reduce, broadcast) because it uses NVLink/PCIe directly and runs orders of magnitude faster than Gloo for large tensors. Merging both roles into one communicator would either stall early CPU barriers on GPU availability or waste GPU memory on CPU-only synchronization — so each logical group gets one of each.
+**Phase 1 — control-plane (CPU, pre-GPU):** `init_distributed_environment` (vLLM's startup routine that establishes process groups before any model code runs) issues a barrier before `torch.cuda.set_device` has been called. NCCL requires an active **CUDA context** (the GPU driver state that must be initialized before any GPU kernel can run) and a dedicated GPU memory allocation per communicator — neither exists yet. Gloo runs entirely on CPU with no CUDA dependency, so it handles these early barriers.
 
-Resources held per coordinator:
+**Phase 2 — data-plane (GPU, forward pass):** Once GPUs are initialized, NCCL takes over for all data-plane collectives (all-reduce, broadcast) because it uses NVLink/PCIe directly and runs orders of magnitude faster than Gloo for large tensors. Merging both roles into one communicator would either stall early CPU barriers on GPU availability or waste GPU memory on CPU-only synchronization — so each logical group gets one of each.
 
 | Field | Backend | Purpose |
 |-------|---------|--------|
@@ -196,7 +196,7 @@ Resources held per coordinator:
 | `device_communicator` | — | Custom communication buffers for specialized collectives (optional) |
 | `mq_broadcaster` | — | Message queue for weight broadcasting (optional) |
 
-Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU memory and thread resources until explicitly released, so leaked communicators cause out-of-memory (OOM) errors and can deadlock subsequent collective operations.
+Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU memory and thread resources until explicitly released, so leaked communicators cause OOM errors and can deadlock subsequent collective operations.
 
 ### Constructor: Why Every Rank Iterates Every Group
 
