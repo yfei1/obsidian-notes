@@ -171,13 +171,15 @@ SP and CP solve different activation memory problems that TP alone leaves unaddr
 
 ### SP: Eliminating Redundant Activations Within a TP Group
 
-TP shards weight matrices but leaves non-TP ops — LayerNorm and Dropout — unsharded, running the full sequence on every GPU. Because those ops don't participate in TP's weight sharding, each TP rank stores a full-sequence activation for them even though it holds only a fraction of the weights — N identical copies of the same activation tensor, one per TP rank. SP eliminates this by splitting the sequence dimension across TP ranks, so each GPU stores only its 1/N slice for those ops. Activation memory drops ~30–40%.
+TP shards weight matrices but leaves non-TP ops — LayerNorm and Dropout — unsharded, running the full sequence on every GPU. Those ops don't participate in TP's weight sharding, so they can't consume a sharded input — each TP rank must reconstruct the full sequence before running them. The result: N identical full-sequence activation tensors, one per TP rank, even though each rank holds only 1/N of the weights.
+
+SP eliminates this by splitting the sequence dimension across TP ranks for those non-TP ops, so each GPU stores only its 1/N sequence slice instead of the full sequence. Activation memory for LayerNorm/Dropout drops ~30–40% because those tensors scale with sequence length, and SP cuts that by N.
 
 SP is always paired with TP because it reuses the same TP process group and the same two collectives TP already issues — **all-gather** (each GPU broadcasts its sequence shard so every GPU reconstructs the full sequence before a TP weight op) and **reduce-scatter** (each GPU contributes a partial result; the sum is split so each GPU receives only its sequence slice after the op). SP repositions these collectives to bracket the non-TP ops rather than adding new ones, so there is no extra communication cost.
 
 ### CP: Fitting Long Sequences That Exceed a Single GPU
 
-SP reduces redundant copies but does not reduce the peak memory a single GPU must allocate for attention. Each GPU still holds a full attention state — keys and values for every token in its sequence slice — for its own slice. At 128K tokens, that state alone can exceed 80 GB, making SP insufficient regardless of how many TP ranks exist.
+SP reduces redundant copies but does not reduce the peak attention memory on any single GPU. Attention requires each GPU to compute queries against keys and values for every token in the full sequence — even with SP, a GPU processing its sequence slice must access KV state for all other tokens to compute attention correctly. At 128K tokens with hidden dim 4096 in fp16, that KV state is ~128K × 4096 × 2 × 2 B ≈ 4 GB per layer, and across 32 layers this saturates an 80 GB A100 before weights or activations are counted.
 
 CP solves this by partitioning the sequence across GPUs at the attention computation itself via **Ring Attention**: each GPU holds a contiguous sequence slice and passes its **key/value tensors** (the per-token representations that attention queries against — see [[ml-systems/attention-mechanics]]) to the next GPU in a logical ring. Each GPU computes its local attention contribution against the current KV chunk, then receives the next chunk from the ring. One full rotation completes attention for that layer — no single GPU ever holds the full sequence's KV state. CP composes with both TP and SP.
 
