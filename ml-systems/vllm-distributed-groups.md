@@ -183,7 +183,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because the two communication planes have incompatible resource requirements: NCCL runs kernels over NVLink/PCIe and requires an active GPU context; Gloo runs on CPU for control-plane barriers that fire before any GPU context exists. Mixing them into one communicator would either block CPU barriers on GPU availability or waste GPU resources on CPU-only synchronization.
+A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because the two communication planes have incompatible resource requirements: NCCL requires an active CUDA context and a GPU memory allocation per communicator <!-- source: NCCL developer guide -->; Gloo runs entirely on CPU and fires before any GPU context exists (e.g., the barrier in `init_distributed_environment` before `torch.cuda.set_device`). Mixing them into one communicator would either block CPU barriers on GPU availability or waste GPU resources on CPU-only synchronization.
 
 Resources held per coordinator:
 
