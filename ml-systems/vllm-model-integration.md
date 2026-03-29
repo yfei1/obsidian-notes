@@ -167,7 +167,7 @@ Both use the same `get_rope()` and `RMSNorm`. Only the call order in `forward()`
 
 ## Weight Loading: Checkpoint Name → Model Parameter
 
-The checkpoint uses TAMM naming. The vLLM model uses standard naming. A `_remap_tamm_name()` function translates:
+The checkpoint uses TAMM naming; the vLLM model uses standard naming. `load_weights` bridges them in two steps: (1) `_remap_tamm_name()` translates each checkpoint tensor name to its vLLM parameter path, then (2) `param.weight_loader(param, tensor)` copies the tensor into the parameter, handling TP sharding automatically.
 
 ```
 Checkpoint:                                              vLLM model:
@@ -182,16 +182,18 @@ transformer.tamm_model.output_norm.weight              → model.norm.weight
 ...segment_1.layer_M.attention.q_norm.query_norm.weight          → model.layers.(35+M).self_attn.q_norm.weight
 ```
 
-Checkpoint format details:
-- **QKV is already fused** (`qkv_transform.fused_linear.weight`, shape `[2560, 2048]`) → call `weight_loader(param, tensor)` with no `shard_id`, and `QKVParallelLinear` auto-splits into Q`[2048, 2048]`, K`[256, 2048]`, V`[256, 2048]`
-- **Gate and up are separate** (`linear_0` `[6656, 2048]`, `linear_1` `[6656, 2048]`) → load directly into separate `ColumnParallelLinear` layers
-- **No lm_head weight** → tied with `embed_tokens` (same parameter, shape `[153600, 2048]`, ≈ 600 MB in BF16)
-- **No K norm weight** → `RMSNorm(has_weight=False)` because K norm is stateless (no learned scale)
-- **562 total weights** = 35 × 10 + 21 × 10 + 2
+Four special cases drive the remapping logic:
 
-  Weights per segment-0 layer (10): `qkv_proj`, `o_proj`, `q_norm`, `gate_proj`, `up_proj`, `down_proj`, `pre_residual_norm_attn`, `post_norm_attn`, `pre_residual_norm_mlp`, `post_norm_mlp`
+- **QKV is already fused** (`qkv_transform.fused_linear.weight`, shape `[2560, 2048]`) — call `weight_loader(param, tensor)` with no `shard_id`; `QKVParallelLinear` auto-splits into Q`[2048, 2048]`, K`[256, 2048]`, V`[256, 2048]` because it knows the head counts from config.
+- **Gate and up are separate** (`linear_0` `[6656, 2048]`, `linear_1` `[6656, 2048]`) — load directly into separate `ColumnParallelLinear` layers; no split needed.
+- **No lm_head weight** — tied with `embed_tokens` (same parameter, shape `[153600, 2048]`, ≈ 600 MB in BF16), so `load_weights` skips any checkpoint tensor matching `lm_head`.
+- **No K norm weight** — `RMSNorm(has_weight=False)` because K norm is stateless (no learned scale), so no checkpoint tensor exists for it.
 
-  Weights per segment-1 layer (10): `q_proj`, `q_norm`, `gate_proj`, `up_proj`, `down_proj`, `pre_residual_norm_attn`, `post_norm_attn`, `pre_residual_norm_mlp`, `post_norm_mlp`, `o_proj` — segment-1 layers still have an output projection, giving 10 tensors.
+**562 total weights** = 35 × 10 + 21 × 10 + 2
+
+Weights per segment-0 layer (10): `qkv_proj`, `o_proj`, `q_norm`, `gate_proj`, `up_proj`, `down_proj`, `pre_residual_norm_attn`, `post_norm_attn`, `pre_residual_norm_mlp`, `post_norm_mlp`
+
+Weights per segment-1 layer (10): `q_proj`, `o_proj`, `q_norm`, `gate_proj`, `up_proj`, `down_proj`, `pre_residual_norm_attn`, `post_norm_attn`, `pre_residual_norm_mlp`, `post_norm_mlp` — segment-1 layers still have an output projection despite having no K/V weights, giving 10 tensors.
 
 ### Why not AutoWeightsLoader?
 
