@@ -290,4 +290,6 @@ Full details, safety table, worked arithmetic, and the Pydantic fix: [[ml-system
 
 ## Connections
 
-See **See Also** above — consolidated to avoid duplication.
+**Upstream** (concepts this note instantiates): [[ml-systems/parallelism-strategies]], [[ml-systems/tensor-parallelism]], [[ml-systems/mixture-of-experts]] (EP group context).
+
+**Downstream** (notes that build on this note's group layout): [[ml-systems/vllm-process-group-rebuild]], [[ml-systems/pt-moe-vllm-implementation]], [[ml-systems/vllm-weight-loading]], [[ml-systems/kv-cache-internals]].
