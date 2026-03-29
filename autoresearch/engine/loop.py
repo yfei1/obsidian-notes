@@ -454,7 +454,12 @@ def select_target(notes: list[Path], history: list[dict],
             subj_avg = avg  # no cached subjective scores; use combined as fallback
 
         staleness = 1.0 / (1.0 + target_counts.get(rp, 0))
-        weakness = 1.0 - (avg / 10.0)
+
+        # Use subjective avg for both weakness and crisis — rule-based dims
+        # (Cross-Linking, Code Quality, Uniqueness) are mechanical and must
+        # not inflate/deflate the content quality signal used for prioritization.
+        priority_avg = subj_avg if subj_avg is not None else avg
+        weakness = 1.0 - (priority_avg / 10.0)
 
         # Small bonus for notes never targeted — ensures eventual coverage
         # but weakness (quality gap) is the primary driver now.
@@ -465,7 +470,7 @@ def select_target(notes: list[Path], history: list[dict],
         # if freshly discovered. Crisis is judged on LLM-graded dimensions only —
         # high Cross-Linking or Code Quality must not mask structural weaknesses.
         CRISIS_THRESHOLD = 5.5
-        if subj_avg is not None and subj_avg < CRISIS_THRESHOLD:
+        if priority_avg < CRISIS_THRESHOLD:
             staleness = 1.0
 
         # Weakness-first: fix the worst notes before exploring mediocre ones.
