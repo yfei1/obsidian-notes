@@ -14,7 +14,7 @@ Concrete shapes (Qwen3-0.6B): `hidden_size=1024, intermediate_size=3072`.
 
 ReLU FFN (2017) → GELU FFN (GPT/BERT) → GLU+sigmoid (Dauphin 2017) → **SwiGLU** = `SiLU(x @ W_gate) * (x @ W_up) @ W_down` (Shazeer 2020).
 
-**Why intermediate_size ≈ 3× instead of 4×**: SwiGLU has 3 matrices vs 2. To match param count: `3 × d × intermediate = 2 × d × 4d` → `intermediate = 8d/3 ≈ 2.67d`. Qwen3 rounds to 3× (3072/1024).
+**Why intermediate_size ≈ 3× instead of 4×**: SwiGLU has 3 weight matrices (gate, up, down) vs 2 (up, down) in vanilla FFN. Iso-param constraint: `3 × d × intermediate = 2 × d × 4d` → `intermediate = 8d/3 ≈ 2.67d`. Qwen3 rounds to 3× (3072/1024). BF16 weight memory per MLP layer: gate_up `6144×1024×2` + down `1024×3072×2` = **18 MB** <!-- verify: 6144*1024*2 + 1024*3072*2 == 18874368 -->.
 
 ---
 
