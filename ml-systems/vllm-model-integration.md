@@ -185,7 +185,7 @@ transformer.tamm_model.output_norm.weight              → model.norm.weight
 Checkpoint format details:
 - **QKV is already fused** (`qkv_transform.fused_linear.weight`, shape `[2560, 2048]`) → call `weight_loader(param, tensor)` with no `shard_id`, and `QKVParallelLinear` auto-splits into Q`[2048, 2048]`, K`[256, 2048]`, V`[256, 2048]`
 - **Gate and up are separate** (`linear_0` `[6656, 2048]`, `linear_1` `[6656, 2048]`) → load directly into separate `ColumnParallelLinear` layers
-- **No lm_head weight** → tied with `embed_tokens` (same parameter, shape `[153600, 2048]`)
+- **No lm_head weight** → tied with `embed_tokens` (same parameter, shape `[153600, 2048]`, ≈ 600 MB in BF16)
 - **No K norm weight** → `RMSNorm(has_weight=False)` because K norm is stateless (no learned scale)
 - **562 total weights** = 35 × 10 + 21 × 10 + 2
 
@@ -302,9 +302,10 @@ assert num_heads * head_dim == hidden_dim   # 2048 == 2048
 # MLP shapes
 assert intermediate_size == int(hidden_dim * 3.25)   # 6656 == 6656
 
-# embed_tokens shape
-# vocab_size × hidden_dim = 153600 × 2048
-assert vocab_size * hidden_dim == 153600 * 2048
+# embed_tokens / lm_head tied weight: shape [153600, 2048], size in BF16
+embed_weight_bytes = vocab_size * hidden_dim * bytes_per_elem   # 629,145,600
+assert embed_weight_bytes == 153600 * 2048 * 2
+assert abs(embed_weight_bytes / 1024**2 - 600) < 1   # ≈ 600 MB
 
 # Segment-1 Q-only projection shape
 q_only_rows = num_heads * head_dim      # 2048 (same as Q slice of QKV)
