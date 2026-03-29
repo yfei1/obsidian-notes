@@ -6,7 +6,7 @@
 
 `model(x)` routes through `__call__` → `_wrapped_call_impl` → `_call_impl`, firing **pre-hooks → forward() → post-hooks**. `model.forward(x)` bypasses `__call__` entirely, silently skipping all hooks. Hooks are empty `OrderedDict`s by default; register via `register_forward_pre_hook()` / `register_forward_hook()`.
 
-`@torch.compile` — PyTorch's JIT compiler that traces Python into an optimized static computation graph — applied to `forward()` leaves `_compiled_call_impl = None`, so hooks run as normal CPU Python outside the compiled region (the traced-and-optimized portion of code). `module.compile()` instead compiles `_call_impl` — the internal method that runs pre-hooks → `forward()` → post-hooks — itself, tracing through hook dispatch logic. Non-traceable Python in hooks — e.g., `.item()`, which forces a GPU→CPU scalar transfer and breaks the static graph — causes **graph breaks** (the compiler abandons tracing at that point and falls back to slow Python execution). CUDA graphs (`torch.cuda.CUDAGraph`) eliminate **CPU dispatch overhead** — the per-kernel Python/CUDA-runtime cost of launching each GPU op. This is a separate bottleneck from **kernel fusion** (merging multiple small ops into one GPU kernel to reduce launch overhead).
+`@torch.compile` is PyTorch's JIT compiler: it traces Python execution into a **static computation graph** — a fixed sequence of ops that the GPU can run without Python involvement. Applied to `forward()`, it leaves `_compiled_call_impl = None`, so hooks run as normal CPU Python outside the compiled region and are never traced. `module.compile()` instead compiles `_call_impl` itself, tracing through hook dispatch logic; non-traceable Python in hooks — e.g., `.item()`, which forces a GPU→CPU scalar transfer whose value is unknown at trace time — causes a **graph break** (the compiler abandons tracing and falls back to slow Python execution for the rest of the call). Separately, **CUDA graphs** (`torch.cuda.CUDAGraph`) eliminate **CPU dispatch overhead** — the per-GPU-kernel Python/CUDA-runtime cost of launching each op — by recording the kernel launch sequence once and replaying it with no CPU involvement. This is distinct from **kernel fusion** (merging multiple small ops into one GPU kernel to reduce total launch count).
 
 ---
 
@@ -108,7 +108,7 @@ super().__setattr__("_forward_hooks", OrderedDict())          # empty!
 super().__setattr__("_forward_pre_hooks", OrderedDict())      # empty!
 ```
 
-For a module called millions of times (e.g., a small embedding lookup called once per output token), skipping the hook-dispatch block matters — each hook-dispatch iteration is a Python dict walk, not a GPU op.
+For a module called millions of times (e.g., a small embedding lookup), skipping the hook-dispatch block matters — each hook-dispatch iteration is a Python dict walk, not a GPU op.
 
 ### Step 4 — slow path: pre-hooks → forward() → post-hooks (lines 1800-1843)
 
@@ -232,7 +232,7 @@ The risk only arises with `module.compile()`, not `@torch.compile` on `forward()
 
 ### `@torch.compile` on a single op regresses performance
 
-`torch.compile` gains by fusing multiple small ops into fewer GPU kernels, reducing total kernel launch overhead. A single matmul is already one cuBLAS (NVIDIA's GPU linear algebra library) kernel — there are no adjacent ops to fuse with, so fusion benefit is zero. Compile overhead (tracing, optimization passes) then exceeds the gain, producing a slight regression (18.4µs → 19.1µs on A100).
+A **GPU kernel** is a single compiled function that runs on the GPU — e.g., a matrix multiply dispatches to one cuBLAS (NVIDIA's GPU linear algebra library) kernel. `torch.compile` gains by fusing multiple small ops into fewer kernels, reducing total kernel launch overhead. A single matmul is already one cuBLAS kernel — there are no adjacent ops to fuse with, so fusion benefit is zero. Compile overhead (tracing, optimization passes) then exceeds the gain, producing a slight regression (18.4µs → 19.1µs on A100).
 
 ### CUDA graphs silence hooks after capture
 
