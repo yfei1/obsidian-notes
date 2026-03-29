@@ -14,7 +14,10 @@ Deep research session (2026-03-27) investigating kernel fusion opportunities for
 
 - **[[ml-systems/pt-moe-4norm-postnorm-semantic-mismatch]]** — Why existing fusion doesn't work: the Post-LN semantic mismatch, sequential dependency chain, 4-norm mathematical structure, Gemma2/3 analogue, custom kernel design with HBM traffic analysis
 - **[[ml-systems/pt-moe-4norm-fused-kernel-integration]]** — How to integrate: CustomOp tiers, torch.compile interaction, hybrid implementation code, action plan
-- **[[ml-systems/pt-moe-4norm-fusion-followup-qa]]** — Follow-up Q&A: AR+norm fusion under TP, GPU HBM/SRAM memory model, decode vs prefill, kernel launch overhead analysis
+- **[[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]** — AR+norm fusion opportunity under TP: norm locality, redundant execution across ranks, Phase 1 vs Phase 2 recommendations
+- **[[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]** — GPU memory hierarchy teaching: HBM/SRAM model, 6→4→2 kernel fusion HBM traffic analysis, Llama vs PT-MoE norm order comparison
+- **[[ml-systems/pt-moe-decode-kernel-launch-analysis]]** — Decode vs prefill cost model: kernel launch overhead dominates during decode, arithmetic intensity, GEMM vs norm fusion savings
+- **[[ml-systems/pt-moe-4norm-fusion-followup-qa]]** — Extended Q&A covering all of the above topics in conversational format
 
 ---
 

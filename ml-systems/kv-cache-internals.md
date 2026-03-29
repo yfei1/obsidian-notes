@@ -294,3 +294,5 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-gr
 - [[ml-systems/vllm-process-group-rebuild]]
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]] — uses KV cache semantics to explain why decode-time norm inputs are 1 token wide, making kernel launch overhead the dominant cost
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]]
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]]
+- [[ml-systems/pt-moe-decode-kernel-launch-analysis]]

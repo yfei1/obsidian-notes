@@ -297,3 +297,5 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/kv-cache-kernel-and-addressing]] — KV head sharding in TP means each GPU's cache slice holds only its local head partition; slot addressing operates on that local view
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]] — traces TP all-reduce sync points through PT-MoE's decoder layer and analyzes the `AllReduceFusionPass` AR+norm fusion opportunity for Post-LN patterns
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]]
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]]
+- [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]

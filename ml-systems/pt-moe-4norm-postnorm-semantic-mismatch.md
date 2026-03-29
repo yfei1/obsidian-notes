@@ -205,3 +205,6 @@ Fusion eliminates 2 intermediate writes. **Kernel launches drop from 6 to 4 per 
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]] — follow-up Q&A: AR+norm fusion under TP, GPU memory hierarchy, decode vs prefill
 - [[ml-systems/norms-and-regularization]] — RMSNorm mechanics and normalization in transformers
 - [[ml-systems/gpu-memory-hierarchy]] — HBM/SRAM hierarchy underlying the fusion savings
+- [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]
+- [[ml-systems/pt-moe-decode-kernel-launch-analysis]]
+- [[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]

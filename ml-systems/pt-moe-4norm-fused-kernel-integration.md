@@ -198,3 +198,6 @@ No custom vLLM layer, no `torch.library` registration, no weight loading changes
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]] — follow-up Q&A: AR+norm fusion under TP, GPU memory teaching, decode vs prefill
 - [[ml-systems/vllm-model-integration]] — vLLM model integration guide including CustomOp, weight loading, and `@support_torch_compile`
 - [[ml-systems/fused-moe-vllm-implementation]] — reference implementation of FusedMoE as CustomOp
+- [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]
+- [[ml-systems/pt-moe-decode-kernel-launch-analysis]]
+- [[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]

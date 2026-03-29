@@ -657,3 +657,6 @@ So fusion helps decode for two different reasons depending on the op type:
 - [[ml-systems/gpu-kernel-stack]] — kernel launch overhead mechanics
 - [[ml-systems/tensor-parallelism]] — TP all-reduce sync points and `AllReduceFusionPass`
 - [[ml-systems/kv-cache-internals]] — why decode processes only new tokens through the norms
+- [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]
+- [[ml-systems/pt-moe-decode-kernel-launch-analysis]]
+- [[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]

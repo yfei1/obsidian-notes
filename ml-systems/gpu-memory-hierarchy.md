@@ -176,3 +176,5 @@ Similarly, `context_lens` tells the GPU exactly how many tokens to read per sequ
 - [[ml-systems/kv-cache-kernel-and-addressing]] — concrete example of CPU pre-computing slot indices to avoid GPU integer division on the critical decode path
 - [[ml-systems/pt-moe-4norm-postnorm-semantic-mismatch]] — worked example of HBM/SRAM round-trip costs for norm/add kernels, with concrete KB/token calculations for hidden_size=2048 bf16
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]]
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]]
+- [[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]

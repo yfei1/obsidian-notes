@@ -373,3 +373,4 @@ All assertions passed.
 - [[ml-systems/pytorch-module-hooks]] — vLLM model initialization and forward passes use `nn.Module` hooks; the `__call__` vs `forward()` distinction determines whether those hooks fire
 - [[ml-systems/kv-cache-kernel-and-addressing]] — slot_mapping assembly in the model runner feeds directly into this kernel's addressing scheme
 - [[ml-systems/pt-moe-4norm-fused-kernel-integration]] — detailed walkthrough of `CustomOp` dispatch, `direct_register_custom_op`, and the three integration tiers for adding a custom Triton kernel to vLLM
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]]
