@@ -6,13 +6,19 @@ Date: 2026-03-27
 
 ---
 
-## User
+## Core Intuition
+
+PT-MoE's 4-norm sandwich residual pattern (norm→add→norm per sub-layer) is incompatible with vLLM's existing `fused_add_rms_norm` — that kernel returns an un-normed residual (Pre-LN semantics), but PT-MoE requires a normed residual (Post-LN semantics). A single custom Triton kernel `fused_add_rmsnorm_postln` fuses the add+post_norm pairs, saving 2 kernel launches and ~23% HBM traffic per decoder layer, with no new vLLM layer required.
+
+---
+
+## Research Scope and Task Setup
 
 > can you read `afm_pt_moe.py` and see if we can do tricks like MergedColumnParallelLinear with our 4 norm pattern in the attention block? if i were to write a custom ops kernel for it, do i need to define my own vllm layer? vllm code is in `~/GolandProjects/vllm`, triton is in `~/GolandProjects/triton` if you need to reference. /deep-research pls
 
 ---
 
-## Assistant
+## Deep Research Team Initialization
 
 I'll set up a deep research team to investigate this thoroughly. Let me parse the task and get started.
 
@@ -53,7 +59,7 @@ The old explorers are receiving stale task assignments — their tasks are alrea
 
 ---
 
-## Investigator Q1 Perf: MergedColumnParallelLinear-style fusion for 4-norm residual pattern
+## Q1 Perf: Sequential Dependency Chain and Fusion Feasibility
 
 ### 1. Data dependency chain in PTDecoderLayer.forward() (lines 310-336)
 
@@ -232,13 +238,13 @@ The Triton tutorial pattern at 05-layer-norm.py:49-95 shows the forward structur
 
 ---
 
-## Assistant (after Q1 Perf report)
+## Cross-Validation After Q1 Perf: Semantic Mismatch Confirmed
 
 Excellent findings from investigator-q1-perf. Key insight: vLLM's existing `fused_add_rms_norm` has a **semantic mismatch** — it returns the un-normed sum as residual, but PT-MoE needs the normed value. A custom Post-LN fused kernel is needed. Waiting for the other 3 investigators...
 
 ---
 
-## Investigator Q1 ML: 4-norm fusion from ML architecture perspective
+## Q1 ML: Mathematical Structure and Gemma2 Analogue
 
 ### Source files examined
 - `/Users/yufanfei/GolandProjects/vllm-extension/apple_ray_vllm_extension/models/afm_pt_moe.py` lines 305-336 (PTDecoderLayer)
@@ -397,7 +403,7 @@ A more efficient specialized kernel would be:
 
 ---
 
-## Assistant (after Q1 ML report)
+## Cross-Validation After Q1 ML: Consensus on Custom Kernel Signature
 
 Two Q1 investigators done with strong consensus. Key cross-validation:
 - Both confirm MergedColumnParallelLinear is NOT applicable
@@ -409,7 +415,7 @@ Waiting for Q2 investigators...
 
 ---
 
-## Investigator Q2 Arch: Custom Triton Kernel Integration with vLLM
+## Q2 Arch: CustomOp Subclassing and Integration Tiers
 
 **Perspective**: systems-architect — integration boundaries, API contracts, minimal vs proper approach
 
@@ -516,13 +522,13 @@ This is the cleanest path. `GptOssModel.TransformerBlock` (line 241) already pas
 
 ---
 
-## Assistant (after Q2 Arch report)
+## Cross-Validation After Q2 Arch: No New vLLM Layer Required
 
 Three down, one to go. Q2 arch confirms: **subclass `CustomOp` (or `RMSNorm`), override `forward_cuda` with Triton kernel** — no need for `torch.library` registration or new vLLM layer definition. Waiting for last investigator (Q2 perf)...
 
 ---
 
-## Investigator Q2 Perf: Triton kernel registration and torch.compile compatibility
+## Q2 Perf: Bare Triton vs CustomOp — torch.compile and Dispatch Overhead
 
 ### 1. How Triton tutorial wraps kernels for PyTorch
 
@@ -586,7 +592,7 @@ Pattern: **hot-path inference kernels go bare; framework-level reusable kernels 
 
 ---
 
-## Assistant (after all 4 investigators)
+## Synthesis Setup: Shutting Down Agents
 
 All 4 investigation tasks are complete. Task #5 (Q2 perf) was marked done — the message may have been delivered during an earlier batch. I have strong findings from 3 detailed reports and the task status confirms #5 completed. Time to synthesize.
 
@@ -594,7 +600,7 @@ Now shutting down all agents and producing the final report.
 
 ---
 
-## Synthesized Research Report: 4-Norm Residual Fusion & Custom Triton Kernel Integration for PT-MoE
+## Final Report: 4-Norm Residual Fusion and Custom Triton Kernel Integration
 
 ### Repos Analyzed
 - **vllm-extension**: PT-MoE model with 4-norm sandwich pattern (`afm_pt_moe.py`)
@@ -824,13 +830,13 @@ def forward(self, hidden_states, positions, residual):
 
 ---
 
-## Follow-Up: TP Fusion, GPU Memory Model, and Decode vs Prefill
+## Pointer to Follow-Up Session
 
 The follow-up Q&A covers: whether the 4-norm pattern benefits from AR+norm fusion under TP, the GPU HBM/SRAM memory model underlying kernel fusion savings, why kernel launch overhead dominates during decode, and when prefill is compute-bound vs memory-bound. See [[ml-systems/pt-moe-4norm-fusion-followup-qa]].
 
 ---
 
-## Assistant
+## AR+Norm Fusion Opportunity Under Tensor Parallelism
 
 Great question — you're asking about fusing across the **all-reduce boundary**. Let me check vLLM's existing allreduce+norm fusion infrastructure.
 
@@ -939,13 +945,13 @@ Let me quantify the difference between the two approaches:
 
 ---
 
-## User
+## Clarification: Do the 4 Norms Require TP Sync?
 
 > iiuc our current four norm does requires one sync on each call if TP is enabled, right?
 
 ---
 
-## Assistant
+## Norms Are Local: All TP Sync Happens Inside Linear Layers
 
 No — the 4 norms themselves are **purely local elementwise ops with zero TP sync**. The syncs happen inside the linear layers (o_proj, down_proj), not the norms.
 
@@ -953,13 +959,13 @@ No — the 4 norms themselves are **purely local elementwise ops with zero TP sy
 
 ---
 
-## User
+## TP=4 Redundant Norm Execution After All-Reduce
 
 > ok so if TP=4, you mean after o_project's all_reduce sync the activations, norm happens on all 4 gpu on exactly the same activation in parallel?
 
 ---
 
-## Assistant
+## Replicated Norm Execution and AllReduceFusionPass Motivation
 
 Yes, exactly. After `o_proj`'s `RowParallelLinear` does `tensor_model_parallel_all_reduce()` (`linear.py:1517-1518`), **all 4 GPUs hold identical copies of the full hidden state**. Then each GPU runs the same norm on the same data independently — pure redundant computation.
 
@@ -983,7 +989,7 @@ So the norms add zero communication cost — but they do add **latency** on the 
 
 ---
 
-## User
+## Three Questions: HBM Savings Table, AllReduceFusionPass Mechanism, Llama vs PT-MoE Norm Order
 
 > help me understand three things: 1.
 >
@@ -1020,7 +1026,7 @@ So the norms add zero communication cost — but they do add **latency** on the 
 
 ---
 
-## Assistant
+## GPU Memory Hierarchy, AR Fusion Mechanics, and Llama vs PT-MoE Fact-Check
 
 Great questions. Let me ground-truth everything carefully with the actual code, and teach the GPU memory model from scratch.
 
@@ -1228,13 +1234,13 @@ then: norm(sum)                             <- NORM third
 
 ---
 
-## User
+## Where Does the 4 KB/Token Figure Come From?
 
 > HBM -> read h (4 KB/token) -> SRAM -> compute norm -> write normed_h -> HBM (4 KB) what does 4kb means? where it comes from?
 
 ---
 
-## Assistant
+## Hidden Size × Bytes Per Element: Deriving Token Transfer Size
 
 Hidden size x bytes per element.
 
@@ -1251,7 +1257,7 @@ For context, V11 660B would be `2560 x 2 = 5 KB/token`.
 
 ---
 
-## User
+## Correcting the HBM Read Count: 4 Reads Not 6
 
 > What happens with 6 separate kernels (current code)
 >
@@ -1274,7 +1280,7 @@ For context, V11 660B would be `2560 x 2 = 5 KB/token`.
 
 ---
 
-## Assistant
+## Corrected HBM Traffic Count Per Attention Block
 
 You're right, let me recount properly.
 
@@ -1298,13 +1304,13 @@ The "6 reads" I said earlier was wrong — I was double-counting. Thanks for cat
 
 ---
 
-## User
+## Bandwidth Math vs Kernel Launch Overhead: Which Dominates?
 
 > is 5 KB/token equivalent to each token will just take 5KB/token / 2TB/s = 2.5e-9 second per token for the transfer? that doesnt sound a lot. even if i have 1000 token thats just 2.5 microsecond?
 
 ---
 
-## Assistant
+## Kernel Launch Overhead (~5–10 µs) Dominates Over Bandwidth for Small Tensors
 
 Your math is correct for raw bandwidth. But bandwidth isn't the main cost — **kernel launch overhead** is.
 
@@ -1356,7 +1362,7 @@ At that scale, eliminating HBM round-trips (the AR+norm fusion) starts to give r
 
 ---
 
-## User
+## Decode Norm Input Is 1 Token, Not Full Sequence — KV Cache Explains Why
 
 > hold on. During token generation (decode), you're often processing 1 token at a time (or a small batch). Then:
 >
@@ -1367,7 +1373,7 @@ At that scale, eliminating HBM round-trips (the AR+norm fusion) starts to give r
 
 ---
 
-## Assistant
+## Prefill vs Decode Token Count: Norm Tensor Shapes at Each Phase
 
 You're right to push back. Let me be precise.
 
@@ -1393,13 +1399,13 @@ So yes — during decode, the norm really does operate on just the new token(s).
 
 ---
 
-## User
+## Decode Is Memory-Bound (Weight Loading), Prefill Is Compute-Bound (GEMM Saturation)
 
 > lots of ppl say decode is HBM read sensitive as it needs to load KVCache per step. but IIUC prefill is also HBM sensitive - as it takes more tokens than decode per forward pass, no?
 
 ---
 
-## Assistant
+## Arithmetic Intensity: Why Decode Is Weight-Bound and Prefill Is Compute-Bound
 
 Both are memory-bound, but for different reasons.
 
@@ -1426,13 +1432,13 @@ That said — you're right that prefill isn't purely compute-bound. Attention it
 
 ---
 
-## User
+## Why Kernel Fusion Helps Decode: Weight Loads for GEMMs vs Launch Overhead for Norms
 
 > ok so in decode every kernel launched requires fetching its own weight from HBM? thats why kernel fuse benefits decode as well right?
 
 ---
 
-## Assistant
+## GEMM vs Norm Fusion Savings: Different Bottlenecks, Same Benefit
 
 Exactly right for the **GEMM kernels** (linear layers). Each one loads its full weight matrix from HBM:
 
@@ -1460,7 +1466,7 @@ So fusion helps decode for two different reasons depending on the op type:
 
 ---
 
-## User
+## Request to Save Raw Transcript
 
 > amazing. can you summarize our back and forth, questions, follow ups, all these tables untouched and throw them into `~/GolandProjects/obsidian-notes/`?
 
