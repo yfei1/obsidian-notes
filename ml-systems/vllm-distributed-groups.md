@@ -201,7 +201,8 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 `torch.distributed.new_group` is a **collective barrier**: every rank in the world must call it before any rank proceeds, even for groups it doesn't belong to, because NCCL's communicator setup requires a globally synchronized handshake across all participants. Skipping a call on one rank stalls all others indefinitely. The constructor (parallel_state.py:316-395) therefore iterates ALL group rank lists and creates both process groups for each, storing only the group the current rank belongs to:
 
 ```python
-# TP=32 initial: 1 group → 2 new_group calls/rank; post-rebuild 8 tracks → 16 calls/rank (see verify script)
+# TP=32 initial: 1 group × 2 backends = 2 new_group calls/rank
+# post-rebuild 8 tracks × TP=4: 8 groups × 2 backends = 16 calls/rank
 for ranks in group_ranks:
     device_group = torch.distributed.new_group(ranks, backend=backend)  # NCCL
     cpu_group = torch.distributed.new_group(ranks, backend="gloo")       # Gloo
