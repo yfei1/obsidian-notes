@@ -3,7 +3,7 @@
 
 ## TL;DR
 
-**Ray Compiled Graph (CG)** pre-compiles a fixed execution pipeline between Ray actors, replacing per-step `actor.method.remote()` + `ray.get()` calls with a single `dag.execute()` that pushes data through pre-allocated shared memory channels. vLLM uses CG to send the scheduling decision (`SchedulerOutput`) to GPU workers and to route intermediate tensors between pipeline stages — groups of model layers split across GPUs. CG is being removed (RFC #35848) because **async scheduling** — where the engine schedules batch N+1 while the GPU executes batch N, hiding dispatch latency — makes CG's speed advantage irrelevant. The tensor routing is replaceable by direct NCCL send/recv.
+**Ray Compiled Graph (CG)** pre-compiles a fixed execution pipeline between Ray actors (worker processes managed by Ray's distributed runtime), replacing per-step `actor.method.remote()` + `ray.get()` calls — each costing ~1-5 ms of scheduling overhead — with a single `dag.execute()` that pushes data through pre-allocated shared memory channels (~300 us). vLLM uses CG to broadcast the scheduling decision (`SchedulerOutput`) to GPU workers and to route intermediate tensors between **pipeline stages** (groups of model layers split across GPUs). CG is being removed (RFC #35848) because **async scheduling** — where the engine schedules batch N+1 while the GPU executes batch N — hides the ~1-5 ms `ray.remote()` dispatch cost entirely, making CG's faster-dispatch advantage irrelevant. The PP tensor routing CG provides is replaceable by direct NCCL (GPU collective communication library) send/recv.
 
 Prerequisites: [[ml-systems/vllm-executor-architecture]], [[ml-systems/parallelism-strategies]]
 
@@ -13,7 +13,7 @@ Prerequisites: [[ml-systems/vllm-executor-architecture]], [[ml-systems/paralleli
 
 ### The Problem CG Solves
 
-First, what is a Ray actor? **Ray** is a distributed computing framework. A **Ray actor** is a worker process managed by Ray's runtime — you create one, then call its methods remotely. Calling `actor.method.remote(data)` is like an RPC: Ray serializes the arguments, routes them through a central scheduler and shared-memory **object store** (Ray's buffer for passing data between processes), executes the method on the actor, and returns an **ObjectRef** (a future-like handle to the result). Each `.remote()` call pays ~1-5 ms of this scheduling overhead. For inference serving, this happens every decode step — at 100 steps/second, 1-5 ms overhead means the GPU idles 10-50% of the time waiting for instructions.
+First, what is a Ray actor? **Ray** is a distributed computing framework; a **Ray actor** is a worker process Ray manages — you create one, then call its methods remotely via `actor.method.remote(data)`. That call is an RPC: Ray serializes the arguments and routes them through a central scheduler and a shared-memory **object store** (Ray's buffer for passing data between processes). The actor executes the method and returns an **ObjectRef** — a future-like handle the caller resolves with `ray.get()`. Each round trip pays ~1-5 ms of scheduling overhead. In autoregressive decoding — where the model generates one token per step, running a forward pass each time — this overhead lands on every step. At 100 steps/second, 1-5 ms per step means the GPU idles 10-50% of the time waiting for dispatch.
 
 **Compiled Graph** eliminates this by wiring the call pattern once at startup. Instead of Ray's dynamic task scheduler, CG creates **fixed shared memory channels** — one per worker — that the driver writes to directly.
 
@@ -44,7 +44,7 @@ Running example: **Llama 70B, PP=2, TP=4** (8 workers, 4 per pipeline stage — 
 
 ### DAG Construction (`ray_executor.py:547-640`)
 
-The DAG must do two things: (1) broadcast the SchedulerOutput to all TP=4 workers in stage 0, and (2) route each worker's intermediate output tensors to the matching stage-1 worker so the next set of layers can continue the computation.
+The DAG must do two things: (1) broadcast the SchedulerOutput to all TP=4 workers in stage 0, and (2) route each worker's **intermediate tensors** — the hidden-state output of stage 0 that stage 1 needs as input — to the matching stage-1 worker so the next set of layers can continue the computation.
 
 **Key variables and methods** (needed to read the code below):
 
@@ -95,9 +95,9 @@ The compiled DAG topology (built once at startup, reused every step):
 
 ### How CG Splits CPU Data from GPU Tensors
 
-Each stage-0 worker returns a tuple: `(SchedulerOutput, GrammarOutput, IntermediateTensors)` — a mix of CPU Python objects and GPU tensors. CG cannot send both through the same channel because GPU tensors need GPU-direct NCCL while Python objects need CPU-side pickle serialization. The `with_tensor_transport()` annotation (from the DAG construction above) tells CG's runtime to split automatically: GPU tensors travel via NCCL, CPU data via shared memory. The splitting logic is in `TorchTensorAcceleratorChannel` (`torch_tensor_accelerator_channel.py:215-277`).
+Each stage-0 worker returns a tuple: `(SchedulerOutput, GrammarOutput, IntermediateTensors)` — a mix of CPU Python objects and GPU tensors. CG cannot send both through the same channel: GPU tensors need **NCCL** (NVIDIA's GPU collective communication library, used here for direct GPU-to-GPU transfer) while Python objects need CPU-side pickle serialization. The `with_tensor_transport()` annotation (from the DAG construction above) tells CG's runtime to split automatically: GPU tensors travel via NCCL, CPU data via shared memory. The splitting logic is in `TorchTensorAcceleratorChannel` (`torch_tensor_accelerator_channel.py:215-277`).
 
-On TPU/XPU where NCCL is unavailable, `channel_type` is forced to `"shm"` (`ray_executor.py:84`) — GPU tensors get copied GPU→CPU→SHM→CPU→GPU, adding ~100x overhead for large tensors.
+On TPU/XPU where NCCL is unavailable, `channel_type` is forced to `"shm"` (`ray_executor.py:84`) — GPU tensors get copied GPU→CPU→SHM→CPU→GPU (a full round-trip through host memory), adding ~100x overhead for large tensors.
 
 ### Why CG's NCCL Is the Same as MultiprocExecutor's
 
@@ -117,7 +117,7 @@ CG channel read (stage 1 input)
     -> current_stream().synchronize()               [line 212] ← blocks CPU until recv done
 ```
 
-**The `synchronize()` at line 212 is a structural overhead unique to CG** — it blocks the CPU thread until the NCCL receive completes on the GPU (~5-15 us stall). MultiprocExecutor uses non-blocking `irecv_tensor_dict` (fires the NCCL recv kernel and returns immediately), avoiding this stall.
+**The `synchronize()` at line 212 is a structural overhead unique to CG** — it blocks the CPU thread until the NCCL receive completes on the GPU (~5-15 us stall). MultiprocExecutor uses non-blocking `irecv_tensor_dict` (fires the NCCL recv kernel and returns immediately, letting the CPU proceed while the GPU transfer finishes), avoiding this stall.
 
 ---
 
@@ -173,7 +173,7 @@ Neither type knows about Ray, CG, or the executor. Per step through the DAG:
 
 Ray's compiled DAG channel abstraction is **per-edge** — each DAG edge gets its own independent shared memory buffer (`CompositeChannel`, `shared_memory_channel.py:648`). When the DAG fans out the same SchedulerOutput to 4 workers, it creates 4 edges, each with a separate buffer, and `SynchronousWriter` (`common.py:617`) serializes and writes to each one in a loop.
 
-MessageQueue was purpose-built for broadcast: one POSIX SHM region, one `memcpy`, N readers on the same mapped memory. This is a Ray architectural choice — general-purpose DAGs where each edge may carry different data — not a bug, but a fundamental mismatch with vLLM's broadcast pattern.
+MessageQueue was purpose-built for broadcast: one POSIX SHM region (a named OS-level shared memory segment all processes map into their address space), one `memcpy`, N readers on the same mapped memory. This is a Ray architectural choice — general-purpose DAGs where each edge may carry different data — not a bug, but a fundamental mismatch with vLLM's broadcast pattern.
 
 ### Dispatch Latency Comparison
 
@@ -257,7 +257,7 @@ Async scheduling (v0.15.0) overlaps CPU scheduling of step N+1 with GPU executio
 | TTFT — time to first token (ms) | 117 | **86** | 119 |
 | TPOT — time per output token (ms) | **41** | 46 | **41** |
 
-**Why CG wins on TTFT (86 vs 117 ms)** *(code-path inference, not profiled)*: MultiprocExecutor with async scheduling uses `step_with_batch_queue()` (`core.py:419`). After dispatching batch 0, the engine checks queue state at `core.py:478-479`, finds nothing to schedule, then falls through to `core.py:492` and blocks on `future.result()`. That extra scheduling cycle adds latency before the first token. CG uses the simpler synchronous `step()` (`core.py:378`) — `max_concurrent_batches=1` for this TP-only config — so the path is schedule → dispatch → block on GPU → emit token, with no queue overhead.
+**Why CG wins on TTFT (86 vs 117 ms)** *(code-path inference, not profiled)*: MultiprocExecutor with async scheduling uses `step_with_batch_queue()` (`core.py:419`). After dispatching batch 0, the engine checks queue state at `core.py:478-479`, finds nothing to schedule, then falls through to `core.py:492` and blocks on `future.result()`. That extra scheduling cycle adds latency before the first token. CG uses the simpler synchronous `step()` (`core.py:378`) — `max_concurrent_batches` (the number of batches the engine can have in-flight simultaneously) is 1 for this TP-only config — so the path is schedule → dispatch → block on GPU → emit token, with no queue overhead.
 
 **Why CG loses on TPOT (46 vs 41 ms)** *(same caveat)*: In steady-state decode, async scheduling's batch queue pays off because MultiprocExecutor dispatches batch N (~150 us SHM write, fire-and-forget) and immediately schedules batch N+1 while the GPU runs. CG's `step()` is fully synchronous — schedule → CG dispatch (~500 us O(TP) blocking writes) → wait for GPU → repeat — so the O(TP) write cost lands on the critical path every step.
 
@@ -275,7 +275,7 @@ PR #36836 (RayExecutorV2 inheriting MultiprocExecutor) is open with maintainer L
 
 - **Throughput parity**: 1193 vs 1193 tok/s — no regression
 - **PP routing exists**: `gpu_worker.isend/irecv_tensor_dict` (`gpu_worker.py:807-848`) uses the same NCCL, so no data-plane capability is lost
-- **Cross-node works**: MessageQueue ZMQ TCP path (`shm_broadcast.py:409-426`) already handles remote workers; ZMQ PUB/SUB is fire-and-forget (likely faster than CG's synchronous channel writes)
+- **Cross-node works**: MessageQueue's ZMQ TCP path (`shm_broadcast.py:409-426`) already handles remote workers — ZMQ (a messaging library) uses a PUB/SUB pattern where one publish fans out to all subscribers without blocking the sender, likely faster than CG's synchronous channel writes
 - **Nothing lost**: `overlap_comm` disabled by default (`envs.py:58`); CG background thread unnecessary
 - **Risk**: No cross-node PP benchmarks in PR #36836 (only TP=4 single-node on L4 GPUs). Multi-node PP regression is theoretically unlikely (same NCCL, faster dispatch) but unproven.
 
@@ -285,12 +285,11 @@ RayExecutorV2 uses Ray for cluster management but routes `execute_model` through
 
 ## Connections
 
-- [[ml-systems/vllm-executor-architecture]] — MultiprocExecutor, MessageQueue broadcast mechanism, async scheduling
-- [[ml-systems/parallelism-strategies]] — PP, TP, EP concepts
-- [[ml-systems/vllm-distributed-groups]] — NCCL groups for TP, PP, EP
-- [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture and PP exclusion dispatch overhead come from, and why can't async scheduling fully hide it?
-
-The key insight upfront: `forward_dag.execute()` uses a `SynchronousWriter` — it writes to each worker's channel **one at a time in a loop**, blocking until all writes complete. With TP=4, that's 4 serial pickle+SHM writes (~300 us-1 ms total). MultiprocExecutor writes once to shared memory (~10-20 us). This dispatch cost is paid inline every step.
+- [[ml-systems/vllm-executor-architecture]] — MultiprocExecutor, MessageQueue broadcast mechanism, and async scheduling that obsoletes CG's dispatch advantage
+- [[ml-systems/parallelism-strategies]] — PP and TP concepts underlying the DAG topology (PP=2, TP=4 running example)
+- [[ml-systems/vllm-distributed-groups]] — NCCL groups for TP, PP, EP that CG delegates to and that survive CG removal unchanged
+- [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture and why PP tensor transfer is excluded from captured graphs
+- [[ml-systems/tensor-parallelism]] — TP allreduce/allgather inside model forward runs through torch.distributed, independent of CG channels
 
 **Detailed call chain** (terms: `COMPLETED_NONE_FUTURE` is a pre-resolved Future containing `None` — used to defer work; `CompiledDAGRef` is a future-like handle whose `.get()` blocks until the worker produces output):
 
