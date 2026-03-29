@@ -147,6 +147,12 @@ gpus_per_node = 8
 local_rank_rank12 = rank % gpus_per_node
 assert local_rank_rank12 == 4
 
+# new_group call counts per rank during GroupCoordinator.__init__
+# initial TP=32: 1 group × 2 backends = 2 calls
+assert 1 * 2 == 2
+# post-rebuild 8 tracks × TP=4: 8 groups × 2 backends = 16 calls
+assert num_tracks * 2 == 16
+
 # KV cache corruption: config TP=32 vs actual TP=4, 32 KV heads
 num_kv_heads = 32
 config_tp = 32
@@ -195,8 +201,7 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 `torch.distributed.new_group` is a **collective barrier**: every rank in the world must call it before any rank proceeds, even for groups it doesn't belong to, because NCCL's communicator setup requires a globally synchronized handshake across all participants. Skipping a call on one rank stalls all others indefinitely. The constructor (parallel_state.py:316-395) therefore iterates ALL group rank lists and creates both process groups for each, storing only the group the current rank belongs to:
 
 ```python
-# TP=32 initial:  group_ranks = [[0,1,...,31]]  — 1 group  → 2 new_group calls per rank (1 NCCL + 1 Gloo)
-# After PT-MoE rebuild (8 tracks × TP=4): group_ranks has 8 entries → 16 new_group calls per rank (8 NCCL + 8 Gloo)
+# TP=32 initial: 1 group → 2 new_group calls/rank; post-rebuild 8 tracks → 16 calls/rank (see verify script)
 for ranks in group_ranks:
     device_group = torch.distributed.new_group(ranks, backend=backend)  # NCCL
     cpu_group = torch.distributed.new_group(ranks, backend="gloo")       # Gloo
