@@ -196,7 +196,7 @@ model(x)   # x: [4, 512]
 
 ### `model.forward(x)` silently skips all hooks
 
-Hooks live in `_call_impl`, which is only reached via `__call__`. Calling `forward()` directly bypasses `__call__` entirely — no dispatch frames, no hook dict checks. The failure is silent: no error, identical output shape, hooks simply don't fire.
+Hooks live in `_call_impl`, reached only via `__call__`. Calling `forward()` directly re-enters at `forward()` — `__call__` is never invoked, so no dispatch frames run and no hook dicts are checked. The failure is silent: no error, identical output shape, hooks simply don't fire.
 
 ```
 model.forward(x)   # x: [4, 512]
@@ -223,12 +223,12 @@ Output: torch.Size([4, 128])
 
 `torch.compile` traces a call into a **static computation graph** — every op must be representable as a fixed graph node. A **graph break** occurs when the tracer hits an op it cannot represent statically; it abandons tracing there and falls back to slow Python execution for the rest of the call, negating the compile speedup.
 
-The risk only arises with `module.compile()`, not `@torch.compile` on `forward()`, because only one path traces through hook code:
+The risk only arises with `module.compile()`, not `@torch.compile` on `forward()`, because only `module.compile()` traces through hook code:
 
-- **`@torch.compile` on `forward()`** does not set `_compiled_call_impl`, so `_call_impl` and its hook dispatch run as normal CPU Python outside the compiled region. Hooks are never traced — no graph break risk regardless of what they contain.
-- **`module.compile()`** sets `_compiled_call_impl` and compiles `_call_impl` itself, tracing through the hook dispatch loop. Hook code is inside the compiled region — graph breaks in hooks degrade the entire call.
+- **`@torch.compile` on `forward()`** does not set `_compiled_call_impl`, so `_call_impl` and its hook dispatch run as normal CPU Python outside the compiled region — hooks are never traced, no graph break risk.
+- **`module.compile()`** sets `_compiled_call_impl` and compiles `_call_impl` itself, tracing through the hook dispatch loop — hook code is inside the compiled region, so graph breaks in hooks degrade the entire call.
 
-`.item()` is the canonical graph break trigger: it forces a GPU→CPU scalar transfer whose value is only known at runtime, making it data-dependent — the tracer cannot fix it into the static graph. The compiler emits a graph break at that point; the remainder of the call runs as unoptimized Python.
+`.item()` is the canonical graph break trigger: it forces a GPU→CPU scalar transfer whose value is only known at runtime, making it data-dependent — the tracer cannot represent a runtime-variable value as a fixed graph node, so it emits a graph break and the remainder of the call runs as unoptimized Python.
 
 ### `@torch.compile` on a single op regresses performance
 
@@ -236,9 +236,9 @@ The risk only arises with `module.compile()`, not `@torch.compile` on `forward()
 
 ### CUDA graphs silence hooks after capture
 
-CUDA graphs (`torch.cuda.CUDAGraph`) eliminate **CPU dispatch overhead** — the per-kernel Python/CUDA-runtime cost of launching each GPU op — by recording the kernel launch sequence once during **graph capture** (a dry run where every kernel call is logged but not executed). On subsequent **replay** steps, the GPU re-executes that fixed sequence directly with no CPU involvement (~4× speedup on LLaMA-7B decode).
+CUDA graphs (`torch.cuda.CUDAGraph`) eliminate **CPU dispatch overhead** — the per-kernel Python/CUDA-runtime cost of launching each GPU op — by recording the kernel launch sequence once during **graph capture** (a dry run where every kernel call is logged but not executed). On subsequent **replay** steps, the GPU re-executes that fixed kernel sequence directly with no CPU involvement (~4× speedup on LLaMA-7B decode).
 
-Hooks are Python function calls, not GPU kernel launches — so they are not part of the recorded kernel sequence. During capture they execute normally; during replay only the kernel sequence runs and hook code does not. Hook side effects (logging, shape checks) therefore fire once at capture time and are silently absent on every subsequent decode step.
+Hooks are Python function calls, not GPU kernel launches — so they are absent from the recorded sequence. Because replay skips all CPU Python and re-executes only the captured kernels, hook code does not run. Hook side effects (logging, shape checks) therefore fire once at capture time and are silently absent on every subsequent replay step.
 
 Full benchmarks, stack traces, and the three-mechanism comparison table: [[ml-systems/torch-compile-cuda-graphs-hook-interaction]].
 
