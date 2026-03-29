@@ -245,9 +245,16 @@ Returns a `GroupCoordinator` scoped to whichever group the current rank belongs 
 
 ## Rebuilding Groups at Runtime (PT-MoE Pattern)
 
-Groups can be destroyed and recreated after `initialize_model_parallel()` by calling `.destroy()` on the old coordinator and assigning a new one to the module-level global (e.g., `ps._TP`). PT-MoE uses this to narrow `_TP` from 32 GPUs to 4 GPUs per track. The rebuild must happen inside `model.__init__()` before any layers are constructed. `_PP` and `_DP` must never be rebuilt — they cross TP boundaries and their replacement severs the global communicator topology.
+Groups can be destroyed and recreated after `initialize_model_parallel()` by calling `.destroy()` on the old coordinator and assigning a new one to the module-level global (e.g., `ps._TP`). PT-MoE uses this to narrow `_TP` from 32 GPUs to 4 GPUs per track — because the default `_TP` spans all 32 GPUs, but each track only needs all-reduce within its own 4-GPU slice.
 
-After rebuild, `parallel_config.tensor_parallel_size` (32) and `get_tp_group().world_size` (4) diverge — e.g., 32 KV heads: config says 32/32=1 head/GPU but actual TP=4 gives 32/4=8 heads/GPU, so KV cache is allocated for 1 head while attention writes 8, silently corrupting 7 heads per layer. A Pydantic (Python data-validation library) copy pitfall can also silently undo runtime head-count inflation.
+The rebuild must happen inside `model.__init__()`, before any layers are constructed. Layers capture `get_tp_group()` at construction time; a rebuild after layer init leaves layers holding a stale coordinator pointing to the old 32-GPU group.
+
+**What can and cannot be rebuilt:**
+
+- `_TP`, `_EP`, `_DCP` — safe to rebuild, because they are scoped within or at the TP level. Replacing them changes only intra-TP communication.
+- `_PP`, `_DP` — must never be rebuilt, because they cross TP boundaries. Their rank lists span multiple TP groups; replacing them severs the point-to-point paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet, breaking collective operations for every rank in those groups.
+
+**Config/actual divergence after rebuild:** `parallel_config.tensor_parallel_size` (32) and `get_tp_group().world_size` (4) diverge because the config is set once at startup and never updated. Code that reads the config to size data structures — such as KV cache head allocation — will compute the wrong value: with 32 KV heads, config-based allocation gives 32/32=1 head/GPU, but actual TP=4 means attention writes 32/4=8 heads/GPU, silently corrupting 7 heads per layer.
 
 Full details, safety table, worked arithmetic, and the Pydantic fix: [[ml-systems/vllm-process-group-rebuild]].
 
