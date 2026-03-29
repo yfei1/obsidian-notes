@@ -50,6 +50,14 @@ class MyModel2(nn.Module):
 
 **What the wrapped `__init__` does at model construction time**:
 
+```
+Set do_not_compile=True if: mode is NONE/STOCK_TORCH_COMPILE,
+  OR the class is on the ignore list, OR enable_if callback returned False.
+If do_not_compile: return early — skip counter increment entirely.
+Otherwise: increment global compilation_counter (this is vLLM's detection signal)
+  and initialize the compile wrapper on self.
+```
+
 ```python
 # decorators.py:362-373 (simplified)
 self.do_not_compile = (
@@ -123,6 +131,18 @@ If the outer `forward()` is trivial (just calls inner model + lm_head), both pla
 ## The Runtime Compilation Path
 
 On first `__call__` after construction (`decorators.py:434-604`):
+
+```
+On each forward call:
+  if do_not_compile flag set: run forward() eagerly and return.
+  if already compiled: call the cached compiled function directly.
+  else (first call only):
+    mark dim 0 of input tensors as dynamic — prevents Dynamo from baking
+      the current batch size as a constant (which would force recompile on
+      every new batch size).
+    trace forward() through Dynamo → Inductor → fused CUDA kernels.
+    cache the result; set compiled=True for all future calls.
+```
 
 ```
 model(input_ids, positions)
