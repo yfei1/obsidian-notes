@@ -4,7 +4,15 @@
 
 ## TL;DR
 
-An LLM inference engine has three layers: a **scheduler** (CPU, manages memory + request queues), a **model runner** (GPU, executes forward passes), and optionally an **async server frontend** (HTTP, routes user requests). The key innovations are **PagedAttention** (virtual memory for KV cache), **continuous batching** (dynamically swap sequences in/out of GPU batches per step), and **chunked prefill** (mix prefill + decode tokens in one step to prevent starvation). Studied via `nano-vLLM` (educational, ~400 LOC) with comparisons to production `vLLM`.
+A GPU forward pass can process many tokens in parallel, but requests arrive at different times, run for different lengths, and share scarce HBM. Naive approaches — one request at a time, static batching, contiguous KV allocation — leave the GPU mostly idle. An LLM inference engine solves this with three layers: a **scheduler** (CPU, manages memory + request queues), a **model runner** (GPU, executes forward passes), and optionally an **async server frontend** (HTTP, routes user requests). The key mechanisms are **continuous batching** (eject finished sequences mid-batch, insert new ones immediately), **PagedAttention** (virtual memory for KV cache — eliminates fragmentation, enables sharing), and **chunked prefill** (mix prefill + decode tokens in one step to prevent decode starvation). Studied via `nano-vLLM` (educational, ~400 LOC) with comparisons to production `vLLM`.
+
+---
+
+## Core Intuition
+
+**A GPU forward pass is cheap to run but expensive to waste.** Without an inference engine, each request occupies the GPU exclusively — prefilling its prompt, then decoding token-by-token — while every other user waits. The GPU sits idle between requests and idles again during decode (memory-bound: one token of compute, entire KV cache of memory reads). The engine's job is to eliminate both idle periods by batching requests together and keeping the GPU fed continuously.
+
+The architecture follows directly from two constraints: **(1) KV cache memory is finite and non-contiguous** — because sequences grow unpredictably, you can't pre-allocate a contiguous block per request without wasting most of GPU HBM. PagedAttention solves this by treating KV cache like virtual memory: fixed-size blocks assigned on demand, tracked by a CPU block manager. **(2) Requests finish at different times** — static batching holds the GPU hostage to the slowest sequence. Continuous batching solves this by ejecting finished sequences and inserting new ones every step, so the GPU processes a full batch of useful work at each forward pass rather than padding to the longest sequence.
 
 ---
 
