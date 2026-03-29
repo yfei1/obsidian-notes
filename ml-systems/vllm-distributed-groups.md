@@ -246,16 +246,16 @@ Returns a `GroupCoordinator` scoped to whichever group the current rank belongs 
 
 ## Rebuilding Groups at Runtime (PT-MoE Pattern)
 
-Groups can be destroyed and recreated after `initialize_model_parallel()` by calling `.destroy()` on the old coordinator and assigning a new one to the module-level global (e.g., `ps._TP`). PT-MoE uses this to narrow `_TP` from 32 GPUs to 4 GPUs per track — because the default `_TP` spans all 32 GPUs, but each track only needs all-reduce within its own 4-GPU slice.
+The default `_TP` group spans all 32 GPUs, but PT-MoE needs all-reduce scoped to 4 GPUs per track — the 32-GPU communicator would incorrectly sum activations across tracks that are running independent forward passes. The fix: destroy `_TP` and replace it with per-track groups by calling `.destroy()` on the old coordinator and assigning a new `GroupCoordinator` to the module-level global (`ps._TP`).
 
-The rebuild must happen inside `model.__init__()`, before any layers are constructed. Layers capture `get_tp_group()` at construction time; a rebuild after layer init leaves layers holding a stale coordinator pointing to the old 32-GPU group.
+**Timing constraint:** The rebuild must happen inside `model.__init__()`, before any layers are constructed — because layers capture `get_tp_group()` at construction time. A rebuild after layer init leaves layers holding a stale coordinator pointing to the old 32-GPU group, so their all-reduces still span all 32 GPUs.
 
 **What can and cannot be rebuilt:**
 
-- `_TP`, `_EP`, `_DCP` — safe to rebuild, because they are scoped within or at the TP level. Replacing them changes only intra-TP communication.
-- `_PP`, `_DP` — must never be rebuilt, because they cross TP boundaries. Their rank lists span multiple TP groups; replacing them severs the point-to-point paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet, breaking collective operations for every rank in those groups.
+- `_TP`, `_EP`, `_DCP` — safe to rebuild. These are scoped within or at the TP level, so replacing them changes only intra-TP communication without affecting cross-TP paths.
+- `_PP`, `_DP` — must never be rebuilt. Their rank lists span multiple TP groups (they are "above" TP in the hierarchy); replacing them severs the point-to-point paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet, breaking collective operations for every rank in those groups.
 
-**Config/actual divergence after rebuild:** `parallel_config.tensor_parallel_size` (32) and `get_tp_group().world_size` (4) diverge because the config is set once at startup and never updated. Code that reads the config to size data structures — such as KV cache head allocation — will compute the wrong value: with 32 KV heads, config-based allocation gives 32/32=1 head/GPU, but actual TP=4 means attention writes 32/4=8 heads/GPU, silently corrupting 7 heads per layer.
+**Config/actual divergence after rebuild:** `parallel_config.tensor_parallel_size` (32) and `get_tp_group().world_size` (4) diverge because the config is set once at startup and never updated. Any code that reads the config to size data structures — rather than querying the live group — computes the wrong value. KV cache head allocation is the critical case: with 32 KV heads, config-based allocation gives 32/32=1 head/GPU, but actual TP=4 means attention writes 32/4=8 heads/GPU, silently corrupting 7 heads per layer.
 
 Full details, safety table, worked arithmetic, and the Pydantic fix: [[ml-systems/vllm-process-group-rebuild]].
 
