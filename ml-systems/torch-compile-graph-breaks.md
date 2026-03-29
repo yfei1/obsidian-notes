@@ -130,7 +130,7 @@ This is better than removing the check entirely because eager-mode callers still
 
 3. **"How do you debug graph breaks?"** — `torch.compile(fn, fullgraph=True, backend="eager")` raises on the first break with the exact reason. `TORCH_LOGS=graph_breaks` logs all breaks without failing. For production, wrap debug-only code in `if not torch.compiler.is_compiling():`.
 
-4. **"torch.compile vs CUDA graphs — when do you use which?"** — torch.compile fuses multiple small element-wise ops into fewer GPU kernels (reducing memory round-trips per fused op, e.g., SiLU + multiply → 1 kernel instead of 2). CUDA graphs eliminate CPU-side kernel launch overhead by replaying a recorded command buffer — removing one `cudaLaunchKernel` call per op per step. They're complementary: vLLM uses torch.compile for kernel fusion and CUDA graphs for decode-step replay, because decode is bottlenecked by both memory bandwidth and CPU dispatch latency.
+4. **"torch.compile vs CUDA graphs — when do you use which?"** — torch.compile fuses multiple small element-wise ops into fewer GPU kernels — e.g., SiLU + multiply → 1 kernel instead of 2, saving one full read+write of the activation tensor (for [32, 2048, 4096] float16: 2 × 32×2048×4096×2 B = 1 GB avoided per fused pair). <!-- verify: 2*32*2048*4096*2 == 1073741824 --> CUDA graphs eliminate CPU-side kernel launch overhead by replaying a recorded command buffer — removing one `cudaLaunchKernel` call per op per step. They're complementary: vLLM uses torch.compile for kernel fusion and CUDA graphs for decode-step replay, because decode is bottlenecked by both memory bandwidth and CPU dispatch latency.
 
 ---
 
