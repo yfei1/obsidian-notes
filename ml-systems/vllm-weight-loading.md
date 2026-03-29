@@ -100,15 +100,15 @@ weight_loader(param, tensor)
 
 `weight_loader` is a vLLM convention (not PyTorch) — a callable attached to each `nn.Parameter` during `__init__`. Each parallel layer type slices the full incoming tensor to this GPU's shard, so `load_weights()` never needs to know the TP degree:
 
-| Layer Type | What weight_loader Does |
+| Layer Type | What weight_loader Does (3B, TP=4 example) |
 |---|---|
-| `QKVParallelLinear` | The fused QKV weight packs Q (query — projects input to query space), K (key — projects input to key space), and V (value — projects input to value space) projections into one matrix; `weight_loader` splits them apart, then shards each across TP ranks |
-| `ColumnParallelLinear` | Slice output dimension by TP rank |
-| `RowParallelLinear` | Slice input dimension by TP rank |
-| `VocabParallelEmbedding` | Slice vocab dimension by TP rank |
+| `QKVParallelLinear` | Full tensor `[2304, 2048]` (Q+K+V packed, 768 rows each); splits into Q/K/V then slices each: rank r gets rows `[r*192:(r+1)*192]` of each → `[576, 2048]` per rank |
+| `ColumnParallelLinear` | Slice output (dim 0): `gate_proj [5888, 2048]` → each of 4 ranks gets `[1472, 2048]` |
+| `RowParallelLinear` | Slice input (dim 1): `o_proj [2048, 2048]` → each of 4 ranks gets `[2048, 512]` |
+| `VocabParallelEmbedding` | Slice vocab (dim 0): `[153600, 2048]` → each of 4 ranks gets `[38400, 2048]` |
 | `RMSNorm` | No sharding — just copy (falls through to `default_weight_loader`) |
 
-`default_weight_loader` does `param.data.copy_(tensor)` — used by norms and other non-parallel params, because they have no shard dimension. The outer `load_weights()` loop is TP-agnostic because sharding is fully encapsulated in each parameter's `weight_loader`.
+`default_weight_loader` does `param.data.copy_(tensor)` — used by norms and other non-parallel params, because they have no shard dimension. The outer `load_weights()` loop is TP-agnostic because sharding is fully encapsulated in each parameter's `weight_loader`. (Shape arithmetic verified in `scripts/verify_weight_loading_shapes.py`.)
 
 ---
 
