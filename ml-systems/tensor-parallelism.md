@@ -296,3 +296,4 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/ray-compiled-graph-in-vllm]] — TP allreduce/allgather within model layers runs through torch.distributed NCCL independently of Ray CG dispatch channels; CG only handles SchedulerOutput broadcast
 - [[ml-systems/kv-cache-kernel-and-addressing]] — KV head sharding in TP means each GPU's cache slice holds only its local head partition; slot addressing operates on that local view
 - [[ml-systems/pt-moe-4norm-fusion-deep-research]] — traces TP all-reduce sync points through PT-MoE's decoder layer and analyzes the `AllReduceFusionPass` AR+norm fusion opportunity for Post-LN patterns
+- [[ml-systems/pt-moe-4norm-fusion-followup-qa]]
