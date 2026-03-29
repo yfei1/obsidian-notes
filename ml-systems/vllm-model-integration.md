@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-Integrating a custom model into vLLM means building a thin wiring layer that connects your model's architecture to vLLM's standard building blocks (QKVParallelLinear, Attention, RMSNorm, etc.). The model code contains zero custom kernels — only the assembly differs. Weight loading maps checkpoint tensor names to vLLM parameter names via a remapping function. This note documents the TAMM AFM 3B integration: 56 layers (35 full-QKV + 21 KV-reuse), SwiGLU MLP, non-standard norm placement, and tied embeddings.
+Integrating a custom model into vLLM means building a thin wiring layer that connects your model's architecture to vLLM's standard building blocks (QKVParallelLinear, Attention, RMSNorm, etc.). Zero custom kernels — only the assembly differs. Weight loading maps checkpoint tensor names to vLLM parameter names via a remapping function. This note documents the TAMM AFM 3B integration: 56 layers (35 full-QKV + 21 KV-reuse), SwiGLU MLP, non-standard norm placement, and tied embeddings.
 
 ---
 
@@ -33,7 +33,7 @@ ForCausalLM (top-level, what vLLM engine calls)
 | `embed_input_ids(input_ids)` | Speculative decoding / PP | Delegates to `embed_tokens` |
 | `load_weights(weights)` | Model loader at startup | Maps checkpoint names → model params |
 
-`load_weights` is NOT defined by an abstract interface — it's a **duck-typing convention**. vLLM's `DefaultModelLoader` simply calls `model.load_weights(weights_iterator)` and expects it to exist. Every vLLM model implements it.
+`load_weights` has no abstract interface — vLLM's `DefaultModelLoader` calls `model.load_weights(weights_iterator)` via duck-typing and expects it to exist.
 
 ### Config access
 
@@ -41,7 +41,7 @@ ForCausalLM (top-level, what vLLM engine calls)
 config = vllm_config.model_config.hf_config   # the HuggingFace config object
 ```
 
-For text-only models, `hf_config` and `hf_text_config` return the same object. `hf_text_config` exists for multimodal models where the outer config wraps text + vision sub-configs.
+For text-only models, `hf_config` and `hf_text_config` return the same object. `hf_text_config` exists because multimodal models wrap text + vision sub-configs in an outer config.
 
 `vllm_config` bundles everything: `model_config` (architecture), `cache_config` (KV cache), `quant_config` (quantization), `parallel_config` (TP/PP). Inner layers extract what they need from it.
 
@@ -78,7 +78,7 @@ self.attn = Attention(prefix="model.layers.0.self_attn.attn")  # → KV cache ke
 | Weight loading | `param.weight_loader(param, tensor)` on each parameter | Write name remapping |
 | KV sharing | `kv_sharing_target_layer_name` on `Attention` | Just pass the target prefix string |
 
-**Zero custom layers needed.** The only model-specific code is: the `forward` wiring (norm placement, residual pattern) and the `load_weights` name remapping.
+**Zero custom layers needed.** Model-specific code is limited to: `forward` wiring (norm placement, residual pattern) and `load_weights` name remapping.
 
 ---
 
@@ -182,11 +182,11 @@ transformer.tamm_model.output_norm.weight              → model.norm.weight
 ...segment_1.layer_M.attention.q_norm.query_norm.weight          → model.layers.(35+M).self_attn.q_norm.weight
 ```
 
-Key facts about the checkpoint format:
+Checkpoint format details:
 - **QKV is already fused** (`qkv_transform.fused_linear.weight`, shape `[2560, 2048]`) → call `weight_loader(param, tensor)` with no `shard_id`, and `QKVParallelLinear` auto-splits into Q`[2048, 2048]`, K`[256, 2048]`, V`[256, 2048]`
 - **Gate and up are separate** (`linear_0` `[6656, 2048]`, `linear_1` `[6656, 2048]`) → load directly into separate `ColumnParallelLinear` layers
 - **No lm_head weight** → tied with `embed_tokens` (same parameter, shape `[153600, 2048]`)
-- **No K norm weight** → `RMSNorm(has_weight=False)` (stateless)
+- **No K norm weight** → `RMSNorm(has_weight=False)` because K norm is stateless (no learned scale)
 - **562 total weights** = 35 × 10 + 21 × 10 + 2
 
   Weights per segment-0 layer (10): `qkv_proj`, `o_proj`, `q_norm`, `gate_proj`, `up_proj`, `down_proj`, `pre_residual_norm_attn`, `post_norm_attn`, `pre_residual_norm_mlp`, `post_norm_mlp`
@@ -195,13 +195,13 @@ Key facts about the checkpoint format:
 
 ### Why not AutoWeightsLoader?
 
-`AutoWeightsLoader` requires checkpoint tensor names to match vLLM module names exactly. TAMM uses a completely different naming scheme (`transformer.tamm_model.layers.segment_0.layer_N` vs `model.layers.N`), and the segment flattening requires arithmetic (not static string substitution). A custom `load_weights` with `_remap_tamm_name()` is simpler and more explicit.
+`AutoWeightsLoader` requires checkpoint tensor names to match vLLM module names exactly. TAMM's naming scheme (`transformer.tamm_model.layers.segment_0.layer_N` vs `model.layers.N`) differs completely, and segment flattening requires index arithmetic — not static string substitution — so a custom `load_weights` with `_remap_tamm_name()` is the only workable approach.
 
 ---
 
 ## LogitsProcessor: Why Not Call lm_head Directly?
 
-nano-vllm's `ParallelLMHead.forward()` does the matmul + TP gather in one class. Public vLLM separates them:
+nano-vLLM's `ParallelLMHead.forward()` does the matmul + TP gather in one class. Public vLLM separates them because quantization requires routing through `quant_method.apply()` before the gather:
 
 ```python
 # nano-vllm: all-in-one
@@ -214,9 +214,7 @@ logits = self.logits_processor(self.lm_head, hidden_states)
 #        ↑ then trim vocab padding
 ```
 
-`VocabParallelEmbedding.forward(input_ids)` does token **lookup** (embedding direction). `LogitsProcessor` calls `quant_method.apply()` which does the **reverse matmul** (logits direction). Same weight, two directions — `LogitsProcessor` knows which direction to use.
-
-With tied weights (`lm_head = embed_tokens`), calling `lm_head(hidden_states)` would do a token lookup (wrong), not a matmul.
+`VocabParallelEmbedding.forward(input_ids)` does token **lookup** (embedding direction). `LogitsProcessor` calls `quant_method.apply()` which does the **reverse matmul** (logits direction). Same weight, two directions — `LogitsProcessor` knows which direction to use, which is why calling `lm_head(hidden_states)` directly with tied weights would do a token lookup instead of a matmul.
 
 ---
 
@@ -228,7 +226,7 @@ vLLM's built-in mechanism (also used by Gemma3n):
 2. **KV cache allocation**: vLLM skips allocating cache for sharing layers — they get a pointer to layer 34's cache
 3. **Forward**: Sharing layers read from (but don't write to) the shared cache. Pass `key=None, value=None` to `Attention.forward()`
 
-This means segment 1 layers have **no KV cache memory cost** — the 21 Q-only layers share layer 34's single cache slot.
+Segment 1 layers have **no KV cache memory cost** because all 21 Q-only layers alias layer 34's single cache slot.
 
 Layer 34's KV cache size at sequence length 4096 (BF16, 2 bytes/element):
 ```
@@ -242,7 +240,7 @@ Without KV reuse, 21 additional cache slots would cost 21 × 4 MB = 84 MB at thi
 
 ## cpu_linear: Why Forward Fails on CPU Without Weight Loading
 
-vLLM's linear layers dispatch through `quant_method.apply()` → `dispatch_unquantized_gemm()`. On CPU, this calls `layer.cpu_linear(x, weight, bias)`. But `cpu_linear` is only set by `process_weights_after_loading()` — which vLLM calls after `load_weights`. Without loaded weights, `cpu_linear` doesn't exist.
+vLLM's linear layers dispatch through `quant_method.apply()` → `dispatch_unquantized_gemm()`. On CPU, this calls `layer.cpu_linear(x, weight, bias)`. `cpu_linear` is set only by `process_weights_after_loading()`, which vLLM calls after `load_weights` — so forward fails on CPU if weights were never loaded.
 
 Fix for testing: manually call `process_weights_after_loading` on all modules:
 ```python
@@ -261,13 +259,13 @@ for name, module in model.named_modules():
 
 3. **"Why not just call lm_head(hidden_states)?"** — `VocabParallelEmbedding.forward()` does token lookup (wrong direction). `LogitsProcessor` routes through `quant_method.apply()` which does the reverse matmul, handles quantization formats (FP8/int4), and performs TP gather.
 
-4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this method via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
+4. **"What's the weight loading contract?"** — Implement `load_weights(weights: Iterable[tuple[str, tensor]]) -> set[str]`. Iterate checkpoint tensors, remap names to model params, call `param.weight_loader(param, tensor)` for each. Return the set of loaded param names for completeness checking. vLLM's `DefaultModelLoader` calls this via duck-typing (no abstract interface), then calls `process_weights_after_loading()` on all modules to set up quantization state (e.g., `cpu_linear` for CPU dispatch).
 
-7. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
+5. **"When would you use `AutoWeightsLoader` vs a custom `load_weights`?"** — Use `AutoWeightsLoader` when checkpoint tensor names match vLLM module attribute names exactly (or with simple static prefix stripping). Use a custom `load_weights` + remapping function when: (1) checkpoint uses a completely different naming scheme, (2) the mapping requires arithmetic (e.g., flattening segment/layer indices into a single layer index), or (3) special-case logic is needed (e.g., skipping lm_head because weights are tied, or handling fused vs split tensors). TAMM requires a custom approach because `transformer.tamm_model.layers.segment_0.layer_N` → `model.layers.N` cannot be expressed as static string substitution.
 
-5. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
+6. **"How does TAMM's norm pattern differ from LLaMA?"** — LLaMA uses pre-norm with fused add+norm (2 norms per layer). TAMM uses res_norm→add→out_norm (4 norms per layer, 3 separate ops, cannot fuse). Same `RMSNorm` building block, different wiring.
 
-6. **"How does TAMM's RoPE order differ?"** — TAMM applies RoPE before QK norm (linear→RoPE→norm). Qwen3 applies QK norm before RoPE (linear→norm→RoPE). Same `get_rope()` and `RMSNorm`, just different call order in `forward()`.
+7. **"How does TAMM's RoPE order differ?"** — TAMM applies RoPE before QK norm (linear→RoPE→norm). Qwen3 applies QK norm before RoPE (linear→norm→RoPE). Same `get_rope()` and `RMSNorm`, just different call order in `forward()`.
 
 ---
 
