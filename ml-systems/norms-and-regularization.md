@@ -196,4 +196,4 @@ The optimizer plays whack-a-mole: suppress the current maximum, a new one emerge
 
 - [[ml-systems/transformer-model-internals]] — RMSNorm uses L2 norm for hidden state normalization; see why sqrt(mean(x²)) beats mean(|x|)
 - [[ml-systems/attention-mechanics]] — per-head RMSNorm on Q/K before RoPE rotation
-- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — detailed analysis of `fused_add_rms_norm` semantic mismatch for Post-LN residual patterns, and design of a custom `fused_add_rmsnorm_postln` Triton kernel
+- [[ml-systems/pt-moe-4norm-postnorm-semantic-mismatch]] — detailed analysis of `fused_add_rms_norm` semantic mismatch for Post-LN residual patterns, and design of a custom `fused_add_rmsnorm_postln` Triton kernel

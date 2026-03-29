@@ -650,7 +650,9 @@ So fusion helps decode for two different reasons depending on the op type:
 
 ## Connections
 
-- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — the primary research note this Q&A follows up; contains the full investigator reports, Triton kernel design, and integration decision matrix
+- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — hub linking all notes from this research session
+- [[ml-systems/pt-moe-4norm-postnorm-semantic-mismatch]] — semantic mismatch analysis, 4-norm mathematical structure, Triton kernel design
+- [[ml-systems/pt-moe-4norm-fused-kernel-integration]] — CustomOp tiers, torch.compile interaction, hybrid implementation code
 - [[ml-systems/gpu-memory-hierarchy]] — HBM/SRAM hierarchy and bandwidth model
 - [[ml-systems/gpu-kernel-stack]] — kernel launch overhead mechanics
 - [[ml-systems/tensor-parallelism]] — TP all-reduce sync points and `AllReduceFusionPass`

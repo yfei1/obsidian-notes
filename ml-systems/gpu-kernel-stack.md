@@ -203,5 +203,5 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 - [[ml-systems/pytorch-module-hooks]] — `torch.compile` fuses small ops into fewer GPU kernels; graph breaks in hook code defeat this optimization
 - [[ml-systems/pytorch-module-hooks]] — `torch.compile` kernel fusion decisions are the mechanism behind the compile-overhead vs. fusion-gain trade-off illustrated in the hooks note
 - [[ml-systems/kv-cache-kernel-and-addressing]] — worked example of a custom Triton kernel (`store_kvcache_kernel`) showing `tl.program_id`, `tl.load`, and `tl.store` in a real inference context
-- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — concrete analysis of kernel launch overhead (~5–10 µs) dominating norm op cost during decode, motivating fusion from 6 to 4 kernels per decoder layer
+- [[ml-systems/pt-moe-4norm-fusion-followup-qa]] — concrete analysis of kernel launch overhead (~5–10 µs) dominating norm op cost during decode, motivating fusion from 6 to 4 kernels per decoder layer
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]]

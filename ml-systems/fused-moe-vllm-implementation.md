@@ -169,4 +169,4 @@ for expert_id in range(num_experts):
 - [[ml-systems/tensor-parallelism]] — TP rank sharding mechanics; why ColumnParallelLinear breaks router consistency
 - [[ml-systems/parallelism-strategies]] — broader parallelism taxonomy
 - [[ml-systems/vllm-weight-loading]] — gotchas when calling FusedMoE.weight_loader (weight_name guard, transpose requirement, expert iteration order)
-- [[ml-systems/pt-moe-4norm-fusion-deep-research]] — uses `FusedMoE`'s `CustomOp` registration pattern as the reference for integrating a custom Post-LN norm fusion kernel
+- [[ml-systems/pt-moe-4norm-fused-kernel-integration]] — uses `FusedMoE`'s `CustomOp` registration pattern as the reference for integrating a custom Post-LN norm fusion kernel
