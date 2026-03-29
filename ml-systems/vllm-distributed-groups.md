@@ -236,13 +236,13 @@ for ranks in group_ranks:
 - **`world_size`**: number of ranks in this group (4)
 - **`ranks`**: all global ranks in this group ([12, 13, 14, 15])
 
-Two concrete cases show where the wrong choice corrupts behavior silently.
+The three attributes are scoped differently — job, node, group — and weight sharding and track assignment each require the group-scoped one, but from *different* groups.
 
-**Weight sharding** uses `rank_in_group` because weight shards are indexed by position *within the TP group* — shard 0 goes to the first rank in the group, not the first rank on the node. `local_rank` is wrong here: rank 12 has `local_rank=4` but `rank_in_group=0`, so using `local_rank` would load the fifth shard instead of the first — silently wrong on every rank outside the first TP group.
+**Weight sharding** uses `rank_in_group` from the TP group because weight shards are indexed by position within the TP group: shard 0 goes to the first rank in the group, not the first rank on the node. `local_rank` is wrong here because it counts from the node boundary, not the group boundary. Rank 12 has `local_rank=4` but `rank_in_group=0` in TP group [12,13,14,15] — using `local_rank` would load the fifth shard instead of the first, silently wrong on every rank outside the first TP group.
 
-**PT-MoE track assignment** also uses `rank_in_group`, but from a different group. After rebuilding into 8 tracks × TP=4, each track's forward pass is independent — ranks in different tracks process different inputs and must not share all-reduce results. A rank needs to know *which track it belongs to*, but `local_rank` is node-scoped and `rank` is job-scoped — neither encodes track membership directly.
+**PT-MoE track assignment** also needs `rank_in_group`, but from a different group, because the rebuilt TP group does not encode which track a rank belongs to. After rebuilding into 8 tracks × TP=4, each track runs an independent forward pass on different inputs. An all-reduce must stay within one track's 4 GPUs — `rank` is job-scoped and `local_rank` is node-scoped, so neither directly encodes track membership.
 
-PT-MoE solves this by defining a **slot index** — a rank's position within its own track's rank list (0–3 for TP=4). Each slot value appears exactly once per track, so every rank has a unique (track, slot) pair. PT-MoE then forms a **cross-track group** for each slot value: collect the rank at that slot position from every track. Slot 0 of every track yields the group [0,4,8,12,16,20,24,28]. Rank 12 sits at slot 0 of track 3, so it is the fourth entry in this cross-track group — `rank_in_group=3` within the cross-track group. PT-MoE uses this value as the track index because it counts exactly which track a rank belongs to across the full 32-GPU fleet, independent of node boundaries.
+PT-MoE resolves this by constructing a **cross-track group** per **slot index** — a rank's position within its own track's rank list (0–3 for TP=4). Because each slot value appears exactly once per track, collecting slot-0 ranks across all tracks yields [0,4,8,12,16,20,24,28]. Rank 12 sits at slot 0 of track 3, making it the fourth entry in this cross-track group — `rank_in_group=3`. PT-MoE uses that value as the track index because it counts track membership across the full 32-GPU fleet, independent of node boundaries.
 
 ---
 
