@@ -4,7 +4,7 @@
 
 ## Core Intuition
 
-PT-MoE's 4-norm sandwich residual pattern (norm→add→norm per sub-layer) is incompatible with vLLM's existing `fused_add_rms_norm` — that kernel returns an un-normed residual (Pre-LN semantics), but PT-MoE requires a normed residual (Post-LN semantics). A single custom Triton kernel `fused_add_rmsnorm_postln` fuses the add+post_norm pairs, saving 2 kernel launches and ~23% HBM traffic per decoder layer, with no new vLLM layer required.
+PT-MoE's 4-norm sandwich residual pattern (norm→add→norm per sub-layer) is incompatible with vLLM's existing `fused_add_rms_norm` — that kernel returns an un-normed residual (Pre-LN semantics), but PT-MoE requires a normed residual (Post-LN semantics). A single custom Triton kernel `fused_add_rmsnorm_postln` fuses the add+post_norm pairs, saving 2 kernel launches and reducing HBM passes from 6→4 per decoder layer (each eliminated kernel removes one full read+write roundtrip over the residual tensor — for a hidden dim of 4096 × bf16, that is 2 × 4096 × 2 = 16 KB per token saved per fused pair), with no new vLLM layer required.
 
 ---
 
