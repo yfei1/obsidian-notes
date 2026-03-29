@@ -86,7 +86,7 @@ The compiled DAG topology (built once at startup, reused every step):
   input ─────────────> worker 3 ───────────────> worker 7 ───────────────> output
 
   Each worker returns: (SchedulerOutput, GrammarOutput, IntermediateTensors)
-  IT = hidden_states [128,8192] + residual [128,8192], bf16, 4 MiB total
+  IT = hidden_states [128,8192] + residual [128,8192], bf16 → 2×128×8192×2 = 4,194,304 B = 4 MiB
 
   The NCCL arrows exist because with_tensor_transport on stage 0's outputs
   (line 60) tells CG to create NCCL channels for the stage0→stage1 edges,
@@ -160,7 +160,7 @@ engine.step_with_batch_queue()                         [core.py:449]
 
 `forward_dag.execute((scheduler_output, grammar_output))` at `ray_executor.py:469` sends the **full Python tuple**.
 
-- **`SchedulerOutput`** (`vllm/v1/core/sched/output.py:179`): Python dataclass from `self.scheduler.schedule()` at `core.py:389`. Contains scheduling decisions: which requests to run, how many tokens each, spec decode tokens, encoder inputs, finished request IDs. All plain Python — strings, dicts, lists, sets, ints. No tensors. ~32 KB for bs=128.
+- **`SchedulerOutput`** (`vllm/v1/core/sched/output.py:179`): Python dataclass from `self.scheduler.schedule()` at `core.py:389`. Contains scheduling decisions: which requests to run, how many tokens each, spec decode tokens, encoder inputs, finished request IDs. All plain Python — strings, dicts, lists, sets, ints. No tensors. ~32 KB for bs=128 (128 request IDs × ~200 B each of Python dict overhead + token lists).
 - **`GrammarOutput`** (`vllm/v1/core/sched/output.py:257`): Dataclass from `self.scheduler.get_grammar_bitmask()` at `core.py:391`. Contains structured output constraints: request IDs + numpy int32 bitmask array for grammar-guided generation.
 
 Neither type knows about Ray, CG, or the executor. Per step through the DAG:
