@@ -20,13 +20,11 @@ The 4-norm Post-LN pattern sits entirely after the all-reduce boundary — the n
 
 ## TP Sync Placement and AR+Norm Fusion Opportunity
 
-Great question — you're asking about fusing across the **all-reduce boundary**. Let me check vLLM's existing allreduce+norm fusion infrastructure.
+The question is whether the 4-norm block can benefit from fusing across the **all-reduce boundary** — the same optimization vLLM already applies to Llama via `allreduce_rms_fusion.py`.
 
-[reads allreduce_rms_fusion.py, linear.py, custom_op.py]
+First, a clarification: the 4 norms themselves require **zero TP sync** — they are purely local elementwise ops. The all-reduce happens inside `RowParallelLinear` in `o_proj` (`afm_pt_moe.py:239-245`) and `down_proj`/`FusedMoE`, before the norms ever see the data. The norms operate on already-reduced hidden states. Full TP sync placement is in [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]].
 
-No — the 4 norms themselves are **purely local elementwise ops with zero TP sync**. The full TP sync placement diagram and analysis are in [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]. The norms operate on **already-reduced** hidden states. The `RowParallelLinear` in `o_proj` (`afm_pt_moe.py:239-245`) and `down_proj`/`FusedMoE` do the all-reduce internally, before the norms ever see the data.
-
-**But** — I think your real question is about the `allreduce + norm` fusion opportunity. And this is where it gets interesting.
+The AR+norm fusion opportunity is different: it's about eliminating the HBM round-trip *between* the all-reduce result and the immediately-following norm. When the all-reduce and norm run as separate kernels, the all-reduced tensor is written to HBM, then read back for the norm — a round-trip that serves no purpose other than the kernel boundary.
 
 ### The allreduce+norm fusion that vLLM already does
 
