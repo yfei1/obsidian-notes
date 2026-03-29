@@ -208,19 +208,19 @@ for ranks in group_ranks:
 
 ### Rank vs. Group Position Attributes
 
-Three attributes name a rank's position, each counting from a different origin — confusing them causes incorrect weight shard selection or wrong track assignment.
+Three attributes name a rank's position, each counting from a different origin. The distinction matters because model layers use `rank_in_group` — not `local_rank` — to select weight shards, and PT-MoE uses `rank_in_group` of a cross-track group to assign track membership. Confusing them causes wrong shard selection or wrong track assignment.
 
-- **`rank`**: global process index (e.g., 12)
-- **`local_rank`**: physical GPU slot on this node, set by `torchrun` from the node boundary (rank 12 on a node covering GPUs 8–15 → `local_rank=4`)
-- **`rank_in_group`**: position within this group's rank list, computed as `ranks.index(self.rank)` (rank 12 in TP group [12,13,14,15] → `rank_in_group=0`)
+- **`rank`**: global process index across the entire job (e.g., 12)
+- **`local_rank`**: physical GPU slot on this node, set by `torchrun` from the node boundary — rank 12 on a node covering GPUs 8–15 → `local_rank=4`
+- **`rank_in_group`**: position within this group's rank list, computed as `ranks.index(self.rank)` — rank 12 in TP group [12,13,14,15] → `rank_in_group=0`
 - **`world_size`**: number of ranks in this group (4)
 - **`ranks`**: all global ranks in this group ([12, 13, 14, 15])
 
-`local_rank` and `rank_in_group` diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology. Rank 12 sits on a node covering GPUs 8–15, so `local_rank=4`; but its rebuilt TP group is [12,13,14,15], so `rank_in_group=0`.
+`local_rank` and `rank_in_group` diverge whenever a group doesn't start at rank 0 — the common case for any non-trivial topology. Rank 12: `local_rank=4` (node boundary at 8), `rank_in_group=0` (group [12,13,14,15] starts at 12).
 
-Model layers use `rank_in_group` to select weight shards — not `local_rank` — because weight sharding must be consistent within the group regardless of which node the group starts on. Using `local_rank` assigns the wrong shard to every rank except those on the first node.
+Weight sharding uses `rank_in_group` because shards must be assigned consistently within the group regardless of which node it lands on — `local_rank` would assign the wrong shard to every rank except those on the first node.
 
-PT-MoE extends this to track assignment via the cross-track group. After rebuild, each TP slot index (0–3 within a track) has one representative per track: slot 0 gives the cross-track group [0,4,8,12,16,20,24,28]. Rank 12 is the fourth entry, so `rank_in_group=3` within that group. PT-MoE uses this as the **track index** — which independent model replica this rank belongs to — because `rank_in_group` within the cross-track group uniquely identifies track membership across the full 32-GPU fleet, independent of node boundaries.
+PT-MoE extends this to track assignment via the cross-track group. After rebuild, slot 0 of each track forms the group [0,4,8,12,16,20,24,28]. Rank 12 is the fourth entry → `rank_in_group=3`. PT-MoE uses this as the **track index** — which independent model replica this rank belongs to — because `rank_in_group` within the cross-track group uniquely identifies track membership across the full 32-GPU fleet, independent of node boundaries.
 
 ---
 
