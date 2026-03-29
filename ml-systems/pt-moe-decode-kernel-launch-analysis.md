@@ -135,3 +135,4 @@ Norm kernel:  weight = [2048]       = 4 KB     <- activation read/write + launch
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]] — extended Q&A covering these topics
 - [[ml-systems/gpu-kernel-stack]] — kernel launch overhead mechanics
 - [[ml-systems/kv-cache-internals]] — why decode norms see only 1 token
+- [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]] — AR+norm fusion opportunity under TP: why norms are local after all-reduce, Phase 1 vs Phase 2 fusion recommendations

@@ -119,8 +119,6 @@ return h                    <- both hidden_states and residual
 ---
 
 ## See Also
-- [[ml-systems/pt-moe-4norm-fusion-followup-qa]] — extended Q&A covering GPU memory model, AR+norm fusion savings, and decode vs prefill cost breakdown
-
 - [[ml-systems/pt-moe-4norm-postnorm-semantic-mismatch]] — why existing `fused_add_rms_norm` doesn't work for Post-LN; custom kernel design
 - [[ml-systems/pt-moe-4norm-fused-kernel-integration]] — how to integrate the Triton kernel into vLLM
 - [[ml-systems/pt-moe-4norm-fusion-deep-research]] — hub linking all notes from this research session
