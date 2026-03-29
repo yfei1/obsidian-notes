@@ -8,7 +8,7 @@
 
 ## TL;DR
 
-vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP` — where **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). A **collective** is an operation — like all-reduce or broadcast — that every rank in a group executes together; all-reduce sums a tensor across all ranks and gives every rank the result. Each group is a `GroupCoordinator` holding two process groups: one backed by NCCL (NVIDIA's GPU collective library, runs kernels over NVLink/PCIe) and one backed by Gloo (Meta's CPU collective library, used for control-plane barriers where no GPU context is needed). Groups can be destroyed and rebuilt at runtime. PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** — where a track is one independent model replica running its own forward pass in parallel with other tracks — without forking vLLM.
+vLLM builds six process groups from one 5D rank tensor with layout `ExternalDP × DP × PP × PCP × TP`. The axes: **TP** = tensor parallel, **PP** = pipeline parallel, **DP** = data parallel, **EP** = expert parallel, **PCP** = prefill-context parallel, **DCP** = disaggregated-context parallel, **ExternalDP** = external data parallel (outer replication layer). A **collective** is an operation — like all-reduce or broadcast — that every rank in a group executes together; all-reduce sums a tensor across all ranks and gives every rank the result. Each of the six groups (_TP, _PP, _DP, _EP, _PCP, _DCP) is a `GroupCoordinator` holding two process groups: one backed by NCCL (NVIDIA's GPU collective library, runs kernels over NVLink/PCIe) and one backed by Gloo (Meta's CPU collective library, used for control-plane barriers where no GPU context is needed). Groups can be destroyed and rebuilt at runtime. PT-MoE (a vLLM plugin for parallelizing Mixture-of-Experts layers) uses this to narrow TP from a global 32-GPU group to 4 GPUs per **track** — where a track is one independent model replica running its own forward pass in parallel with other tracks — without forking vLLM.
 
 ---
 
@@ -214,7 +214,7 @@ for ranks in group_ranks:
 
 ### Rank vs. Group Position Attributes
 
-Three attributes name a rank's position, each counting from a different origin. The distinction matters because model layers use `rank_in_group` — not `local_rank` — to select weight shards, and PT-MoE uses `rank_in_group` to assign track membership. A **cross-track group** contains one rank from each track at the same slot index (e.g., slot 0 of every track); PT-MoE uses a rank's position within this group as its track index. Confusing the three attributes causes wrong shard selection or wrong track assignment.
+Three attributes name a rank's position, each counting from a different origin. The distinction matters because model layers use `rank_in_group` — not `local_rank` — to select weight shards, and PT-MoE uses `rank_in_group` to assign track membership. Within a track of 4 GPUs, each GPU occupies a **slot index** — its position within the track's rank list (0, 1, 2, or 3). A **cross-track group** then contains one rank from each track at the same slot index (e.g., slot 0 of every track); PT-MoE uses a rank's position within this group as its track index. Confusing the three attributes causes wrong shard selection or wrong track assignment.
 
 - **`rank`**: global process index across the entire job (e.g., 12)
 - **`local_rank`**: physical GPU slot on this node, set by `torchrun` from the node boundary — rank 12 on a node covering GPUs 8–15 → `local_rank=4`
@@ -232,12 +232,12 @@ PT-MoE extends this to track assignment via the cross-track group. After rebuild
 
 ## Creating Groups: init_model_parallel_group
 
+`get_world_group()` returns the `GroupCoordinator` for the full job (all ranks); its `local_rank` is the physical GPU slot on the current node.
+
 ```python
 init_model_parallel_group(
     group_ranks,   # list of ALL groups — e.g. [[0..31]] for TP=32, or [[0,1,2,3],…,[28..31]] after rebuild
-    local_rank,    # physical GPU slot: get_world_group().local_rank
-                   # get_world_group() returns the GroupCoordinator for the full job (all ranks)
-                   # (rank 12 on GPUs 8–15 → local_rank=4)
+    local_rank,    # physical GPU slot: get_world_group().local_rank  (rank 12 on GPUs 8–15 → local_rank=4)
     backend,       # "nccl" for GPU: torch.distributed.get_backend(get_world_group().device_group)
 )
 ```
