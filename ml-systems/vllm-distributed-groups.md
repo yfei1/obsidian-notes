@@ -14,7 +14,7 @@ vLLM builds six process groups (_TP, _PP, _DP, _EP, _PCP, _DCP) from one 5D rank
 
 ## Core Intuition
 
-Distributed inference requires different communication patterns for different parallelism axes. TP ranks **all-reduce** (sum a tensor across all ranks and distribute the result) activations within a **pipeline stage** (a contiguous slice of the model's layers assigned to one GPU in a pipeline-parallel setup); PP ranks send activations forward from one stage to the next; DP ranks synchronize gradients across replicas (identical copies of the model running on separate GPU sets, each processing different input batches). Each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups. The constraint is that PP and DP must never be rebuilt — those groups cross TP boundaries, so replacing them severs the rank-to-rank paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet.
+Distributed inference requires different communication patterns for different parallelism axes. A **pipeline stage** is a contiguous slice of the model's layers assigned to one GPU in a pipeline-parallel setup. TP ranks **all-reduce** (sum a tensor across all ranks and distribute the result) activations within a stage; PP ranks send activations forward from one stage to the next; DP ranks synchronize gradients across **replicas** (identical copies of the model running on separate GPU sets, each processing different input batches). Each pattern needs its own NCCL communicator scoped to exactly the right set of GPUs. **vLLM solves this with one 5D rank tensor (`ExternalDP × DP × PP × PCP × TP`) from which all six groups are derived by transpose + reshape** — same data, different views, each producing the correct rank lists without redundant bookkeeping. The PT-MoE rebuild pattern adds a second insight: because groups are just named NCCL communicators stored in module-level globals, you can destroy and replace `_TP` at runtime to narrow from a 32-GPU group to 4-GPU per-track groups. The constraint is that PP and DP must never be rebuilt — those groups cross TP boundaries, so replacing them severs the rank-to-rank paths that connect pipeline stages and data-parallel replicas across the full 32-GPU fleet.
 
 ---
 
@@ -183,7 +183,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because the two communication planes have incompatible resource requirements. NCCL requires an active **CUDA context** (the GPU driver state that must be initialized before any GPU kernel can run) and a GPU memory allocation per communicator. Gloo runs entirely on CPU and fires before any CUDA context exists — for example, the barrier in `init_distributed_environment` runs before `torch.cuda.set_device` has been called, so no GPU is available yet. Mixing them into one communicator would either block CPU barriers on GPU availability or waste GPU memory on CPU-only synchronization.
+A **process group** is a named subset of ranks that can issue collective operations (all-reduce, broadcast, etc.) among themselves. `GroupCoordinator` wraps two process groups per logical group — one NCCL, one Gloo — because the two communication planes have incompatible resource requirements. NCCL requires an active **CUDA context** (the GPU driver state that must be initialized before any GPU kernel can run) and a GPU memory allocation per communicator. Gloo runs entirely on CPU and fires before any CUDA context exists — for example, `init_distributed_environment` (vLLM's startup routine that establishes the process group before any model code runs) issues a barrier before `torch.cuda.set_device` has been called, so no GPU is available yet. Mixing them into one communicator would either block CPU barriers on GPU availability or waste GPU memory on CPU-only synchronization.
 
 Resources held per coordinator:
 
@@ -214,7 +214,7 @@ for ranks in group_ranks:
 
 ### Rank vs. Group Position Attributes
 
-Three attributes name a rank's position, each counting from a different origin. The distinction matters because model layers use `rank_in_group` — not `local_rank` — to select weight shards, and PT-MoE uses `rank_in_group` of a cross-track group to assign track membership. Confusing them causes wrong shard selection or wrong track assignment.
+Three attributes name a rank's position, each counting from a different origin. The distinction matters because model layers use `rank_in_group` — not `local_rank` — to select weight shards, and PT-MoE uses `rank_in_group` of a **cross-track group** (a group containing one rank from each track at the same slot index — defined in detail below) to assign track membership. Confusing them causes wrong shard selection or wrong track assignment.
 
 - **`rank`**: global process index across the entire job (e.g., 12)
 - **`local_rank`**: physical GPU slot on this node, set by `torchrun` from the node boundary — rank 12 on a node covering GPUs 8–15 → `local_rank=4`
@@ -235,7 +235,9 @@ PT-MoE extends this to track assignment via the cross-track group. After rebuild
 ```python
 init_model_parallel_group(
     group_ranks,   # list of ALL groups — e.g. [[0..31]] for TP=32, or [[0,1,2,3],…,[28..31]] after rebuild
-    local_rank,    # physical GPU slot: get_world_group().local_rank (rank 12 on GPUs 8–15 → 4)
+    local_rank,    # physical GPU slot: get_world_group().local_rank
+                   # get_world_group() returns the GroupCoordinator for the full job (all ranks)
+                   # (rank 12 on GPUs 8–15 → local_rank=4)
     backend,       # "nccl" for GPU: torch.distributed.get_backend(get_world_group().device_group)
 )
 ```
@@ -246,7 +248,7 @@ Returns a `GroupCoordinator` scoped to whichever group the current rank belongs 
 
 ## Rebuilding Groups at Runtime (PT-MoE Pattern)
 
-The default `_TP` group spans all 32 GPUs, but PT-MoE needs all-reduce scoped to 4 GPUs per track — the 32-GPU communicator would incorrectly sum activations across tracks that are running independent forward passes. The fix: destroy `_TP` and replace it with per-track groups by calling `.destroy()` on the old coordinator and assigning a new `GroupCoordinator` to the module-level global (`ps._TP`).
+The default `_TP` group spans all 32 GPUs, but PT-MoE needs all-reduce scoped to 4 GPUs per track — the 32-GPU communicator would incorrectly sum activations across tracks that are running independent forward passes. The fix: destroy `_TP` and replace it with per-track groups by calling `.destroy()` on the old coordinator and assigning a new `GroupCoordinator` to the module-level global (`ps._TP`, where `ps` is the `parallel_state` module imported as `import vllm.distributed.parallel_state as ps`).
 
 **Timing constraint:** The rebuild must happen inside `model.__init__()`, before any layers are constructed — because layers capture `get_tp_group()` at construction time. A rebuild after layer init leaves layers holding a stale coordinator pointing to the old 32-GPU group, so their all-reduces still span all 32 GPUs.
 
