@@ -14,7 +14,7 @@ Concrete shapes (Qwen3-0.6B): `hidden_size=1024, intermediate_size=3072`.
 
 ReLU FFN (2017) → GELU FFN (GPT/BERT) → GLU+sigmoid (Dauphin 2017) → **SwiGLU** = `SiLU(x @ W_gate) * (x @ W_up) @ W_down` (Shazeer 2020).
 
-**Why intermediate_size ≈ 3× instead of 4×**: SwiGLU has 3 weight matrices (gate, up, down) vs 2 (up, down) in vanilla FFN. Iso-param constraint: `3 × d × intermediate = 2 × d × 4d` → `intermediate = 8d/3 ≈ 2.67d`. Qwen3 rounds to 3× (3072/1024). BF16 weight memory per MLP layer: gate_up `6144×1024×2` + down `1024×3072×2` = **18 MB** <!-- verify: 6144*1024*2 + 1024*3072*2 == 18874368 -->.
+**Why intermediate_size ≈ 3× instead of 4×**: SwiGLU has 3 weight matrices (gate, up, down) vs 2 (up, down) in vanilla FFN. Iso-param constraint: `3 × d × intermediate = 2 × d × 4d` → `intermediate = 8d/3 ≈ 2.67d`. Qwen3 rounds to 3× (3072/1024). BF16 weight memory per MLP layer: gate_up `6144×1024×2` + down `1024×3072×2` = **18,874,368 bytes (18 MB)**. MLP FLOPs (seq=512 tokens): gate_up `2×512×1024×6144 ≈ 6.44 GFLOPs` + down `2×512×3072×1024 ≈ 3.22 GFLOPs` = **9.66 GFLOPs** per layer.
 
 ---
 
@@ -54,7 +54,7 @@ The crucial difference: ReLU has **zero gradient** for all x < 0. Once a neuron 
 [N, 1024] → expand → [N, 3072] → contract → [N, 1024]
 ```
 
-Attention handles "which tokens interact." MLP handles "how each token's features transform." The expanded intermediate dimension provides a larger non-linear workspace — more dimensions = more capacity for complex feature mappings — before contracting back to the model's uniform hidden size for the next layer.
+Attention handles "which tokens interact." MLP handles "how each token's features transform." The expanded intermediate dimension (3072 vs 1024) gives the MLP 3× more non-linear capacity per token before contracting back — because each of the 3072 SiLU-gated features can independently suppress or amplify signal, and the down_proj recombines them into the 1024-dim residual stream.
 
 ---
 
