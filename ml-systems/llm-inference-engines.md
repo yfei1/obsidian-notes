@@ -290,7 +290,7 @@ Trade-off: the CPU schedules step N+1 before knowing if any sequences finished i
 
 ## GPU Execution Optimizations
 
-Python kernel launch overhead (~1.5ms) exceeds the GPU compute time (~0.1ms) during decode, leaving the GPU idle >90% of the time. CUDA graphs fix this by recording the full execution sequence once and replaying with a single call (~0.005ms). Feeding dynamic per-step data (block tables, slot mappings) into a graph with hardwired tensor addresses requires pinned memory or Unified Virtual Addressing. `inference_mode()` (vs `no_grad()`) further reduces overhead by fully disabling autograd tracking.
+During decode, the GPU compute time per step is ~0.1ms, but Python kernel launch overhead is ~1.5ms — the GPU idles >90% of the time waiting for the CPU to issue the next kernel. The fix is **CUDA graphs**: record the full kernel launch sequence once (graph capture), then replay it with a single driver call (~0.005ms) instead of re-issuing each kernel individually. This works because the graph hardwires tensor addresses, so per-step dynamic data (block tables, slot mappings) must be written into fixed pinned-memory buffers before each replay — the GPU reads from the same addresses every step, only the values change. `inference_mode()` (vs `no_grad()`) further cuts overhead by fully disabling autograd tracking, removing the gradient tape machinery that `no_grad()` leaves in place.
 
 See [[ml-systems/cuda-graph-inference-optimization]] for the full treatment: graph capture phases, why graphs are decode-only (prefill padding wastes ~99% of tensor cores), pinned memory vs UVA transfer patterns, and garbage collection pitfalls.
 
