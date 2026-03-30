@@ -17,7 +17,7 @@ Deep research session (2026-03-27) investigating kernel fusion opportunities for
 3. **[[ml-systems/pt-moe-decode-kernel-launch-analysis]]** — Read after note 2 because the decode vs prefill ROI comparison requires the cost model from note 2. Kernel launch overhead dominates during single-token decode, making fusion ROI higher there than arithmetic intensity alone predicts — this is why the integration targets decode paths first.
 4. **[[ml-systems/pt-moe-4norm-fused-kernel-integration]]** — Read after notes 1–3. Covers the integration path given the kernel design and cost model: CustomOp tiers, torch.compile interaction, hybrid implementation code, and action plan.
 5. **[[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]** — Read after note 4. TP-specific extension: AR+norm fusion, norm locality under tensor parallelism, redundant execution across ranks, and Phase 1 vs Phase 2 recommendations. Requires note 4's CustomOp framing.
-6. **[[ml-systems/pt-moe-4norm-fusion-followup-qa]]** — Extended Q&A covering all of the above topics. No new dependencies; use as a reference after reading notes 1–5.
+6. **[[ml-systems/pt-moe-4norm-fusion-tp-decode-qa]]** — Extended Q&A covering all of the above topics. No new dependencies; use as a reference after reading notes 1–5.
 
 ---
 
