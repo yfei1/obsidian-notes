@@ -30,13 +30,9 @@ The AR+norm fusion opportunity is different: it's about eliminating the HBM roun
 
 ### The allreduce+norm fusion that vLLM already does
 
-I just read `allreduce_rms_fusion.py` — vLLM has an **Inductor pattern matcher** (a PyTorch compilation pass that recognizes specific op sequences in the compute graph and replaces them with a fused implementation) that fuses `all_reduce -> fused_add_rms_norm` into a single FlashInfer kernel (`AllReduceFusedAddRMSNormPattern`, line 306-372). This is the pattern for **Llama**:
+I just read `allreduce_rms_fusion.py` — vLLM has an **Inductor pattern matcher** (a PyTorch compilation pass that recognizes specific op sequences in the compute graph and replaces them with a fused implementation) that fuses `all_reduce -> fused_add_rms_norm` into a single FlashInfer kernel (`AllReduceFusedAddRMSNormPattern`, line 306-372). This is the pattern for **Llama** — see [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]] for the full TP sync placement diagram and AR+norm fusion opportunity analysis.
 
-```
-o_proj partial output -> all_reduce -> fused_add_rms_norm(output, residual)
-                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-                        fused into ONE FlashInfer call (zero HBM round-trip between AR and norm)
-```
+> `o_proj partial output -> all_reduce -> fused_add_rms_norm(output, residual)` — fused into ONE FlashInfer call (zero HBM round-trip between AR and norm).
 
 This eliminates the HBM write of the all-reduced result — the data stays in SRAM/registers through the norm computation.
 
