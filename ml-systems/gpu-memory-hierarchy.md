@@ -178,3 +178,4 @@ Similarly, `context_lens` tells the GPU exactly how many tokens to read per sequ
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]]
 - [[ml-systems/pt-moe-4norm-fusion-deep-research]]
 - [[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]
+- [[ml-systems/pt-moe-4norm-ar-fusion-tp-decode-gpu-memory-qa]]

@@ -126,3 +126,4 @@ return h                    <- both hidden_states and residual
 - [[ml-systems/tensor-parallelism]] — TP all-reduce sync points and `AllReduceFusionPass`
 - [[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]
 - [[ml-systems/pt-moe-decode-kernel-launch-analysis]]
+- [[ml-systems/pt-moe-4norm-ar-fusion-tp-decode-gpu-memory-qa]]

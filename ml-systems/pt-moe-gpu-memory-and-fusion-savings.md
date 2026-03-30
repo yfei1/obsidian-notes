@@ -206,3 +206,4 @@ residual = hidden_states = self.attn_post_norm(hidden_states) # NORM again
 - [[ml-systems/pt-moe-4norm-fusion-deep-research]] — hub linking all notes from this research session
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]] — extended Q&A covering these topics
 - [[ml-systems/gpu-memory-hierarchy]] — HBM/SRAM hierarchy and bandwidth model
+- [[ml-systems/pt-moe-4norm-ar-fusion-tp-decode-gpu-memory-qa]]

@@ -296,3 +296,4 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/vllm-distributed-gr
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]]
 - [[ml-systems/pt-moe-4norm-fusion-deep-research]]
 - [[ml-systems/pt-moe-decode-kernel-launch-analysis]]
+- [[ml-systems/pt-moe-4norm-ar-fusion-tp-decode-gpu-memory-qa]]

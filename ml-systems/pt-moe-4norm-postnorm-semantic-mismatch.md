@@ -208,3 +208,4 @@ Fusion eliminates 2 intermediate writes. **Kernel launches drop from 6 to 4 per 
 - [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]
 - [[ml-systems/pt-moe-decode-kernel-launch-analysis]]
 - [[ml-systems/pt-moe-gpu-memory-and-fusion-savings]]
+- [[ml-systems/pt-moe-4norm-ar-fusion-tp-decode-gpu-memory-qa]]

@@ -207,3 +207,4 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]]
 - [[ml-systems/pt-moe-4norm-fusion-deep-research]]
 - [[ml-systems/pt-moe-decode-kernel-launch-analysis]]
+- [[ml-systems/pt-moe-4norm-ar-fusion-tp-decode-gpu-memory-qa]]
