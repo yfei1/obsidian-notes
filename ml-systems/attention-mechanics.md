@@ -429,3 +429,4 @@ all_reduce(sum) → [N, 1024] correct output on both GPUs
 - [[ml-systems/gpu-kernel-stack]] — Triton and Flash Attention kernel dispatch underlying the prefill/decode kernels used here
 - [[ml-systems/vllm-torch-compile-integration]] — torch.compile and CUDA graph integration affecting the decode attention path
 - [[ml-systems/kv-cache-kernel-and-addressing]] — concrete kernel implementation showing how prefill and decode phases write to and read from the KV cache
+- [[ml-systems/vllm-torch-compile-decorator]]
