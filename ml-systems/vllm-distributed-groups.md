@@ -216,17 +216,13 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-`GroupCoordinator` wraps two **process groups** (named subsets of ranks that can issue collectives among themselves) per logical group — one NCCL, one Gloo — because vLLM issues collectives at two phases with incompatible hardware requirements.
+`GroupCoordinator` wraps two **process groups** (named subsets of ranks that can issue collectives among themselves) per logical group — one NCCL, one Gloo — because the two phases of vLLM startup have incompatible hardware requirements that a single communicator type cannot satisfy.
 
-**The two-phase problem:** vLLM's startup routine `init_distributed_environment` issues a barrier before `torch.cuda.set_device` has been called. `set_device` creates a **CUDA context** — the GPU driver state required before any GPU kernel can run. NCCL cannot initialize without an active CUDA context because it requires allocating a per-communicator **staging buffer** — a fixed GPU memory region reserved at communicator creation to temporarily hold tensors during collective operations. Without a live CUDA context, that allocation fails. So the startup barrier cannot use NCCL.
-
-Using a single communicator type for both phases forces a bad choice: block the early barrier until a GPU context exists (delaying startup), or pre-allocate a staging buffer for a communicator that only ever runs CPU operations (wasting GPU memory). Neither is acceptable.
-
-**Phase 1 — control-plane (CPU, pre-GPU):** Gloo runs entirely on CPU with no CUDA dependency, so it handles early barriers before any GPU context exists.
+**Phase 1 — control-plane (CPU, pre-GPU):** vLLM's startup routine `init_distributed_environment` issues a barrier before `torch.cuda.set_device` has been called. `set_device` creates a **CUDA context** — the GPU driver state required before any GPU kernel can run. NCCL cannot initialize without an active CUDA context because it requires allocating a per-communicator **staging buffer** — a fixed GPU memory region reserved at communicator creation to temporarily hold tensors during collective operations. Without a live CUDA context, that allocation fails. Gloo runs entirely on CPU with no CUDA dependency, so it handles this early barrier instead.
 
 **Phase 2 — data-plane (GPU, forward pass):** Once GPUs are initialized, NCCL takes over. It issues GPU kernels over NVLink/PCIe, bypassing the CPU entirely. Gloo routes through host memory and TCP/shared-memory transports, stalling on each CPU copy — too slow for the 8 MiB activation tensors all-reduced every forward pass (`[batch=1, seq=512, hidden=8192]` bf16: `1×512×8192×2 = 8,388,608 bytes` across TP=32 ranks).
 
-Each logical group therefore holds one communicator of each type:
+Using a single communicator type for both phases forces a bad choice: block the early barrier until a GPU context exists (delaying startup), or pre-allocate an NCCL staging buffer for a communicator that only ever runs CPU operations (wasting GPU memory). Each logical group therefore holds one of each:
 
 | Field | Backend | Purpose |
 |-------|---------|--------|
@@ -239,7 +235,9 @@ Call `.destroy()` before replacing a coordinator — NCCL holds internal GPU mem
 
 ### Constructor: Why Every Rank Iterates Every Group
 
-`torch.distributed.new_group` is a **collective barrier** — every rank in the entire job must call it before any rank proceeds, even ranks not belonging to the group being created. NCCL's communicator setup requires a globally synchronized handshake: every participant must exchange device topology information (NVLink graph, PCIe topology) and staging buffer addresses before any rank can route collective operations correctly. Skipping the call on even one rank stalls all others indefinitely. The constructor (parallel_state.py:316-395) therefore iterates ALL group rank lists, calling `new_group` twice per group (once for NCCL, once for Gloo), and stores only the group the current rank belongs to. For TP=32 that is 1 group × 2 backends = 2 calls per rank; after the PT-MoE rebuild into 8 tracks × TP=4 it is 8 groups × 2 backends = 16 calls per rank.
+`torch.distributed.new_group` is a **collective barrier** — every rank in the entire job must call it before any rank proceeds, even ranks not belonging to the group being created. NCCL's communicator setup requires a globally synchronized handshake: every participant must exchange device topology information (NVLink graph, PCIe topology) and staging buffer addresses before any rank can route collective operations correctly. Skipping the call on even one rank stalls all others indefinitely.
+
+The constructor (parallel_state.py:316-395) therefore iterates ALL group rank lists, calling `new_group` twice per group (once for NCCL, once for Gloo), and stores only the group the current rank belongs to. For TP=32 that is 1 group × 2 backends = 2 calls per rank; after the PT-MoE rebuild into 8 tracks × TP=4 it is 8 groups × 2 backends = 16 calls per rank.
 
 ```python
 for ranks in group_ranks:
