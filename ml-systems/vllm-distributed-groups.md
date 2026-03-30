@@ -179,6 +179,10 @@ assert heads_per_gpu_actual - heads_per_gpu_config == 7  # 7 heads/layer land in
 # memory overrun per layer per GPU (bf16, seq=512, head_dim=128):
 # 7 heads × 512 tokens × 128 dims × 2 bytes = 917,504 bytes ≈ 0.875 MiB
 assert 7 * 512 * 128 * 2 == 917504
+
+# activation tensor all-reduced every forward pass over TP=32:
+# batch=1, seq=512, hidden=8192, bf16 → 1×512×8192×2 = 8,388,608 bytes = 8 MiB
+assert 1 * 512 * 8192 * 2 == 8_388_608
 ```
 
 ---
