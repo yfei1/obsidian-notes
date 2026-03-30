@@ -299,3 +299,4 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/pt-moe-4norm-fusion-followup-qa]]
 - [[ml-systems/pt-moe-4norm-fusion-deep-research]]
 - [[ml-systems/pt-moe-4norm-tp-fusion-opportunity]]
+- [[ml-systems/vllm-ray-compiled-graph]]

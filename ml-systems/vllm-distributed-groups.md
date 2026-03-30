@@ -333,3 +333,4 @@ Full details, safety table, worked arithmetic, and the Pydantic fix: [[ml-system
 **Upstream** (concepts this note instantiates): [[ml-systems/parallelism-strategies]], [[ml-systems/tensor-parallelism]], [[ml-systems/mixture-of-experts]] (EP group context), [[ml-systems/kv-cache-internals]] (KV head allocation affected by TP divergence).
 
 **Downstream** (notes that build on this note's group layout): [[ml-systems/vllm-process-group-rebuild]], [[ml-systems/pt-moe-vllm-implementation]], [[ml-systems/pt-moe-architecture]], [[ml-systems/vllm-weight-loading]], [[ml-systems/vllm-executor-architecture]].
+- [[ml-systems/vllm-ray-compiled-graph]]

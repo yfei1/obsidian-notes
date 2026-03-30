@@ -137,3 +137,4 @@ See [[ml-systems/gpu-memory-hierarchy]] for the full hardware-level details of p
 - [[ml-systems/transformer-model-internals]] — the transformer layers (linear, MLP, attention) whose kernels are recorded in the graph
 - [[ml-systems/pytorch-module-hooks]] — hooks run during CUDA graph capture but not during replay, because they are Python calls rather than recorded GPU kernel launches
 - [[ml-systems/kv-cache-kernel-and-addressing]] — block tables and slot mappings are the per-step inputs copied into static CUDA graph input buffers before each decode replay
+- [[ml-systems/vllm-ray-compiled-graph]]
