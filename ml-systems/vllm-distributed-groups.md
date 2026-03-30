@@ -214,11 +214,17 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 
 ## GroupCoordinator: What It Holds
 
-`GroupCoordinator` wraps two **process groups** (named subsets of ranks that can issue collectives among themselves) per logical group — one NCCL, one Gloo — because vLLM needs collectives at two distinct phases that have incompatible hardware requirements.
+`GroupCoordinator` wraps two **process groups** (named subsets of ranks that can issue collectives among themselves) per logical group — one NCCL, one Gloo — because vLLM issues collectives at two phases with incompatible hardware requirements.
 
-**Phase 1 — control-plane (CPU, pre-GPU):** `init_distributed_environment` — vLLM's startup routine that establishes process groups before any model code runs — issues a barrier before `torch.cuda.set_device` has been called. `set_device` creates a **CUDA context** — the GPU driver state required before any GPU kernel can run. NCCL cannot initialize without an active CUDA context because NCCL requires a per-communicator **staging buffer** — a fixed GPU memory region reserved at communicator creation to temporarily hold tensors during collective operations — and allocating that buffer requires a live CUDA context. Gloo runs entirely on CPU with no CUDA dependency, so it handles these early barriers without a CUDA context.
+**The two-phase problem:** vLLM's startup routine `init_distributed_environment` issues a barrier before `torch.cuda.set_device` has been called. `set_device` creates a **CUDA context** — the GPU driver state required before any GPU kernel can run. NCCL cannot initialize without an active CUDA context because NCCL requires a per-communicator **staging buffer** — a fixed GPU memory region reserved at communicator creation to temporarily hold tensors during collective operations — and allocating that buffer requires a live CUDA context. So the startup barrier cannot use NCCL.
 
-**Phase 2 — data-plane (GPU, forward pass):** Once GPUs are initialized, NCCL takes over for all data-plane collectives — it issues GPU kernels over NVLink/PCIe, bypassing the CPU entirely. Gloo routes through host memory and TCP/shared-memory transports, stalling on each CPU copy — too slow for the 8 MiB activation tensors all-reduced every forward pass (`[batch=1, seq=512, hidden=8192]` bf16: `1×512×8192×2 = 8,388,608 bytes` across TP=32 ranks). Using a single communicator for both phases forces a bad choice: block the early CPU barrier until a GPU context exists (delaying startup), or allocate a staging buffer for a communicator that only ever runs CPU operations (wasting GPU memory). Neither is acceptable, so each logical group gets one communicator of each type.
+Using a single communicator type for both phases forces a bad choice: block the early barrier until a GPU context exists (delaying startup), or pre-allocate a staging buffer for a communicator that only ever runs CPU operations (wasting GPU memory). Neither is acceptable.
+
+**Phase 1 — control-plane (CPU, pre-GPU):** Gloo runs entirely on CPU with no CUDA dependency, so it handles early barriers before any GPU context exists.
+
+**Phase 2 — data-plane (GPU, forward pass):** Once GPUs are initialized, NCCL takes over. It issues GPU kernels over NVLink/PCIe, bypassing the CPU entirely. Gloo routes through host memory and TCP/shared-memory transports, stalling on each CPU copy — too slow for the 8 MiB activation tensors all-reduced every forward pass (`[batch=1, seq=512, hidden=8192]` bf16: `1×512×8192×2 = 8,388,608 bytes` across TP=32 ranks).
+
+Each logical group therefore holds one communicator of each type:
 
 | Field | Backend | Purpose |
 |-------|---------|--------|
