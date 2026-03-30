@@ -325,3 +325,4 @@ The bubble shrinks to near-zero because the blocking condition — "wait for the
 - [[ml-systems/sequence-and-context-parallelism]] — SP activation sharding and Ring Attention for long-context
 - [[ml-systems/zero-fsdp-memory-optimization]] — ZeRO/FSDP stage-by-stage breakdown and ZeRO vs FSDP comparison
 - [[ml-systems/ray-compiled-graph-in-vllm]] — Concrete PP=2, TP=4 DAG construction showing how CG wires stage-to-stage tensor routing and per-worker SchedulerOutput broadcast
+- [[ml-systems/swiglu-mlp]]

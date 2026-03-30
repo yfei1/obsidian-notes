@@ -144,3 +144,4 @@ This is better than removing the check entirely because eager-mode callers still
 - [[ml-systems/pytorch-module-hooks]] — `module.compile()` vs `@torch.compile` on `forward()`: which path traces hook dispatch and causes graph breaks
 - [[ml-systems/cuda-graph-inference-optimization]] — graph breaks during CUDA graph capture force fallback to eager mode, eliminating the kernel-launch overhead reduction
 - [[ml-systems/pytorch-module-hooks]] — hooks compiled via `module.compile()` are a concrete source of graph breaks; `.item()` inside a hook is the canonical example
+- [[ml-systems/swiglu-mlp]]
