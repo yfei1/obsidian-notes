@@ -327,12 +327,11 @@ Full details, safety table, worked arithmetic, and the Pydantic fix: [[ml-system
 - [[ml-systems/python-import-binding]] — import binding behavior for accessing rebuilt process groups
 - [[ml-systems/vllm-executor-architecture]] — executor layer that initializes these groups
 - [[ml-systems/ray-compiled-graph-in-vllm]] — CG delegates PP tensor routing to vLLM's existing NCCL groups via RayPPCommunicator
-- [[ml-systems/vllm-cg-investigation-findings]]
 - [[ml-systems/validating-parallelism-at-scale]]
 - [[ml-systems/parallel-track-architecture]]
 
 ## Connections
 
-**Upstream** (concepts this note instantiates): [[ml-systems/parallelism-strategies]], [[ml-systems/tensor-parallelism]], [[ml-systems/mixture-of-experts]] (EP group context).
+**Upstream** (concepts this note instantiates): [[ml-systems/parallelism-strategies]], [[ml-systems/tensor-parallelism]], [[ml-systems/mixture-of-experts]] (EP group context), [[ml-systems/kv-cache-internals]] (KV head allocation affected by TP divergence).
 
-**Downstream** (notes that build on this note's group layout): [[ml-systems/vllm-process-group-rebuild]], [[ml-systems/pt-moe-vllm-implementation]], [[ml-systems/vllm-weight-loading]], [[ml-systems/kv-cache-internals]].
+**Downstream** (notes that build on this note's group layout): [[ml-systems/vllm-process-group-rebuild]], [[ml-systems/pt-moe-vllm-implementation]], [[ml-systems/pt-moe-architecture]], [[ml-systems/vllm-weight-loading]], [[ml-systems/vllm-executor-architecture]].
