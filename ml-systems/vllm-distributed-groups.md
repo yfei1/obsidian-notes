@@ -183,6 +183,16 @@ assert 7 * 512 * 128 * 2 == 917504
 # activation tensor all-reduced every forward pass over TP=32:
 # batch=1, seq=512, hidden=8192, bf16 → 1×512×8192×2 = 8,388,608 bytes = 8 MiB
 assert 1 * 512 * 8192 * 2 == 8_388_608
+
+# EP group size = DP × PCP × TP; with DP=2, PCP=1, TP=16, world=32:
+# 2 EP groups of 16: [[0..15], [16..31]]
+ep_dp, ep_pcp, ep_tp = 2, 1, 16
+ep_world = ep_dp * ep_pcp * ep_tp
+assert ep_world == 32
+ep_group_size = ep_dp * ep_pcp * ep_tp // ep_dp  # per-replica span = PCP*TP = 16
+assert ep_group_size == 16
+ep_groups = [list(range(i * ep_group_size, (i + 1) * ep_group_size)) for i in range(ep_dp)]
+assert ep_groups == [list(range(16)), list(range(16, 32))]
 ```
 
 ---
@@ -196,7 +206,7 @@ PP and DP are "above" TP — they group ranks across TP boundaries. DCP, PCP, EP
 | `_TP`  | parallel_state.py:1213 | IS TP | `all_ranks.view(-1, tp_size)` | 1 group: [0..31] |
 | `_DCP` | parallel_state.py:1221 | Subdivides TP | `all_ranks.reshape(-1, dcp_size)` | DCP=1: 32 singleton groups |
 | `_PCP` | parallel_state.py:1230 | Same level as TP, PCP axis | `transpose(3,4).reshape(-1, pcp_size)` | PCP=1: 32 singleton groups |
-| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP (routes tokens across all GPUs holding MoE expert sub-networks) | `transpose(1,2).reshape(-1, dp*pcp*tp)` | EP=32: 1 group [0..31] |
+| `_EP`  | parallel_state.py:1248 | Spans DP×PCP×TP (routes tokens across all GPUs holding MoE expert sub-networks) | `transpose(1,2).reshape(-1, dp*pcp*tp)` | EP=32, DP=1, PCP=1, TP=32: 1 group [0..31]; if DP=2, TP=16: 2 groups [[0..15],[16..31]] — one per DP replica |
 | `_PP`  | parallel_state.py:1233 | Above TP (crosses TP boundaries) | `transpose(2,4).reshape(-1, pp_size)` | PP=1: 32 singleton groups |
 | `_DP`  | parallel_state.py:1240 | Above TP (crosses TP boundaries) | `transpose(1,4).reshape(-1, dp_size)` | DP=1: 32 singleton groups |
 
