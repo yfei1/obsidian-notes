@@ -502,7 +502,7 @@ During token generation (decode), you're often processing **1 token at a time** 
 kernel launch overhead   = 5-10 us                 <- 1000x larger than the actual work
 ```
 
-The GPU spends almost all its time **launching and tearing down kernels**, not doing useful work. Each norm/add is a tiny 4 KB operation that finishes in nanoseconds, but the kernel launch surrounding it costs microseconds. This is why fusion matters most at low batch sizes — you're eliminating overhead, not saving bandwidth.
+The GPU spends almost all its time **launching and tearing down kernels**, not doing useful work. Each norm/add finishes in nanoseconds of actual compute, but the kernel launch surrounding it costs microseconds — so launch overhead, not bandwidth, is the bottleneck at decode batch sizes (see [[ml-systems/pt-moe-decode-kernel-launch-analysis]]). This is why fusion matters most at low batch sizes — you're eliminating overhead, not saving bandwidth.
 
 ### When bandwidth DOES matter
 
