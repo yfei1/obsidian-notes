@@ -33,4 +33,4 @@ Deep research session (2026-03-27) investigating kernel fusion opportunities for
 - [[ml-systems/mixture-of-experts]] — MoE routing and FusedMoE integration
 - [[ml-systems/vllm-model-integration]] — vLLM CustomOp, weight loading, @support_torch_compile
 - [[ml-systems/fused-moe-vllm-implementation]] — FusedMoE as CustomOp reference pattern
-- [[ml-systems/vllm-torch-compile-integration]] — Inductor compilation and custom op interaction
+- [[ml-systems/vllm-torch-compile-decorator]] — Inductor compilation and custom op interaction

@@ -366,7 +366,7 @@ All assertions passed.
 - [[ml-systems/prefix-caching]] — KV cache sharing mechanism
 - [[ml-systems/vllm-distributed-groups]]
 - [[ml-systems/python-import-binding]] — why monkey-patches must use module attribute access for mutable globals
-- [[ml-systems/vllm-torch-compile-integration]] — `@support_torch_compile` decorator: how to enable compilation for your model
+- [[ml-systems/vllm-torch-compile-decorator]] — `@support_torch_compile` decorator: how to enable compilation for your model
 - [[ml-systems/lora-mechanics]]
 - [[ml-systems/lora-vllm-serving]]
 - [[ml-systems/vllm-weight-loading]] — how model classes attach weight_loader callables to nn.Parameter during __init__, enabling TP-agnostic checkpoint loading

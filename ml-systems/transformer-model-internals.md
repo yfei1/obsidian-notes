@@ -316,7 +316,7 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/zero-fsdp-memory-optimization]]
 - [[ml-systems/lora-mechanics]]
 - [[ml-systems/lora-vllm-serving]]
-- [[ml-systems/vllm-torch-compile-integration]]
+- [[ml-systems/vllm-torch-compile-decorator]]
 - [[ml-systems/vllm-weight-loading]] — how `named_parameters()` module-tree walk underpins checkpoint-to-parameter name remapping
 - [[ml-systems/pytorch-module-hooks]] — hooks attach to the `nn.Module` hierarchy described here; `__call__` dispatch chain determines when they fire
 - [[ml-systems/cuda-graph-inference-optimization]] — transformer layer kernels (linear, MLP, attention) are recorded into CUDA graphs during decode to eliminate Python dispatch overhead

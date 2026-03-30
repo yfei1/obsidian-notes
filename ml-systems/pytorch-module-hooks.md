@@ -260,7 +260,7 @@ Full benchmarks, stack traces, and the three-mechanism comparison table: [[ml-sy
 
 ## Related Concepts
 
-See [[ml-systems/vllm-torch-compile-integration]] for how `torch.compile` integrates with a production inference engine, including graph capture, CUDA graph interaction, and compile-time trade-offs.
+See [[ml-systems/vllm-torch-compile-decorator]] for how `torch.compile` integrates with a production inference engine, including graph capture, CUDA graph interaction, and compile-time trade-offs.
 
 - [[ml-systems/torch-compile-graph-breaks]] — Empirical test results: what patterns break `fullgraph=True` vs compile fine
 - [[ml-systems/cuda-graph-inference-optimization]] — CUDA graph capture/replay mechanics and the CPU dispatch overhead hooks bypass during replay

@@ -317,7 +317,7 @@ Models with custom TP topologies (e.g., within-track parallelism) don't need a c
 
 - [[ml-systems/lora-mechanics]] — LoRA concept: low-rank factorization, alpha scaling, adapter format
 - [[ml-systems/vllm-model-integration]] — model registration contract, weight loading
-- [[ml-systems/vllm-torch-compile-integration]] — `@support_torch_compile` and opaque custom ops
+- [[ml-systems/vllm-torch-compile-decorator]] — `@support_torch_compile` and opaque custom ops
 - [[ml-systems/gpu-kernel-stack]] — Triton, custom ops, CUDA graphs
 - [[ml-systems/mixture-of-experts]] — FusedMoE architecture, expert parallelism
 - [[ml-systems/parallelism-strategies]] — TP column/row slicing patterns
