@@ -61,13 +61,13 @@ Engines store static tensors in a class attribute (e.g., `self.graph_vars = dict
 
 ### Why CUDA graphs are decode-only
 
-CUDA graphs require fixed tensor shapes. Decode satisfies this cheaply; prefill does not — because prompt lengths vary per request.
+CUDA graphs require fixed tensor shapes at capture time. Decode satisfies this constraint cheaply; prefill does not — because prompt lengths vary per request, making a single static shape either too small (incorrect) or too large (wasteful).
 
-During decode, every sequence processes exactly 1 token, so the matrix shape into linear/MLP layers is always `[batch_size, 1, hidden_dim]` — fixed regardless of how long each sequence has grown.
+During decode, every active sequence processes exactly 1 new token per step, so the compute matrix shape entering linear/MLP layers is always `[batch_size, 1, hidden_dim]` — fixed regardless of how long each sequence has grown. Two consequences follow:
 - **Compute shapes are predictable**: the `1` dimension never changes, so zero compute is wasted on padding.
-- **Memory padding is cheap**: the `block_table` is padded with `-1` entries. FlashAttention — a memory-efficient attention kernel — accepts explicit per-sequence lengths via a `context_lens` argument and uses those lengths as a read boundary, so padded entries are never accessed.
+- **Memory padding is cheap**: the `block_table` is padded with `-1` entries for unused slots. FlashAttention — a memory-efficient attention kernel — accepts explicit per-sequence lengths via a `context_lens` argument and uses those lengths as a read boundary, so padded entries are never accessed.
 
-During prefill, the compute matrix shape is `[prompt_len, hidden_dim]`, which varies per request. A static graph must be sized for `max_model_len` (e.g., 8192 tokens). A 72-token prompt is padded with 8,120 zero tokens — but `nn.Linear` layers (linear projections: QKV, output) and MLP blocks execute dense matrix multiplication (`X @ W`) with no short-circuit for zero tokens. All 8,192 rows multiply against the full weight matrix. These layers make up ~66% of a transformer's compute, so for a 72-token prompt in a graph sized for 8,192, the GPU wastes ~99% of tensor core cycles on padding across all 32 layers.
+During prefill, the compute matrix shape is `[prompt_len, hidden_dim]`, which varies per request — so a static graph must be sized for `max_model_len` (e.g., 8192 tokens). A 72-token prompt is padded with 8,120 zero tokens. Unlike FlashAttention, `nn.Linear` layers (linear projections: QKV, output) and MLP blocks execute dense matrix multiplication (`X @ W`) with no short-circuit for zero-valued rows — all 8,192 rows multiply against the full weight matrix. Because these layers make up ~66% of a transformer's compute, a 72-token prompt in a graph sized for 8,192 wastes ~99% of tensor core cycles on padding across all 32 layers. The compute cost scales with the graph size, not the actual prompt length.
 
 ---
 
