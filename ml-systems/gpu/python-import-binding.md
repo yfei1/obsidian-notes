@@ -197,14 +197,14 @@ Source: `_vllm_plugin.py:169-175`
 ## Key Trade-offs & Decisions
 
 **When to use module attribute access (`mod.x`):**
-- The variable is mutated after your code's import time
-- Monkey-patches, plugin callbacks, lazy initialization patterns
-- Performance matters (dict lookup vs import machinery)
+- The variable is mutated after your code's import time — because `from import` snapshots the reference once, any later rebind is invisible to your code
+- Monkey-patches, plugin callbacks, lazy initialization patterns — because these patterns by definition execute before the target variable is set
+- Performance matters — because `mod.x` is a single `__dict__` key lookup, while `from import` inside a function re-runs the full import machinery (`sys.modules` lookup + frame construction) on every call
 
 **When `from import` is fine:**
-- The imported name is a class, function, or constant that never changes
-- You import inside a function body and accept the import overhead
-- The binding happens after the mutation (import order guarantees it)
+- The imported name is a class, function, or constant that never changes — because the snapshot taken at import time will always match the live value
+- You import inside a function body and accept the import overhead — because the import re-executes on each call, so the snapshot is always fresh
+- The binding happens after the mutation (import order guarantees it) — because the snapshot is taken after the final value is already in place
 
 **The mutable object workaround:**
 If the variable points to a mutable container (list, dict), `from import` works because
