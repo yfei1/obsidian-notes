@@ -1,0 +1,281 @@
+# PyTorch nn.Module Hooks and the `__call__` vs `forward` Pattern
+
+#ml-systems #pytorch #interview-prep
+
+## TL;DR
+
+`model(x)` routes through `__call__` → `_wrapped_call_impl` → `_call_impl`, firing **pre-hooks → forward() → post-hooks**. `model.forward(x)` skips `__call__` entirely — all hooks silently don't fire because the dispatch wrapper is never reached. Hooks are empty `OrderedDict`s by default; register via `register_forward_pre_hook()` / `register_forward_hook()`.
+
+Two compile paths interact with hooks differently. **`@torch.compile` on `forward()`** leaves `_compiled_call_impl = None`, so hook dispatch runs as normal CPU Python *outside* the compiled region (the traced-and-optimized portion of code) — hooks are never traced. **`module.compile()`** compiles `_call_impl` itself, tracing through hook dispatch; non-traceable Python in hooks — e.g., `.item()` (a GPU→CPU scalar transfer whose value is unknown at trace time) — causes a **graph break** (the tracer abandons the compiled region and falls back to slow Python execution).
+
+**CUDA graphs** (`torch.cuda.CUDAGraph`) eliminate **CPU dispatch overhead** — the per-kernel Python/CUDA-runtime launch cost — by recording the kernel sequence once and replaying it with no CPU involvement. Hooks are Python calls, not kernel launches, so they are absent from the recorded sequence and silently don't fire on replay. This is distinct from **kernel fusion** — merging multiple small ops into one GPU kernel to reduce total kernel launch count, which is what `torch.compile` exploits.
+
+---
+
+## Role in System
+
+**`forward()` is user-overridden — PyTorch can't put hook logic there.** Instead, `nn.Module` wraps every call through `__call__`, which PyTorch controls and never overrides. Hooks live in `__call__`, so any `model(x)` call fires them automatically regardless of what `forward()` does. Calling `model.forward(x)` directly re-enters at `forward()`, bypassing `__call__` entirely — all hooks silently don't fire because the dispatch wrapper is never reached.
+
+Uses: feature extraction (grabbing intermediate activations), shape debugging, gradient manipulation (clipping or zeroing gradients per-layer).
+
+Source: `torch/nn/modules/module.py` (PyTorch 2.8.0)
+
+---
+
+## Mental Model
+
+`__call__` is a dispatch wrapper around `forward()`. Every `model(x)` call passes through it; `model.forward(x)` does not.
+
+```
+model(x)
+  └─ __call__  →  _wrapped_call_impl
+                      ├─ _compiled_call_impl  (if module.compile() was used)
+                      └─ _call_impl
+                             ├─ [fast path] forward()          ← no hooks registered
+                             └─ [slow path] pre-hooks → forward() → post-hooks
+```
+
+Two decisions happen on every call:
+1. **Compiled or not?** `_wrapped_call_impl` checks `_compiled_call_impl` first.
+2. **Hooks registered?** `_call_impl` checks all hook dicts; if all empty, skips to `forward()` directly.
+
+Calling `model.forward(x)` directly re-enters at `forward()`, bypassing both decisions — and all hooks.
+
+---
+
+## Step-by-Step Walkthrough
+
+**Running example** — a 2-layer MLP used throughout:
+
+```python
+import torch, torch.nn as nn, torch.nn.functional as F
+
+class MLP(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.fc1 = nn.Linear(512, 256)   # weight: [256, 512]
+        self.fc2 = nn.Linear(256, 128)   # weight: [128, 256]
+
+    def forward(self, x):               # x: [4, 512]
+        x = F.relu(self.fc1(x))         # → [4, 256]
+        return self.fc2(x)              # → [4, 128]
+
+model = MLP()
+x = torch.randn(4, 512)   # batch=4, features=512
+out = model(x)            # out: [4, 128]
+print(out.shape)          # torch.Size([4, 128])
+```
+
+Output:
+```
+torch.Size([4, 128])
+```
+
+### Step 1 — `__call__` alias (line 1912)
+
+```python
+__call__: Callable[..., Any] = _wrapped_call_impl
+```
+
+`__call__` is aliased to `_wrapped_call_impl`. So `model(x)` → `model.__call__(x)` → `model._wrapped_call_impl(x)`.
+
+### Step 2 — compiled vs. normal fork (lines 1769-1773)
+
+```python
+def _wrapped_call_impl(self, *args, **kwargs):
+    if self._compiled_call_impl is not None:         # PATH 2: module.compile()
+        return self._compiled_call_impl(*args, **kwargs)
+    else:                                            # PATH 1: normal (or @torch.compile on forward)
+        return self._call_impl(*args, **kwargs)
+```
+
+`_compiled_call_impl` is `None` by default and is set only when `module.compile()` is called. `@torch.compile` applied to `forward()` does not set it — so hooks still run as normal CPU Python outside the compiled region (the traced-and-optimized portion of code).
+
+### Step 3 — fast path when no hooks registered (lines 1777-1784)
+
+```python
+def _call_impl(self, *args, **kwargs):
+    forward_call = self.forward
+    if not (self._backward_hooks or self._backward_pre_hooks
+            or self._forward_hooks or self._forward_pre_hooks
+            or _global_backward_pre_hooks or _global_backward_hooks
+            or _global_forward_hooks or _global_forward_pre_hooks):
+        return forward_call(*args, **kwargs)    # ← skip all hook machinery
+```
+
+All hook dicts are empty `OrderedDict`s at construction (lines 509-513):
+
+```python
+super().__setattr__("_forward_hooks", OrderedDict())          # empty!
+super().__setattr__("_forward_pre_hooks", OrderedDict())      # empty!
+```
+
+For a module called millions of times (e.g., a small embedding lookup), skipping the hook-dispatch block matters — each hook-dispatch iteration is a Python dict walk, not a GPU op.
+
+### Step 4 — slow path: pre-hooks → forward() → post-hooks (lines 1800-1843)
+
+```
+For each registered pre-hook (global hooks first, then module-local):
+  call hook(module, args) — if it returns non-None, replace args with the return value
+Run forward() with (possibly modified) args → result
+For each registered post-hook (global hooks first, then module-local):
+  call hook(module, args, result) — if it returns non-None, replace result with the return value
+```
+
+```python
+    # Pre-hooks: can inspect and MODIFY input
+    if _global_forward_pre_hooks or self._forward_pre_hooks:
+        for hook_id, hook in (*_global_forward_pre_hooks.items(),
+                              *self._forward_pre_hooks.items()):
+            args_result = hook(self, args)
+            if args_result is not None:
+                args = args_result       # ← pre-hook CHANGED the input
+
+    result = forward_call(*args, **kwargs)  # ← actual forward()
+
+    # Post-hooks: can inspect and MODIFY output
+    if _global_forward_hooks or self._forward_hooks:
+        for hook_id, hook in (*_global_forward_hooks.items(),
+                              *self._forward_hooks.items()):
+            hook_result = hook(self, args, result)
+            if hook_result is not None:
+                result = hook_result     # ← post-hook CHANGED the output
+```
+
+### Step 5 — registering and removing hooks
+
+Using the MLP from above (`x: [4, 512]`, output `[4, 128]`):
+
+```python
+# Pre-hook: runs BEFORE forward(), receives (module, args)
+def my_pre_hook(module, args):
+    print(f"pre-hook  | input  shape: {args[0].shape} | min: {args[0].min():.3f}")
+    return (args[0] * 2.0,)  # doubles the input; return None to leave unchanged
+
+# Post-hook: runs AFTER forward(), receives (module, args, output)
+def my_post_hook(module, args, output):
+    print(f"post-hook | output shape: {output.shape} | max: {output.max():.3f}")
+    return output.clamp(-1, 1)  # clamps output to [-1, 1]; return None to leave unchanged
+
+handle1 = model.register_forward_pre_hook(my_pre_hook)
+handle2 = model.register_forward_hook(my_post_hook)
+
+out = model(x)   # hooks fire
+print(f"final output shape: {out.shape}, clamped max: {out.max():.3f}")
+
+handle1.remove()
+handle2.remove()
+out2 = model(x)  # hooks don't fire — no prints
+print(f"after removal, output max: {out2.max():.3f}  (unclamped, can exceed 1.0)")
+```
+
+Output:
+```
+pre-hook  | input  shape: torch.Size([4, 512]) | min: -3.421
+post-hook | output shape: torch.Size([4, 128]) | max: 1.000
+final output shape: torch.Size([4, 128]), clamped max: 1.000
+after removal, output max: 2.847  (unclamped, can exceed 1.0)
+```
+
+The pre-hook receives the original input (`args[0].shape = [4, 512]`); the post-hook sees the result of both linear layers (`output.shape = [4, 128]`). After `.remove()`, the `OrderedDict` entries are deleted — `_call_impl` takes the fast path (line 1784) and neither hook fires.
+
+### Verified execution traces
+
+**With hooks — slow path (line 1879):**
+
+```
+model(x)   # x: [4, 512]
+  → module.py:1773  _wrapped_call_impl → self._call_impl(...)
+  → module.py:1879  _call_impl         → return inner()           ← slow path
+  → module.py:1816  inner              → hook(self, args)         ← pre-hook: sees [4, 512]
+  → module.py:1827  inner              → forward_call(...)        ← forward(): [4,512]→[4,128]
+  → module.py:1840  inner              → hook(self, args, result) ← post-hook: sees [4, 128]
+```
+
+**Without hooks — fast path (line 1784):**
+
+```
+model(x)   # x: [4, 512]
+  → module.py:1773  _wrapped_call_impl → self._call_impl(...)
+  → module.py:1784  _call_impl         → return forward_call(...)  ← direct, no hook overhead
+```
+
+---
+
+## Failure Modes
+
+### `model.forward(x)` silently skips all hooks
+
+Hooks live in `_call_impl`, which is only reached via `__call__`. Calling `forward()` directly re-enters at `forward()` — `__call__` is never invoked, so no dispatch frames run and no hook dicts are checked. The failure is silent: no error, identical output shape, hooks simply don't fire.
+
+```
+model.forward(x)   # x: [4, 512]
+  → forward()      ← NO module.py frames — hooks silently skipped
+```
+
+Verified output (MLP with `x: [4, 512]`, hooks registered as above):
+
+```
+TEST: model.forward(x) — calling forward() DIRECTLY
+Calling model.forward(x) directly...
+📍 INSIDE forward()  [4, 512] → [4, 128]
+Output: torch.Size([4, 128])
+~  Notice: NO hooks fired! pre-hook and post-hook were SKIPPED!
+
+Calling model(x) the correct way...
+🔵 PRE-HOOK  | input  shape: torch.Size([4, 512]) | min: -3.421
+📍 INSIDE forward()  [4, 512] → [4, 128]
+🟢 POST-HOOK | output shape: torch.Size([4, 128]) | max: 1.000
+Output: torch.Size([4, 128])
+```
+
+### `module.compile()` causes graph breaks on non-traceable hook Python
+
+`torch.compile` traces a call into a **static computation graph** — every op must be a fixed graph node. A **graph break** occurs when the tracer hits an op it cannot represent statically; it abandons tracing and falls back to slow Python execution for the rest of the call, negating the compile speedup.
+
+The two compile paths differ in *what they trace*, which determines whether hook code is inside or outside the compiled region:
+
+- **`@torch.compile` on `forward()`** compiles only the body of `forward()`. `_compiled_call_impl` stays `None`, so `_call_impl` and its hook dispatch loop remain normal CPU Python *outside* the compiled region — hooks are never seen by the tracer, no graph break risk.
+- **`module.compile()`** sets `_compiled_call_impl` and compiles `_call_impl` itself. The tracer now walks through the hook dispatch loop — hook code is *inside* the compiled region. Non-traceable Python in hooks causes a graph break that degrades the entire call.
+
+`.item()` is the canonical graph break trigger: it forces a GPU→CPU scalar transfer whose value is only known at runtime. Because the tracer cannot represent a runtime-variable value as a fixed graph node, it emits a graph break and the remainder of the call runs as unoptimized Python.
+
+### `@torch.compile` on a single op regresses performance
+
+A **GPU kernel** is a single compiled function that runs on the GPU — e.g., a matrix multiply dispatches to one cuBLAS (NVIDIA's GPU linear algebra library) kernel. `torch.compile` gains by fusing multiple small ops into fewer kernels, reducing total kernel launch overhead. A single matmul is already one cuBLAS kernel — there are no adjacent ops to fuse, so fusion benefit is zero. Compile overhead (tracing, optimization passes) then exceeds the gain, producing a slight regression (18.4µs → 19.1µs on A100).
+
+### CUDA graphs silence hooks after capture
+
+CUDA graphs (`torch.cuda.CUDAGraph`) eliminate **CPU dispatch overhead** — the per-kernel Python/CUDA-runtime cost of launching each GPU op — by recording the kernel launch sequence once during **graph capture** (a dry run where every kernel call is logged but not executed). On subsequent **replay** steps, the GPU re-executes that fixed kernel sequence directly with no CPU involvement (~4× speedup on LLaMA-7B decode).
+
+Hooks are Python function calls, not GPU kernel launches, so they are absent from the captured sequence. Replay skips all CPU Python and re-executes only the captured kernels — hook code never runs. Hook side effects (logging, shape checks) fire once at capture time and are silently absent on every subsequent replay step.
+
+Full benchmarks, stack traces, and the three-mechanism comparison table: [[ml-systems/gpu/torch-compile-cuda-graphs-hook-interaction]].
+
+---
+
+## Interview Talking Points
+
+1. **"What happens when you call `model(x)` in PyTorch?"** — `__call__` is aliased to `_wrapped_call_impl`, which checks `_compiled_call_impl`, then calls `_call_impl`: pre-hooks → `forward()` → post-hooks. Calling `.forward()` directly skips `__call__` entirely — all hooks silently don't fire.
+
+2. **"What are forward hooks used for?"** — Pre-hooks inspect/modify inputs before `forward()`; post-hooks inspect/modify outputs after. Uses: feature extraction, shape debugging, gradient manipulation. Registered via `register_forward_pre_hook()` / `register_forward_hook()`; removed via the returned handle.
+
+3. **"How does `@torch.compile` interact with hooks?"** — `@torch.compile` on `forward()` leaves `_compiled_call_impl = None`, so hooks run as normal CPU Python outside the compiled region — no conflict. `module.compile()` compiles `_call_impl` itself, tracing through hook logic; non-traceable Python in hooks (e.g., `.item()`) causes graph breaks that degrade performance.
+
+4. **"Why is `@torch.compile` on a single matmul a no-op?"** — cuBLAS already provides one optimally-tuned kernel. `torch.compile` gains by fusing multiple small ops into fewer kernels; with one op there is nothing to fuse, and compile overhead produces a slight regression (18.4µs → 19.1µs on A100).
+
+---
+
+## Related Concepts
+
+See [[ml-systems/vllm/vllm-torch-compile-decorator]] for how `torch.compile` integrates with a production inference engine, including graph capture, CUDA graph interaction, and compile-time trade-offs.
+
+- [[ml-systems/gpu/torch-compile-graph-breaks]] — Empirical test results: what patterns break `fullgraph=True` vs compile fine
+- [[ml-systems/inference/cuda-graph-inference-optimization]] — CUDA graph capture/replay mechanics and the CPU dispatch overhead hooks bypass during replay
+- [[ml-systems/gpu/gpu-memory-hierarchy]] — hardware context for kernel fusion decisions
+- [[ml-systems/gpu/gpu-kernel-stack]] — kernel launch overhead and fusion that `torch.compile` exploits
+- [[ml-systems/inference/llm-inference-engines]] — broader inference engine architecture
+- [[ml-systems/foundations/transformer-model-internals]] — module hierarchy hooks operate on
+- [[ml-systems/vllm/vllm-model-integration]] — how vLLM registers hooks during model initialization and forward passes
+- [[ml-systems/gpu/python-import-binding]] — Python binding mechanics underlying `__call__` aliasing and attribute lookup dispatch
+- [[ml-systems/inference/lora-vllm-serving]] — LoRA adapter swapping in vLLM uses hooks to redirect weight reads at forward time

@@ -1,0 +1,114 @@
+commit	note	dimension	before	after	status	description
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: Clarity: 4->3, Knowledge Density: 5->4, Interview Readiness: 5->4, Freshness: 5->4
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: Knowledge Density: 5->4
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	1	failed	Claude CLI returned no usable output
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: Knowledge Density: 5->4, Motivation: 5->4, Freshness: 5->4
+none	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	4	discarded	regressions: Clarity: 4->3, Knowledge Density: 5->4, Progressive Disclosure: 5->4, Completeness: 4->3, Freshness: 5->4
+2c9642a	ml-systems/gpu-memory-hierarchy.md	Code Quality	1	7	kept	autoresearch: improve ml-systems/gpu-memory-hierarchy.md on Code Quality (1->7/10)
+ff0f321	distributed-systems/chandy-lamport.md	Concrete Examples	2	7	kept	autoresearch: improve distributed-systems/chandy-lamport.md on Concrete Examples (2->7/10)
+489b170	ml-systems/pt-moe-vllm-implementation.md	Interview Readiness	2	9	kept	autoresearch: improve ml-systems/pt-moe-vllm-implementation.md on Interview Readiness (2->9/10)
+2e2c92f	ml-systems/mixture-of-experts.md	Uniqueness	2	5	kept	autoresearch: improve ml-systems/mixture-of-experts.md on Uniqueness (2->5/10)
+4c58041	ml-systems/parallelism-strategies.md	Interview Readiness	2	3	kept	autoresearch: improve ml-systems/parallelism-strategies.md on Interview Readiness (2->3/10)
+none	data-processing/lance-vs-parquet.md	Code Quality	3	3	failed	Edit generation returned no usable output
+none	data-processing/lance-vs-parquet.md	Code Quality	3	3	discarded	no improvement (3->3); regressions: Motivation: 7->4
+none	ml-systems/prefix-caching.md	Interview Readiness	2	3	discarded	regressions: Motivation: 6->2
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	2	2	failed	Edit generation returned no usable output
+9da6532	ml-systems/pt-moe-vllm-implementation.md	Interview Readiness	2	4	kept	autoresearch: improve ml-systems/pt-moe-vllm-implementation.md on Interview Readiness (2->4/10)
+none	data-processing/lance-vs-parquet.md	Code Quality	3	3	discarded	no improvement (3->3)
+263fa6b	ml-systems/rotary-position-embedding.md	Interview Readiness	2	3	kept	autoresearch: improve ml-systems/rotary-position-embedding.md on Interview Readiness (2->3/10)
+none	data-processing/morsel-driven-parallelism.md	Code Quality	3	3	discarded	no improvement (3->3); regressions: Motivation: 8->5
+none	data-processing/morsel-driven-parallelism.md	Code Quality	3	3	discarded	no improvement (3->3)
+none	distributed-systems/chandy-lamport.md	Code Quality	3	3	discarded	no improvement (3->3)
+none	distributed-systems/chandy-lamport.md	Code Quality	3	3	discarded	no improvement (3->3)
+none	data-processing/lance-vs-parquet.md	Interview Readiness	1	8	discarded	regressions: total regression 5 > 4
+none	data-processing/lance-vs-parquet.md	Interview Readiness	1	8	discarded	regressions: total regression 5 > 4
+b13c554	data-processing/morsel-driven-parallelism.md	Interview Readiness	1	9	kept	autoresearch: improve data-processing/morsel-driven-parallelism.md on Interview Readiness (1->9/10)
+none	distributed-systems/chandy-lamport.md	Interview Readiness	1	9	discarded	regressions: total regression 6 > 4
+none	distributed-systems/chandy-lamport.md	Interview Readiness	1	9	discarded	regressions: Conciseness: 8->5, total regression 8 > 4
+none	ml-systems/vllm-weight-loading.md	Interview Readiness	1	9	discarded	regressions: total regression 8 > 4
+none	ml-systems/vllm-weight-loading.md	Interview Readiness	0	8	discarded	regressions: Progressive Disclosure: 8->5, total regression 10 > 4
+none	ml-systems/kv-cache-internals.md	Cross-Linking	3	3	failed	Edit generation returned no usable output
+none	ml-systems/kv-cache-internals.md	Cross-Linking	3	4	discarded	regressions: total regression 7 > 4
+none	ml-systems/vllm-distributed-groups.md	Motivation	3	8	discarded	regressions: total regression 5 > 4
+6b9c866	data-processing/lance-vs-parquet.md	Interview Readiness	1	7	kept	autoresearch: improve data-processing/lance-vs-parquet.md on Interview Readiness (1->7/10)
+a30abfc	distributed-systems/chandy-lamport.md	Interview Readiness	1	7	kept	autoresearch: improve distributed-systems/chandy-lamport.md on Interview Readiness (1->7/10)
+none	ml-systems/validating-parallelism-at-scale.md	Interview Readiness	1	1	discarded	no improvement (1->1); regressions: Conciseness: 8->5, total regression 6 > 4
+9e5ce23	ml-systems/validating-parallelism-at-scale.md	Interview Readiness	1	7	kept	autoresearch: improve ml-systems/validating-parallelism-at-scale.md on Interview Readiness (1->7/10)
+none	ml-systems/vllm-weight-loading.md	Interview Readiness	1	1	discarded	no improvement (1->1)
+none	ml-systems/kv-cache-internals.md	Cross-Linking	3	3	discarded	no improvement (3->3)
+none	data-processing/lance-vs-parquet.md	Code Quality	4	4	discarded	no improvement (4->4)
+none	ml-systems/vllm-weight-loading.md	Interview Readiness	1	1	discarded	no improvement (1->1)
+none	ml-systems/kv-cache-internals.md	Cross-Linking	3	3	discarded	no improvement (3->3)
+none	data-processing/lance-vs-parquet.md	Code Quality	4	4	discarded	no improvement (4->4)
+90132f0	ml-systems/vllm-weight-loading.md	Interview Readiness	2	9	kept	autoresearch: improve ml-systems/vllm-weight-loading.md on Interview Readiness (2->9/10)
+none	ml-systems/kv-cache-internals.md	Cross-Linking	3	3	discarded	no improvement (3->3)
+none	data-processing/lance-vs-parquet.md	Code Quality	4	4	discarded	no improvement (4->4)
+none	data-processing/morsel-driven-parallelism.md	Code Quality	4	4	discarded	no improvement (4->4)
+none	ml-systems/kv-cache-internals.md	Cross-Linking	3	3	discarded	no improvement (3->3)
+none	data-processing/lance-vs-parquet.md	Code Quality	4	4	discarded	no improvement (4->4)
+none	data-processing/morsel-driven-parallelism.md	Code Quality	4	4	discarded	no improvement (4->4)
+none	ml-systems/vllm-weight-loading.md	Conciseness	4	4	failed	Edits could not be applied
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	failed	Edits could not be applied
+none	ml-systems/parallelism-strategies.md	Interview Readiness	6	6	failed	Edits could not be applied
+none	ml-systems/vllm-weight-loading.md	Conciseness	4	4	failed	Edits could not be applied
+none	ml-systems/parallelism-strategies.md	Interview Readiness	6	6	failed	Edits could not be applied
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	failed	Edits could not be applied
+none	ml-systems/parallelism-strategies.md	Conciseness	5	5	failed	Edits could not be applied
+none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+39faed4	ml-systems/vllm-model-integration.md	Interview Readiness	7	8	kept	autoresearch: improve ml-systems/vllm-model-integration.md on Interview Readiness (7->8/10, retry)
+none	ml-systems/parallelism-strategies.md	Interview Readiness	6	6	failed	Edits could not be applied
+none	ml-systems/vllm-weight-loading.md	Conciseness	4	4	failed	Edits could not be applied
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/parallelism-strategies.md	Interview Readiness	6	6	failed	Edits could not be applied
+d3c19ed	ml-systems/transformer-model-internals.md	Interview Readiness	4	6	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Interview Readiness (4->6/10)
+8b3f91e	ml-systems/vllm-weight-loading.md	Conciseness	4	5	kept	autoresearch: improve ml-systems/vllm-weight-loading.md on Conciseness (4->5/10)
+none	ml-systems/parallelism-strategies.md	Conciseness	4	4	failed	Edits could not be applied
+none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	discarded	retry: no improvement (6->6)
+f0c7a08	ml-systems/transformer-model-internals.md	Interview Readiness	6	7	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Interview Readiness (6->7/10)
+none	ml-systems/parallelism-strategies.md	Conciseness	5	5	failed	Edits could not be applied
+none	ml-systems/vllm-weight-loading.md	Interview Readiness	7	7	failed	Edits could not be applied
+878169b	ml-systems/attention-mechanics.md	Interview Readiness	4	6	kept	autoresearch: improve ml-systems/attention-mechanics.md on Interview Readiness (4->6/10)
+8500e59	ml-systems/vllm-weight-loading.md	Conciseness	5	6	kept	autoresearch: improve ml-systems/vllm-weight-loading.md on Conciseness (5->6/10)
+none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	retry: no improvement (6->6)
+none	ml-systems/vllm-weight-loading.md	Interview Readiness	7	7	failed	Edit generation returned no usable output
+none	ml-systems/attention-mechanics.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+82c8f1a	ml-systems/transformer-model-internals.md	Interview Readiness	3	6	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Interview Readiness (3->6/10)
+c15350d	ml-systems/validating-parallelism-at-scale.md	Interview Readiness	7	8	kept	autoresearch: improve ml-systems/validating-parallelism-at-scale.md on Interview Readiness (7->8/10)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+0338a79	ml-systems/attention-mechanics.md	Conciseness	5	6	kept	autoresearch: improve ml-systems/attention-mechanics.md on Conciseness (5->6/10)
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	7	7	discarded	retry: no improvement (7->7)
+none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	retry: no improvement (7->7)
+469d057	ml-systems/transformer-model-internals.md	Interview Readiness	3	5	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Interview Readiness (3->5/10)
+7ebe12e	ml-systems/vllm-distributed-groups.md	Interview Readiness	7	8	kept	autoresearch: improve ml-systems/vllm-distributed-groups.md on Interview Readiness (7->8/10)
+none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+none	ml-systems/vllm-model-integration.md	Interview Readiness	7	7	discarded	retry: no improvement (7->7)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	no improvement (6->6)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	6	6	discarded	retry: no improvement (6->6)
+none	ml-systems/transformer-model-internals.md	Interview Readiness	4	4	failed	Edits could not be applied
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	7	7	discarded	no improvement (7->7)
+none	ml-systems/rotary-position-embedding.md	Interview Readiness	7	7	discarded	retry: no improvement (7->7)
+none	ml-systems/vllm-weight-loading.md	Conciseness	6	6	discarded	no improvement (6->6)
+none	ml-systems/vllm-weight-loading.md	Conciseness	6	5	discarded	retry: no improvement (6->5)
+none	ml-systems/attention-mechanics.md	Uniqueness	2	2	failed	Edits could not be applied
+none	ml-systems/parallel-track-architecture.md	Uniqueness	2	2	failed	Edits could not be applied
+ab48dd2	ml-systems/norms-and-regularization.md	Concrete Examples	4	7	kept	autoresearch: improve ml-systems/norms-and-regularization.md on Concrete Examples (4->7/10)
+none	ml-systems/attention-mechanics.md	Uniqueness	2	2	failed	Edits could not be applied
+none	ml-systems/parallel-track-architecture.md	Uniqueness	2	2	failed	Edits could not be applied
+a943b7b	data-processing/lance-vs-parquet.md	Concrete Examples	4	7	kept	autoresearch: improve data-processing/lance-vs-parquet.md on Concrete Examples (4->7/10)
+none	data-processing/checkpointing.md	Concrete Examples	4	4	failed	Edits could not be applied
+none	ml-systems/vllm-weight-loading.md	Uniqueness	5	5	discarded	no improvement (5->5)
+none	ml-systems/vllm-weight-loading.md	Uniqueness	5	5	discarded	retry: no improvement (5->5)
+5b71806	data-processing/morsel-driven-parallelism.md	Concrete Examples	4	8	kept	autoresearch: improve data-processing/morsel-driven-parallelism.md on Concrete Examples (4->8/10)
+none	ml-systems/pytorch-module-hooks.md	Conciseness	4	4	failed	Edit generation returned no usable output
+none	ml-systems/vllm-weight-loading.md	Clarity	6	6	discarded	no improvement (6->6)
+none	ml-systems/vllm-weight-loading.md	Clarity	6	6	discarded	retry: no improvement (6->6)
+5bc0cb3	ml-systems/transformer-model-internals.md	Conciseness	5	6	kept	autoresearch: improve ml-systems/transformer-model-internals.md on Conciseness (5->6/10)
+none	ml-systems/pt-moe-vllm-implementation.md	Uniqueness	5	5	failed	Edits could not be applied
+none	ml-systems/vllm-weight-loading.md	Clarity	6	6	failed	Edit generation returned no usable output
+none	ml-systems/pytorch-module-hooks.md	Conciseness	4	4	failed	Edits could not be applied

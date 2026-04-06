@@ -1,0 +1,328 @@
+generation,target,strategy,outcome,rc,advantage,veto_reason
+1,ml-systems/vllm-distributed-groups.md,concretize,vetoed,RC3,1.1531133203941102,"Net-zero violation: note is 325 lines (>300), edit would grow it to 369 lines (tolerance: +9)"
+1,ml-systems/vllm-distributed-groups.md,densify,identity_won,RC4,-0.5241424183609592,
+1,ml-systems/vllm-distributed-groups.md,motivate,identity_won,RC4,0.7337993857053429,
+2,ml-systems/pytorch-module-hooks.md,restructure,identity_won,RC4,0.5384615384615384,
+2,ml-systems/pytorch-module-hooks.md,scope_tighten,identity_won,RC4,-1.3076923076923077,
+3,ml-systems/vllm-weight-loading.md,simplify_code,invalid,RC1,0.0,no output
+3,ml-systems/vllm-weight-loading.md,consolidate,invalid,RC1,0.0,retry failed: Edit 0 on ml-systems/pt-moe-vllm-implementation.md: search text matches 2 locations (must be unique)
+3,ml-systems/vllm-weight-loading.md,dedup,identity_won,RC4,-1.0,
+4,ml-systems/prefix-caching.md,rewrite,vetoed,RC3,1.182165609358651,Line limit exceeded: 518 > 450
+4,ml-systems/prefix-caching.md,systematize,identity_won,RC4,-0.5516772843673704,
+4,ml-systems/prefix-caching.md,clarify,identity_won,RC4,0.7092993656151906,
+5,ml-systems/vllm-cg-investigation-findings.md,concretize,invalid,RC1,0.0,no output
+5,ml-systems/vllm-cg-investigation-findings.md,densify,invalid,RC1,0.0,retry failed (no output after: Edit 11 on ml-systems/vllm-cg-investigation-findings.md: search text not found. First 80 chars: '## Q11: NCCL vs SHM Channel Type for PP\n\n| Channel Type | PP Tensor Path | Perfo')
+6,ml-systems/kv-cache-internals.md,restructure,invalid,RC1,0.0,no output
+6,ml-systems/kv-cache-internals.md,simplify_code,identity_won,RC4,0.3922322702763681,
+6,ml-systems/kv-cache-internals.md,scope_tighten,identity_won,RC4,-1.3728129459672884,
+7,ml-systems/parallelism-strategies.md,dedup,identity_won,RC4,0.5896096038723766,
+7,ml-systems/parallelism-strategies.md,consolidate,identity_won,RC4,-1.3757557423688787,
+8,ml-systems/fused-moe-vllm-implementation.md,systematize,identity_won,RC4,0.6546536707079771,
+8,ml-systems/fused-moe-vllm-implementation.md,rewrite,identity_won,RC4,-1.5275252316519465,
+9,distributed-systems/chandy-lamport.md,densify,identity_won,RC4,-1.310556084991557,
+9,distributed-systems/chandy-lamport.md,motivate,identity_won,RC4,-0.26211121699831136,
+10,ml-systems/pt-moe-architecture.md,concretize,vetoed,RC3,1.0945409092309881,"Net-zero violation: note is 303 lines (>300), edit would grow it to 362 lines (tolerance: +9)"
+10,ml-systems/pt-moe-architecture.md,clarify,identity_won,RC4,0.8955334711889903,
+10,ml-systems/pt-moe-architecture.md,densify,identity_won,RC4,-0.8955334711889903,
+11,data-processing/morsel-driven-parallelism.md,simplify_code,invalid,RC1,0.0,retry failed (no output after: Edit 0 on data-processing/morsel-driven-parallelism.md: search and replace are identical (no-op))
+11,data-processing/morsel-driven-parallelism.md,restructure,vetoed,RC2,1.2247448713915892,"Missing required sections: need either [## TL;DR + ## See Also] or [## Core Intuition + ## Connections] or [## Role in System + ## Related Concepts]; Bullet/list loss: items dropped from 7 to 3 (>30% loss); Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **Morsel size trade-off** (DuckDB default = **122,880 rows** (~120K). Too small → dispa...); **Work stealing vs. morsel leasing** (Morsel-driven is *pull-based* — idle thread asks a central d...); **Pipeline boundaries are synchronization barriers** (A pipeline breaker (hash build, sort, aggregate) forces all ...); **DuckDB in practice** (DuckDB splits each table scan into morsels against a global ...); **Daft in practice** (Each morsel is a Ray task (Ray = Python distributed task fra...); **vs. Spark** (Spark assigns one task per partition *statically* at job sub...)"
+11,data-processing/morsel-driven-parallelism.md,scope_tighten,identity_won,RC4,-1.2247448713915892,
+12,ml-systems/vllm-distributed-groups.md,systematize,identity_won,RC4,0.5980503604017327,
+12,ml-systems/vllm-distributed-groups.md,rewrite,identity_won,RC4,-1.2815364865751413,
+13,ml-systems/pytorch-module-hooks.md,consolidate,invalid,RC1,0.0,"retry failed: Edit 0 on ml-systems/vllm-torch-compile-integration.md: search text not found. First 80 chars: '2. **""Why does the decorator go on the inner model, not the outer ForCausalLM?""*'"
+13,ml-systems/pytorch-module-hooks.md,motivate,identity_won,RC4,-0.4629100498862757,
+14,ml-systems/vllm-weight-loading.md,clarify,identity_won,RC4,0.0873704056661038,
+14,ml-systems/vllm-weight-loading.md,densify,identity_won,RC4,-1.310556084991557,
+15,ml-systems/prefix-caching.md,motivate,identity_won,RC4,-0.2773500981126146,
+15,ml-systems/prefix-caching.md,concretize,identity_won,RC4,-1.386750490563073,
+16,ml-systems/vllm-cg-investigation-findings.md,restructure,invalid,RC1,0.0,retry failed: Edit 0 on ml-systems/vllm-cg-investigation-findings.md: search text not found. First 80 chars: '## Core Intuition\n\n**The problem CG was meant to solve**: every decode step with'
+16,ml-systems/vllm-cg-investigation-findings.md,scope_tighten,identity_won,RC4,-1.2247448713915892,
+17,ml-systems/prefix-caching-hash-table-leak.md,clarify,vetoed,RC2,1.3757557423688787,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **~16 MB** (negligible against the 80 GB GPU, but a real leak on long-ru...)"
+17,ml-systems/prefix-caching-hash-table-leak.md,simplify_code,identity_won,RC4,-0.3275608910402092,
+17,ml-systems/prefix-caching-hash-table-leak.md,dedup,identity_won,RC4,-1.3757557423688787,
+18,ml-systems/kv-cache-internals.md,clarify,identity_won,RC4,0.8744746321952062,
+18,ml-systems/kv-cache-internals.md,rewrite,identity_won,RC4,-1.4126128673922562,
+19,ml-systems/fused-moe-vllm-implementation.md,consolidate,invalid,RC1,0.0,retry failed: Cannot edit_file on deleted file: ml-systems/mixture-of-experts
+19,ml-systems/fused-moe-vllm-implementation.md,dedup,identity_won,RC4,-1.2247448713915892,
+20,ml-systems/vllm-torch-compile-integration.md,dedup,identity_won,RC4,-1.3401566701313368,
+20,ml-systems/vllm-torch-compile-integration.md,motivate,identity_won,RC4,-0.07053456158585983,
+1,ml-systems/kv-cache-kernel-and-addressing.md,systematize,invalid,RC1,0.0,no output
+1,ml-systems/attention-mechanics.md,split,invalid,RC1,0.0,no output
+1,ml-systems/parallelism-strategies.md,densify,invalid,RC1,0.0,no output
+1,distributed-systems/chandy-lamport.md,systematize,invalid,RC1,0.0,no output
+1,ml-systems/pt-moe-architecture.md,section_rewrite,vetoed,RC2,1.2935483472729858,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **whether position encoding is used** (### Local Sliding Window (42 of 48 layers))
+1,ml-systems/pt-moe-architecture.md,compress,identity_won,RC4,-1.4925557853149838,
+1,ml-systems/pt-moe-architecture.md,densify,identity_won,RC4,0.29851115706299675,
+2,ml-systems/vllm-distributed-groups.md,compress,invalid,RC1,0.0,"retry failed: Edit 3 on ml-systems/vllm-distributed-groups.md: search text not found. First 80 chars: '| `_PP`  | No — breaks global topology | Above TP; crosses TP boundaries, so rep'"
+2,ml-systems/vllm-distributed-groups.md,densify,identity_won,RC4,-0.2672612419124244,
+3,ml-systems/pytorch-module-hooks.md,concretize,invalid,RC1,0.0,no output
+3,ml-systems/pytorch-module-hooks.md,compress,identity_won,RC4,-1.2247448713915892,
+4,ml-systems/vllm-weight-loading.md,compress,identity_won,RC4,-1.4791479939068937,
+4,ml-systems/vllm-weight-loading.md,densify,identity_won,RC4,0.23354968324845687,
+5,ml-systems/prefix-caching.md,section_rewrite,vetoed,RC2,1.4524080181184935,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **keeps its hash, token_ids, and KV cache data** (a future sequence with the same 512-token system prompt can ...)"
+5,ml-systems/prefix-caching.md,restructure,identity_won,RC4,-1.2815364865751413,
+5,ml-systems/prefix-caching.md,compress,identity_won,RC4,-0.42717882885838043,
+6,ml-systems/vllm-cg-investigation-findings.md,motivate,vetoed,RC2,1.0,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **The problem CG was meant to solve** (every decode step with a naive Ray executor calls `ray.remot...); **Why it underdelivers** (CG writes to each worker's channel sequentially (O(TP) write...)
+6,ml-systems/vllm-cg-investigation-findings.md,section_rewrite,identity_won,RC4,0.8461538461538461,
+6,ml-systems/vllm-cg-investigation-findings.md,clarify,identity_won,RC4,-0.38461538461538464,
+7,ml-systems/prefix-caching-hash-table-leak.md,simplify_code,invalid,RC1,0.0,no output
+7,ml-systems/prefix-caching-hash-table-leak.md,section_rewrite,vetoed,RC2,1.2247448713915892,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **~16 MB** (negligible against the 80 GB GPU, but a real leak on long-ru...)"
+7,ml-systems/prefix-caching-hash-table-leak.md,consolidate,identity_won,RC4,-1.2247448713915892,
+8,ml-systems/kv-cache-internals.md,section_rewrite,vetoed,RC2,1.4526003741187568,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector)
+8,ml-systems/kv-cache-internals.md,systematize,identity_won,RC4,-1.1759145885723268,
+8,ml-systems/kv-cache-internals.md,clarify,identity_won,RC4,0.3458572319330373,
+9,ml-systems/llm-inference-engines.md,densify,invalid,RC1,0.0,no output
+9,ml-systems/llm-inference-engines.md,split,identity_won,RC4,0.3396831102433787,
+10,ml-systems/fused-moe-vllm-implementation.md,dedup,identity_won,RC4,-1.3416407864998738,
+10,ml-systems/fused-moe-vllm-implementation.md,concretize,identity_won,RC4,0.4472135954999579,
+1,ml-systems/parallelism-strategies.md,restructure,invalid,RC1,0.0,no output
+1,ml-systems/parallelism-strategies.md,densify,identity_won,RC4,-1.1206310514564426,
+2,ml-systems/pt-moe-architecture.md,section_rewrite,vetoed,RC2,1.5275252316519465,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **whether position encoding is used** (### Local Sliding Window (42 of 48 layers)); **no RoPE** (**Why no position encoding?** RoPE encodes relative distance...)
+2,ml-systems/pt-moe-architecture.md,densify,identity_won,RC4,-1.0910894511799618,
+2,ml-systems/pt-moe-architecture.md,compress,identity_won,RC4,-0.6546536707079771,
+3,ml-systems/vllm-distributed-groups.md,densify,invalid,RC1,0.0,"retry failed (no output after: Edit 4 on ml-systems/vllm-distributed-groups.md: search text not found. First 80 chars: '---\n\n## See Also\n\n- [[ml-systems/parallelism-strategies]] — TP, PP, EP fundament')"
+3,ml-systems/vllm-distributed-groups.md,simplify_code,identity_won,RC4,0.0,
+3,ml-systems/vllm-distributed-groups.md,section_rewrite,identity_won,RC4,-1.224744871391589,
+4,ml-systems/pytorch-module-hooks.md,systematize,identity_won,RC4,0.5896096038723766,
+4,ml-systems/pytorch-module-hooks.md,consolidate,identity_won,RC4,-1.3757557423688787,
+5,ml-systems/vllm-weight-loading.md,motivate,vetoed,RC2,1.3416407864998738,Sections removed: ## The Problem: Two Naming Worlds
+5,ml-systems/vllm-weight-loading.md,dedup,identity_won,RC4,0.4472135954999579,
+5,ml-systems/vllm-weight-loading.md,densify,identity_won,RC4,-1.3416407864998738,
+6,ml-systems/prefix-caching.md,motivate,identity_won,RC4,-1.1648208067068038,
+6,ml-systems/prefix-caching.md,section_rewrite,identity_won,RC4,0.6166698388447786,
+7,ml-systems/vllm-cg-investigation-findings.md,concretize,invalid,RC1,0.0,no output
+7,ml-systems/vllm-cg-investigation-findings.md,clarify,invalid,RC1,0.0,no output
+8,ml-systems/tensor-parallelism.md,systematize,identity_won,RC4,0.31799936400190804,
+8,ml-systems/tensor-parallelism.md,compress,identity_won,RC4,-0.31799936400190804,
+9,ml-systems/kv-cache-internals.md,restructure,invalid,RC1,0.0,no output
+9,ml-systems/kv-cache-internals.md,section_rewrite,vetoed,RC2,1.4142135623730951,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **`block_tables`** (a per-sequence lookup table mapping logical block index → ph...)
+9,ml-systems/kv-cache-internals.md,simplify_code,identity_won,RC4,-0.7071067811865476,
+10,ml-systems/prefix-caching-hash-table-leak.md,dedup,identity_won,RC4,-0.6054055145966812,
+10,ml-systems/prefix-caching-hash-table-leak.md,consolidate,identity_won,RC4,-1.2780783085929937,
+11,ml-systems/fused-moe-vllm-implementation.md,restructure,invalid,RC1,0.0,no output
+11,ml-systems/fused-moe-vllm-implementation.md,motivate,identity_won,RC4,-1.2247448713915892,
+12,ml-systems/parallelism-strategies.md,restructure,invalid,RC1,0.0,no output
+12,ml-systems/parallelism-strategies.md,densify,identity_won,RC4,-1.2247448713915892,
+13,ml-systems/pt-moe-architecture.md,clarify,invalid,RC1,0.0,no output
+13,ml-systems/pt-moe-architecture.md,concretize,identity_won,RC4,0.7071067811865475,
+13,ml-systems/pt-moe-architecture.md,systematize,identity_won,RC4,0.7071067811865475,
+14,ml-systems/vllm-distributed-groups.md,motivate,identity_won,RC4,0.9169493006161777,
+14,ml-systems/vllm-distributed-groups.md,clarify,identity_won,RC4,0.9169493006161777,
+14,ml-systems/vllm-distributed-groups.md,compress,identity_won,RC4,-1.4812257933030564,
+15,ml-systems/pytorch-module-hooks.md,dedup,identity_won,RC4,-1.5696136947790653,
+15,ml-systems/pytorch-module-hooks.md,simplify_code,identity_won,RC4,0.5232045649263551,
+16,ml-systems/vllm-weight-loading.md,section_rewrite,identity_won,RC4,0.7333333333333333,
+16,ml-systems/vllm-weight-loading.md,consolidate,identity_won,RC4,-1.4,
+17,ml-systems/prefix-caching.md,clarify,identity_won,RC4,-0.39405520311955033,
+17,ml-systems/prefix-caching.md,restructure,identity_won,RC4,-1.0245435281108308,
+18,ml-systems/vllm-cg-investigation-findings.md,dedup,identity_won,RC4,-0.8466487815452375,
+18,ml-systems/vllm-cg-investigation-findings.md,section_rewrite,identity_won,RC4,0.4703604341917986,
+19,ml-systems/llm-inference-engines.md,densify,invalid,RC1,0.0,no output
+19,ml-systems/llm-inference-engines.md,systematize,identity_won,RC4,-0.8053872662568292,
+20,ml-systems/cuda-graph-inference-optimization.md,section_rewrite,vetoed,RC2,1.4419211804559506,"Code block loss: 17 code lines reduced to 11 (65% of original, minimum 85%)"
+20,ml-systems/cuda-graph-inference-optimization.md,motivate,identity_won,RC4,-0.9330078226479681,
+20,ml-systems/cuda-graph-inference-optimization.md,clarify,identity_won,RC4,0.4240944648399855,
+21,ml-systems/prefix-caching-hash-table-leak.md,simplify_code,invalid,RC1,0.0,"retry failed (no output after: Edit 0 on ml-systems/prefix-caching-hash-table-leak.md: search text not found. First 80 chars: '**Seq 1**: tokens `[101, 102, 103, 104]`, hash = `hash((101,102,103,104))` = **H')"
+21,ml-systems/prefix-caching-hash-table-leak.md,compress,identity_won,RC4,-0.6040404496926219,
+21,ml-systems/prefix-caching-hash-table-leak.md,concretize,identity_won,RC4,-0.8053872662568292,
+22,ml-systems/kv-cache-internals.md,clarify,vetoed,RC2,1.720387033089985,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **block-table** (per-sequence array mapping logical block index → physical bl...); **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector); **1,024 bytes** (512 elements × 2 bytes/fp16); **tensor-parallel (TP) process groups** (the set of GPUs jointly computing a single layer by splittin...)"
+22,ml-systems/kv-cache-internals.md,systematize,identity_won,RC4,-0.7373087284671365,
+22,ml-systems/kv-cache-internals.md,motivate,identity_won,RC4,-0.5734623443633283,
+23,ml-systems/parallelism-strategies.md,consolidate,invalid,RC1,0.0,retry failed: Edit 1 on ml-systems/mixture-of-experts.md: search text not found. First 80 chars: '# 8-expert SwiGLU: 9.44B FL\n---'
+23,ml-systems/parallelism-strategies.md,densify,identity_won,RC4,-1.1206310514564426,
+24,ml-systems/pt-moe-architecture.md,restructure,invalid,RC1,0.0,no output
+24,ml-systems/pt-moe-architecture.md,motivate,identity_won,RC4,-1.224744871391589,
+24,ml-systems/pt-moe-architecture.md,simplify_code,identity_won,RC4,0.0,
+25,ml-systems/vllm-distributed-groups.md,restructure,invalid,RC1,0.0,no output
+25,ml-systems/vllm-distributed-groups.md,concretize,invalid,RC1,0.0,no output
+26,ml-systems/pytorch-module-hooks.md,section_rewrite,identity_won,RC4,0.95577900872195,
+26,ml-systems/pytorch-module-hooks.md,systematize,identity_won,RC4,-1.5439507063969962,
+26,ml-systems/pytorch-module-hooks.md,clarify,identity_won,RC4,0.8087360843031884,
+27,ml-systems/vllm-weight-loading.md,densify,identity_won,RC4,-0.4975185951049946,
+27,ml-systems/vllm-weight-loading.md,compress,identity_won,RC4,-0.8955334711889903,
+28,ml-systems/prefix-caching.md,dedup,invalid,RC1,0.0,no output
+28,ml-systems/prefix-caching.md,consolidate,invalid,RC1,0.0,no output
+29,ml-systems/vllm-cg-investigation-findings.md,restructure,invalid,RC1,0.0,no output
+29,ml-systems/vllm-cg-investigation-findings.md,clarify,identity_won,RC4,0.21997067253202995,
+30,ml-systems/kv-cache-kernel-and-addressing.md,dedup,invalid,RC1,0.0,retry failed: Edit 0 on ml-systems/attention-mechanics.md: search text not found. First 80 chars: 'slot = tl.load(slot_mapping_ptr + idx)       # where should I write?\n    if slot'
+30,ml-systems/kv-cache-kernel-and-addressing.md,section_rewrite,identity_won,RC4,-0.3396831102433787,
+31,ml-systems/cuda-graph-inference-optimization.md,concretize,invalid,RC1,0.0,no output
+31,ml-systems/cuda-graph-inference-optimization.md,compress,identity_won,RC4,-0.9258200997725514,
+32,ml-systems/prefix-caching-hash-table-leak.md,systematize,identity_won,RC4,-0.5232045649263551,
+32,ml-systems/prefix-caching-hash-table-leak.md,clarify,identity_won,RC4,-1.1211526391279039,
+33,ml-systems/kv-cache-internals.md,compress,identity_won,RC4,-1.2874526191574363,
+33,ml-systems/kv-cache-internals.md,concretize,identity_won,RC4,0.5852057359806528,
+34,ml-systems/parallelism-strategies.md,systematize,invalid,RC1,0.0,retry failed: Edit 1 on ml-systems/parallelism-strategies.md: search text not found. First 80 chars: '- [[ml-systems/transformer-model-internals]]\n- [[ml-systems/gpu-memory-hierarchy'
+34,ml-systems/parallelism-strategies.md,densify,identity_won,RC4,-0.9258200997725514,
+35,ml-systems/pt-moe-architecture.md,systematize,vetoed,RC2,1.6035674514745464,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **""Why tracks instead of deeper layers?""** (Standard TP needs 2 all-reduces per layer: `o_proj` and `dow...); **""What's the attention pattern?""** (42/48 layers use sliding window (4096 tokens, RoPE) for loca...)"
+35,ml-systems/pt-moe-architecture.md,simplify_code,identity_won,RC4,-1.0690449676496976,
+35,ml-systems/pt-moe-architecture.md,densify,identity_won,RC4,0.0,
+36,ml-systems/vllm-distributed-groups.md,section_rewrite,identity_won,RC4,0.768273325346536,
+36,ml-systems/vllm-distributed-groups.md,densify,identity_won,RC4,-1.187331502808283,
+37,ml-systems/pytorch-module-hooks.md,motivate,vetoed,RC2,1.4126128673922562,Sections removed: ## Role in System; Missing required sections: need either [## TL;DR + ## See Also] or [## Core Intuition + ## Connections] or [## Role in System + ## Related Concepts]
+37,ml-systems/pytorch-module-hooks.md,restructure,identity_won,RC4,0.06726727939963124,
+37,ml-systems/pytorch-module-hooks.md,consolidate,identity_won,RC4,-1.4126128673922562,
+38,ml-systems/vllm-weight-loading.md,section_rewrite,vetoed,RC2,1.182165609358651,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **batched GEMM** (one large matrix multiply that covers all experts simultaneo...)
+38,ml-systems/vllm-weight-loading.md,clarify,identity_won,RC4,0.7092993656151906,
+38,ml-systems/vllm-weight-loading.md,densify,identity_won,RC4,-1.3397876906064712,
+39,ml-systems/prefix-caching.md,dedup,identity_won,RC4,-1.5439507063969962,
+39,ml-systems/prefix-caching.md,motivate,identity_won,RC4,0.07352146220938077,
+40,ml-systems/vllm-cg-investigation-findings.md,section_rewrite,vetoed,RC2,1.323448205074589,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **Unique finding — the `synchronize()` bubble** (`RayPPCommunicator.recv()` at `ray_communicator.py:212` does...)
+40,ml-systems/vllm-cg-investigation-findings.md,clarify,identity_won,RC4,-0.0778498944161523,
+40,ml-systems/vllm-cg-investigation-findings.md,restructure,identity_won,RC4,0.23354968324845687,
+41,ml-systems/kv-cache-kernel-and-addressing.md,systematize,identity_won,RC4,-0.29851115706299675,
+41,ml-systems/kv-cache-kernel-and-addressing.md,simplify_code,identity_won,RC4,-0.8955334711889903,
+42,ml-systems/cuda-graph-inference-optimization.md,motivate,identity_won,RC4,-0.06726727939963124,
+42,ml-systems/cuda-graph-inference-optimization.md,consolidate,identity_won,RC4,-1.4126128673922562,
+43,ml-systems/prefix-caching-hash-table-leak.md,dedup,invalid,RC1,0.0,no output
+43,ml-systems/prefix-caching-hash-table-leak.md,systematize,identity_won,RC4,-0.8429272304235246,
+44,ml-systems/kv-cache-internals.md,section_rewrite,vetoed,RC2,1.199087546959617,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector); Wikilink count regression: 17 → 16
+44,ml-systems/kv-cache-internals.md,clarify,identity_won,RC4,0.775880177444458,
+44,ml-systems/kv-cache-internals.md,restructure,identity_won,RC4,-0.9169493006161777,
+45,ml-systems/parallelism-strategies.md,motivate,identity_won,RC4,0.7863336509949341,
+45,ml-systems/parallelism-strategies.md,densify,identity_won,RC4,-1.310556084991557,
+46,ml-systems/pt-moe-architecture.md,densify,identity_won,RC4,-0.47301616487964016,
+46,ml-systems/pt-moe-architecture.md,compress,identity_won,RC4,-1.2839010189590232,
+47,ml-systems/vllm-distributed-groups.md,concretize,invalid,RC1,0.0,no output
+47,ml-systems/vllm-distributed-groups.md,densify,invalid,RC1,0.0,no output
+48,ml-systems/pytorch-module-hooks.md,dedup,identity_won,RC4,-1.4791479939068937,
+48,ml-systems/pytorch-module-hooks.md,concretize,identity_won,RC4,-0.0778498944161523,
+48,ml-systems/pytorch-module-hooks.md,simplify_code,identity_won,RC4,0.23354968324845687,
+49,ml-systems/vllm-weight-loading.md,systematize,invalid,RC1,0.0,no output
+49,ml-systems/vllm-weight-loading.md,motivate,identity_won,RC4,0.9258200997725514,
+49,ml-systems/vllm-weight-loading.md,restructure,identity_won,RC4,0.4629100498862757,
+50,ml-systems/prefix-caching.md,consolidate,invalid,RC1,0.0,no output
+50,ml-systems/prefix-caching.md,clarify,identity_won,RC4,-0.9258200997725514,
+51,ml-systems/vllm-cg-investigation-findings.md,concretize,invalid,RC1,0.0,no output
+51,ml-systems/vllm-cg-investigation-findings.md,compress,invalid,RC1,0.0,no output
+51,ml-systems/vllm-cg-investigation-findings.md,dedup,identity_won,RC4,-1.0,
+52,ml-systems/kv-cache-kernel-and-addressing.md,systematize,identity_won,RC4,-0.684257329142735,
+52,ml-systems/kv-cache-kernel-and-addressing.md,section_rewrite,identity_won,RC4,0.07602859212697055,
+53,ml-systems/cuda-graph-inference-optimization.md,section_rewrite,identity_won,RC4,0.4472135954999579,
+53,ml-systems/cuda-graph-inference-optimization.md,consolidate,identity_won,RC4,-1.3416407864998738,
+54,ml-systems/prefix-caching-hash-table-leak.md,simplify_code,identity_won,RC4,-1.3000224919331833,
+54,ml-systems/prefix-caching-hash-table-leak.md,clarify,identity_won,RC4,-0.3823595564509363,
+55,ml-systems/kv-cache-internals.md,motivate,invalid,RC1,0.0,no output
+55,ml-systems/kv-cache-internals.md,concretize,identity_won,RC4,-1.2247448713915892,
+56,ml-systems/parallelism-strategies.md,section_rewrite,identity_won,RC4,-0.8466487815452375,
+56,ml-systems/parallelism-strategies.md,densify,identity_won,RC4,0.09407208683835973,
+57,ml-systems/attention-mechanics.md,densify,identity_won,RC4,-1.0795912380986197,
+57,ml-systems/attention-mechanics.md,split,identity_won,RC4,0.9135002783911397,
+58,ml-systems/vllm-distributed-groups.md,densify,identity_won,RC4,0.07432941462471664,
+58,ml-systems/vllm-distributed-groups.md,section_rewrite,identity_won,RC4,-0.07432941462471664,
+59,ml-systems/pytorch-module-hooks.md,densify,identity_won,RC4,-0.5516772843673704,
+59,ml-systems/pytorch-module-hooks.md,compress,identity_won,RC4,-1.182165609358651,
+60,ml-systems/vllm-weight-loading.md,concretize,invalid,RC1,0.0,no output
+60,ml-systems/vllm-weight-loading.md,compress,identity_won,RC4,-1.414213562373095,
+60,ml-systems/vllm-weight-loading.md,simplify_code,identity_won,RC4,0.7071067811865475,
+60,ml-systems/vllm-weight-loading.md,compress,vetoed,RC3,0.7071067811865475,Engineering judge systems_engineer_sonnet rejected
+60,ml-systems/vllm-weight-loading.md,simplify_code,vetoed,RC3,0.7071067811865475,Engineering judge systems_engineer_sonnet rejected
+61,ml-systems/vllm-weight-loading.md,restructure,invalid,RC1,0.0,no output
+61,ml-systems/vllm-weight-loading.md,densify,vetoed,RC2,1.224744871391589,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **key/value vectors** (the K and V projections from layer 34 are held constant for ...)
+61,ml-systems/vllm-weight-loading.md,clarify,identity_won,RC4,-1.224744871391589,
+62,ml-systems/vllm-cg-investigation-findings.md,densify,invalid,RC1,0.0,no output
+62,ml-systems/vllm-cg-investigation-findings.md,motivate,identity_won,RC4,-1.0190493307301363,
+63,ml-systems/kv-cache-kernel-and-addressing.md,clarify,vetoed,RC2,1.4126128673922562,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **flat 1D array** (no awareness of blocks, layers, or heads.)"
+63,ml-systems/kv-cache-kernel-and-addressing.md,section_rewrite,identity_won,RC4,-0.06726727939963124,
+63,ml-systems/kv-cache-kernel-and-addressing.md,consolidate,identity_won,RC4,-1.4126128673922562,
+64,ml-systems/cuda-graph-inference-optimization.md,systematize,identity_won,RC4,-1.4126128673922562,
+64,ml-systems/cuda-graph-inference-optimization.md,section_rewrite,identity_won,RC4,-0.06726727939963124,
+65,ml-systems/prefix-caching-hash-table-leak.md,section_rewrite,vetoed,RC2,1.212678125181665,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **~16 MB** (negligible against the 80 GB GPU, but a real leak on long-ru...)"
+65,ml-systems/prefix-caching-hash-table-leak.md,systematize,identity_won,RC4,-1.212678125181665,
+65,ml-systems/prefix-caching-hash-table-leak.md,clarify,identity_won,RC4,-0.727606875108999,
+66,ml-systems/kv-cache-internals.md,section_rewrite,vetoed,RC2,1.1404288819045583,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **1,024 bytes** (512 elements × 2 bytes/fp16); **`block_tables`** (a per-sequence lookup table mapping logical block index → ph...)"
+66,ml-systems/kv-cache-internals.md,restructure,identity_won,RC4,-0.8363145133966761,
+66,ml-systems/kv-cache-internals.md,clarify,identity_won,RC4,0.8363145133966761,
+67,ml-systems/prefix-caching.md,consolidate,invalid,RC1,0.0,no output
+67,ml-systems/prefix-caching.md,section_rewrite,vetoed,RC2,1.2247448713915892,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **keeps its hash, token_ids, and KV cache data** (the next request hitting the same prefix reclaims all 32 blo...)"
+67,ml-systems/prefix-caching.md,dedup,identity_won,RC4,-1.2247448713915892,
+68,ml-systems/attention-mechanics.md,densify,invalid,RC1,0.0,no output
+68,ml-systems/attention-mechanics.md,section_rewrite,identity_won,RC4,0.6040404496926219,
+68,ml-systems/attention-mechanics.md,split,identity_won,RC4,0.8053872662568292,
+69,ml-systems/vllm-distributed-groups.md,densify,identity_won,RC4,-0.38014296063485276,
+69,ml-systems/vllm-distributed-groups.md,section_rewrite,identity_won,RC4,0.684257329142735,
+70,ml-systems/pytorch-module-hooks.md,systematize,identity_won,RC4,-0.08304547985373997,
+70,ml-systems/pytorch-module-hooks.md,clarify,identity_won,RC4,0.08304547985373997,
+71,ml-systems/ray-compiled-graph-in-vllm.md,densify,identity_won,RC4,-0.07018624063435965,
+71,ml-systems/ray-compiled-graph-in-vllm.md,clarify,identity_won,RC4,-1.4739110533215525,
+72,ml-systems/vllm-weight-loading.md,clarify,vetoed,RC2,1.224744871391589,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **key/value vectors** (the K and V projections from layer 34 are held constant for ...)
+72,ml-systems/vllm-weight-loading.md,motivate,identity_won,RC4,-1.224744871391589,
+73,ml-systems/parallelism-strategies.md,dedup,identity_won,RC4,-0.6069769786668839,
+73,ml-systems/parallelism-strategies.md,densify,identity_won,RC4,-0.9538209664765319,
+74,distributed-systems/chandy-lamport.md,restructure,identity_won,RC4,-0.9878783399072131,
+74,distributed-systems/chandy-lamport.md,section_rewrite,identity_won,RC4,-0.5488212999484517,
+75,ml-systems/kv-cache-kernel-and-addressing.md,dedup,invalid,RC1,0.0,no output
+75,ml-systems/kv-cache-kernel-and-addressing.md,restructure,identity_won,RC4,-1.2247448713915892,
+76,ml-systems/cuda-graph-inference-optimization.md,section_rewrite,vetoed,RC2,1.1333333333333333,"Bullet/list loss: items dropped from 18 to 11 (>30% loss); Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **Compute shapes are predictable** (Every sequence processes exactly 1 token, so the matrix shap...); **Memory padding is cheap** (The `block_table` is padded with `-1` entries, but FlashAtte...)"
+76,ml-systems/cuda-graph-inference-optimization.md,systematize,identity_won,RC4,-0.4666666666666667,
+76,ml-systems/cuda-graph-inference-optimization.md,consolidate,identity_won,RC4,-1.4,
+77,ml-systems/prefix-caching-hash-table-leak.md,concretize,identity_won,RC4,-0.3275608910402092,
+77,ml-systems/prefix-caching-hash-table-leak.md,consolidate,identity_won,RC4,-1.3757557423688787,
+78,ml-systems/kv-cache-internals.md,motivate,identity_won,RC4,0.31799936400190804,
+78,ml-systems/kv-cache-internals.md,simplify_code,identity_won,RC4,-1.3779972440082682,
+79,ml-systems/prefix-caching.md,motivate,identity_won,RC4,-1.2018504251546631,
+79,ml-systems/prefix-caching.md,clarify,identity_won,RC4,-0.2773500981126145,
+80,ml-systems/attention-mechanics.md,split,vetoed,RC2,1.2222222222222223,Missing required sections: need either [## TL;DR + ## See Also] or [## Core Intuition + ## Connections] or [## Role in System + ## Related Concepts]
+80,ml-systems/attention-mechanics.md,clarify,identity_won,RC4,0.5555555555555556,
+80,ml-systems/attention-mechanics.md,systematize,identity_won,RC4,-0.3333333333333333,
+81,ml-systems/vllm-distributed-groups.md,densify,identity_won,RC4,-1.110664955031789,
+81,ml-systems/vllm-distributed-groups.md,systematize,identity_won,RC4,-0.25630729731502827,
+82,ml-systems/pytorch-module-hooks.md,systematize,identity_won,RC4,0.7863336509949341,
+82,ml-systems/pytorch-module-hooks.md,restructure,identity_won,RC4,0.7863336509949341,
+82,ml-systems/pytorch-module-hooks.md,section_rewrite,identity_won,RC4,0.0873704056661038,
+83,ml-systems/vllm-weight-loading.md,motivate,identity_won,RC4,-1.0,
+84,ml-systems/ray-compiled-graph-in-vllm.md,clarify,invalid,RC1,0.0,no output
+84,ml-systems/ray-compiled-graph-in-vllm.md,section_rewrite,identity_won,RC4,0.0,
+84,ml-systems/ray-compiled-graph-in-vllm.md,densify,identity_won,RC4,-1.2247448713915892,
+85,ml-systems/parallelism-strategies.md,systematize,invalid,RC1,0.0,no output
+85,ml-systems/parallelism-strategies.md,densify,invalid,RC1,0.0,no output
+86,distributed-systems/chandy-lamport.md,section_rewrite,vetoed,RC2,1.1211526391279039,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **Concrete race that would break consistency** (extending the running example)
+86,distributed-systems/chandy-lamport.md,systematize,identity_won,RC4,-1.270639657678291,
+86,distributed-systems/chandy-lamport.md,concretize,identity_won,RC4,0.8221786020271294,
+87,ml-systems/kv-cache-kernel-and-addressing.md,consolidate,invalid,RC1,0.0,retry failed: Edit 0 on ml-systems/attention-mechanics.md: search and replace are identical (no-op)
+87,ml-systems/kv-cache-kernel-and-addressing.md,section_rewrite,vetoed,RC2,1.2247448713915892,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **side effect** (populate the cache now so decode steps can read the history ...)
+87,ml-systems/kv-cache-kernel-and-addressing.md,dedup,identity_won,RC4,-1.2247448713915892,
+88,ml-systems/cuda-graph-inference-optimization.md,restructure,identity_won,RC4,0.07273929674533079,
+88,ml-systems/cuda-graph-inference-optimization.md,compress,identity_won,RC4,-1.2365680446706235,
+89,ml-systems/prefix-caching-hash-table-leak.md,clarify,vetoed,RC2,1.6059101370939324,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **~16 MB** (negligible against the 80 GB GPU, but a real leak on long-ru...)"
+89,ml-systems/prefix-caching-hash-table-leak.md,simplify_code,identity_won,RC4,-1.1470786693528088,
+89,ml-systems/prefix-caching-hash-table-leak.md,section_rewrite,identity_won,RC4,-0.22941573387056177,
+90,ml-systems/kv-cache-internals.md,section_rewrite,vetoed,RC2,1.4,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector); **`block_tables`** (a per-sequence lookup table mapping logical block index → ph...)
+90,ml-systems/kv-cache-internals.md,systematize,identity_won,RC4,-1.1333333333333333,
+90,ml-systems/kv-cache-internals.md,clarify,identity_won,RC4,0.4666666666666667,
+91,ml-systems/prefix-caching.md,section_rewrite,vetoed,RC2,1.182165609358651,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **keeps its hash, token_ids, and KV cache data** (the next request hitting the same prefix reclaims all 32 blo...)"
+91,ml-systems/prefix-caching.md,dedup,identity_won,RC4,-1.3397876906064712,
+91,ml-systems/prefix-caching.md,motivate,identity_won,RC4,-0.5516772843673704,
+92,ml-systems/attention-mechanics.md,consolidate,invalid,RC1,0.0,"retry failed (no output after: Edit 1 on ml-systems/kv-cache-kernel-and-addressing.md: search text not found. First 80 chars: '    o = flash_attn_with_kvcache(\n    q.unsqueeze(1),                 # [batch, 1')"
+92,ml-systems/attention-mechanics.md,motivate,vetoed,RC2,1.0690449676496976,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **query vector** (""what am I looking for?""); **key vectors** (""what do I contain?"")"
+92,ml-systems/attention-mechanics.md,concretize,identity_won,RC4,0.2672612419124244,
+93,ml-systems/vllm-distributed-groups.md,systematize,identity_won,RC4,-0.07881104062391006,
+93,ml-systems/vllm-distributed-groups.md,densify,identity_won,RC4,-0.8669214468630108,
+94,ml-systems/vllm-weight-loading.md,motivate,identity_won,RC4,-1.0,
+95,ml-systems/pytorch-module-hooks.md,simplify_code,identity_won,RC4,-1.2602520756252087,
+95,ml-systems/pytorch-module-hooks.md,compress,identity_won,RC4,-0.14002800840280097,
+96,ml-systems/ray-compiled-graph-in-vllm.md,concretize,invalid,RC1,0.0,"retry failed (no output after: Edit 1 on ml-systems/ray-compiled-graph-in-vllm.md: search text not found. First 80 chars: '  | PP transfer (NCCL, 4 MiB NVLink) | ~15 us | ~15 us (same NCCL) | <0.1% |')"
+96,ml-systems/ray-compiled-graph-in-vllm.md,restructure,vetoed,RC2,1.3074028933658497,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **Async scheduling made dispatch speed irrelevant** (GPU execution (~10-20 ms) overlaps with next-batch schedulin...); **CG is structurally slower** (O(TP) sequential channel writes vs O(1) shared memory broadc...); **PP tensor routing is trivially replaceable** (MultiprocExecutor uses `gpu_worker.isend/irecv_tensor_dict` ...); **Maintenance cost** (unresolved NCCL hangs across multiple Ray releases.); Wikilink count regression: 11 → 8
+96,ml-systems/ray-compiled-graph-in-vllm.md,compress,identity_won,RC4,-0.1867718419094071,
+97,ml-systems/parallelism-strategies.md,section_rewrite,identity_won,RC4,0.3458572319330373,
+97,ml-systems/parallelism-strategies.md,densify,identity_won,RC4,-1.1759145885723268,
+98,distributed-systems/chandy-lamport.md,clarify,identity_won,RC4,0.5449492609130661,
+98,distributed-systems/chandy-lamport.md,restructure,identity_won,RC4,-1.6348477827391983,
+99,ml-systems/kv-cache-kernel-and-addressing.md,systematize,identity_won,RC4,-0.6054055145966812,
+99,ml-systems/kv-cache-kernel-and-addressing.md,clarify,identity_won,RC4,0.6054055145966812,
+100,ml-systems/cuda-graph-inference-optimization.md,motivate,identity_won,RC4,-1.3416407864998738,
+100,ml-systems/cuda-graph-inference-optimization.md,section_rewrite,identity_won,RC4,-0.4472135954999579,
+1,ml-systems/pt-moe-architecture.md,densify,invalid,RC1,0.0,no output
+1,ml-systems/pt-moe-architecture.md,clarify,identity_won,RC4,0.5619514869490164,
+1,ml-systems/pt-moe-architecture.md,section_rewrite,identity_won,RC4,0.8429272304235246,
+2,ml-systems/kv-cache-internals.md,clarify,vetoed,RC2,1.6397831834998458,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **block-table** (per-sequence array mapping logical block index → physical bl...); **512 elements** (8 kv_heads × 64 head_dim = 512 floats per K or V vector); **1,024 bytes** (512 elements × 2 bytes/fp16)"
+2,ml-systems/kv-cache-internals.md,section_rewrite,identity_won,RC4,-0.14907119849998599,
+2,ml-systems/kv-cache-internals.md,motivate,identity_won,RC4,-0.4472135954999579,
+3,ml-systems/prefix-caching.md,dedup,invalid,RC1,0.0,no output
+3,ml-systems/prefix-caching.md,consolidate,invalid,RC1,0.0,no output
+3,ml-systems/prefix-caching.md,section_rewrite,vetoed,RC2,1.0,"Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **keeps its hash, token_ids, and KV cache data** (the next request hitting the same prefix reclaims all 32 blo...)"
+4,ml-systems/torch-compile-cuda-graphs-hook-interaction.md,section_rewrite,vetoed,RC2,1.187331502808283,Inline definition(s) removed — constitution requires 'no jargon without inline definition at first use': **CPU dispatch overhead** (the Python interpreter pays ~2–3µs per kernel launch to issu...)
+4,ml-systems/torch-compile-cuda-graphs-hook-interaction.md,simplify_code,identity_won,RC4,-1.187331502808283,
+4,ml-systems/torch-compile-cuda-graphs-hook-interaction.md,clarify,identity_won,RC4,0.768273325346536,
+5,ml-systems/vllm-distributed-groups.md,systematize,identity_won,RC4,0.07474350927519359,
+5,ml-systems/vllm-distributed-groups.md,densify,identity_won,RC4,-1.1211526391279039,

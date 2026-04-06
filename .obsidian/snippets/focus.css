@@ -1,0 +1,254 @@
+/* ── focus.css ────────────────────────────────────────────────────────────────
+   Extends Catppuccin to the full Obsidian UI. Dual-mode: Mocha + Latte.
+   ml-notes.css handles content styling — this file handles everything else.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* DARK MODE — Catppuccin Mocha                                              */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+.theme-dark {
+  --background-primary:           #1e1e2e;
+  --background-primary-alt:       #181825;
+  --background-secondary:         #181825;
+  --background-secondary-alt:     #11111b;
+  --background-modifier-border:   #313244;
+  --background-modifier-form-field: #313244;
+  --background-modifier-form-field-highlighted: #45475a;
+  --background-modifier-box-shadow: rgba(17, 17, 27, 0.6);
+  --background-modifier-success:  #a6e3a1;
+  --background-modifier-error:    #f38ba8;
+  --background-modifier-error-hover: #eba0ac;
+  --background-modifier-cover:    rgba(17, 17, 27, 0.8);
+
+  --text-normal:                  #cdd6f4;
+  --text-muted:                   #a6adc8;
+  --text-faint:                   #585b70;
+  --text-on-accent:               #11111b;
+  --text-on-accent-inverted:      #cdd6f4;
+  --text-error:                   #f38ba8;
+  --text-success:                 #a6e3a1;
+  --text-selection:               rgba(137, 180, 250, 0.2);
+  --text-highlight-bg:            rgba(249, 226, 175, 0.18);
+  --text-accent:                  #89b4fa;
+  --text-accent-hover:            #b4befe;
+
+  --interactive-normal:           #313244;
+  --interactive-hover:            #45475a;
+  --interactive-accent:           #74c7ec;
+  --interactive-accent-hover:     #89dceb;
+
+  --scrollbar-bg:                 transparent;
+  --scrollbar-thumb-bg:           rgba(127, 132, 156, 0.15);
+  --scrollbar-active-thumb-bg:    rgba(127, 132, 156, 0.35);
+
+  --titlebar-background:          #11111b;
+  --titlebar-background-focused:  #181825;
+
+  --tab-text-color:               #7f849c;
+  --tab-text-color-focused:       #cdd6f4;
+  --tab-text-color-focused-active: #cdd6f4;
+
+  --nav-item-color:               #a6adc8;
+  --nav-item-color-hover:         #cdd6f4;
+  --nav-item-color-active:        #74c7ec;
+  --nav-item-background-hover:    rgba(116, 199, 236, 0.08);
+  --nav-item-background-active:   rgba(116, 199, 236, 0.12);
+
+  --tag-background:               #313244;
+  --tag-color:                    #fab387;
+  --tag-background-hover:         #45475a;
+
+  --checkbox-color:               #74c7ec;
+  --checkbox-color-hover:         #89dceb;
+  --checkbox-border-color:        #45475a;
+
+  --icon-color:                   #7f849c;
+  --icon-color-hover:             #cdd6f4;
+  --icon-color-active:            #74c7ec;
+  --icon-color-focused:           #a6adc8;
+
+  --color-accent:                 #74c7ec;
+  --color-accent-1:               #89b4fa;
+  --color-accent-2:               #b4befe;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* LIGHT MODE — Catppuccin Latte                                             */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+.theme-light {
+  --background-primary:           #eff1f5;
+  --background-primary-alt:       #e6e9ef;
+  --background-secondary:         #e6e9ef;
+  --background-secondary-alt:     #dce0e8;
+  --background-modifier-border:   #ccd0da;
+  --background-modifier-form-field: #ccd0da;
+  --background-modifier-form-field-highlighted: #bcc0cc;
+  --background-modifier-box-shadow: rgba(220, 224, 232, 0.6);
+  --background-modifier-success:  #40a02b;
+  --background-modifier-error:    #d20f39;
+  --background-modifier-error-hover: #e64553;
+  --background-modifier-cover:    rgba(220, 224, 232, 0.8);
+
+  --text-normal:                  #4c4f69;
+  --text-muted:                   #6c6f85;
+  --text-faint:                   #9ca0b0;
+  --text-on-accent:               #eff1f5;
+  --text-on-accent-inverted:      #4c4f69;
+  --text-error:                   #d20f39;
+  --text-success:                 #40a02b;
+  --text-selection:               rgba(30, 102, 245, 0.15);
+  --text-highlight-bg:            rgba(223, 142, 29, 0.15);
+  --text-accent:                  #1e66f5;
+  --text-accent-hover:            #7287fd;
+
+  --interactive-normal:           #dce0e8;
+  --interactive-hover:            #ccd0da;
+  --interactive-accent:           #209fb5;
+  --interactive-accent-hover:     #04a5e5;
+
+  --scrollbar-bg:                 transparent;
+  --scrollbar-thumb-bg:           rgba(140, 143, 161, 0.2);
+  --scrollbar-active-thumb-bg:    rgba(140, 143, 161, 0.4);
+
+  --titlebar-background:          #dce0e8;
+  --titlebar-background-focused:  #e6e9ef;
+
+  --tab-text-color:               #8c8fa1;
+  --tab-text-color-focused:       #4c4f69;
+  --tab-text-color-focused-active: #4c4f69;
+
+  --nav-item-color:               #6c6f85;
+  --nav-item-color-hover:         #4c4f69;
+  --nav-item-color-active:        #209fb5;
+  --nav-item-background-hover:    rgba(32, 159, 181, 0.08);
+  --nav-item-background-active:   rgba(32, 159, 181, 0.12);
+
+  --tag-background:               #ccd0da;
+  --tag-color:                    #fe640b;
+  --tag-background-hover:         #bcc0cc;
+
+  --checkbox-color:               #209fb5;
+  --checkbox-color-hover:         #04a5e5;
+  --checkbox-border-color:        #bcc0cc;
+
+  --icon-color:                   #8c8fa1;
+  --icon-color-hover:             #4c4f69;
+  --icon-color-active:            #209fb5;
+  --icon-color-focused:           #6c6f85;
+
+  --color-accent:                 #209fb5;
+  --color-accent-1:               #1e66f5;
+  --color-accent-2:               #7287fd;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* MODE-INDEPENDENT — typography, layout, mobile, focus                      */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+body {
+  --font-text-size: 17px;
+  --line-height-normal: 1.75;
+  --font-text-theme: "Avenir Next", "Avenir", -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.markdown-rendered,
+.cm-editor {
+  letter-spacing: 0.01em;
+}
+
+.markdown-rendered p,
+.cm-line {
+  margin-bottom: 1.1em;
+}
+
+/* Line length: 70ch (Baymard 2022; WCAG 1.4.8) */
+.is-readable-line-width .markdown-source-view.mod-cm6 .cm-content,
+.is-readable-line-width .markdown-preview-view {
+  max-width: 70ch;
+}
+
+/* Active line */
+.cm-editor .cm-activeLine {
+  background-color: var(--text-selection);
+}
+
+/* Selection */
+::selection {
+  background: var(--text-selection);
+}
+
+/* Cursor */
+.cm-editor .cm-cursor {
+  border-left-color: var(--interactive-accent);
+  border-left-width: 2px;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; }
+::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-bg);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-active-thumb-bg);
+}
+
+/* Checkboxes */
+.markdown-rendered .task-list-item-checkbox:checked {
+  background-color: var(--interactive-accent);
+  border-color: var(--interactive-accent);
+}
+
+.markdown-rendered .task-list-item.is-checked {
+  color: var(--text-faint);
+  text-decoration: line-through;
+  text-decoration-color: var(--background-modifier-border);
+}
+
+/* Transitions */
+.nav-file-title,
+.nav-folder-title,
+.workspace-tab-header,
+button, input, textarea, a {
+  transition: color 0.15s ease,
+              background-color 0.15s ease,
+              border-color 0.15s ease;
+}
+
+/* Reading view paragraph spacing */
+.markdown-preview-view p { margin-bottom: 1.3em; }
+.markdown-preview-view li { margin-bottom: 0.35em; }
+
+/* Heading spacing */
+.markdown-rendered h1,
+.markdown-rendered h2 { margin-top: 2em; }
+.markdown-rendered h3 { margin-top: 1.5em; }
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* MOBILE                                                                    */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+.is-mobile {
+  --font-text-size: 17px;
+}
+
+.is-mobile .nav-file-title,
+.is-mobile .nav-folder-title {
+  padding: 10px 14px;
+  font-size: 15px;
+}
+
+.is-mobile .markdown-preview-view,
+.is-mobile .cm-content {
+  padding: 8px 18px;
+}
+
+.is-mobile .status-bar { display: none; }
+
+.is-mobile .view-header-title-container-after,
+.is-mobile .view-header-nav-buttons {
+  opacity: 0.5;
+}
