@@ -237,7 +237,7 @@ encode(text): catches sync path (_tokenize_prompt calls tokenizer.encode(text))
 ```python
 def _encode_chat(self, text):
     """Raw SP encode matching training. Shared by __call__ and encode."""
-    processed = self._preprocess_text(text)
+    processed = text.replace("\n", "<n>")  # _preprocess_text: \n→<n> before SP
     ids = self._sp_model.Encode(processed)
     if ids and ids[0] == self._sp_model.PieceToId("▁"):
         ids = ids[1:]
