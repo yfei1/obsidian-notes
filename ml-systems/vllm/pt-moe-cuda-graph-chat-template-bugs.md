@@ -3,7 +3,7 @@
 
 ## TL;DR
 
-Three bugs prevented PT-MoE 150B from working correctly with CUDA graphs and chat completions on vLLM v1. **Bug 1**: the `_patch_graph_capture_for_pt()` monkey-patch applies in the APIServer process but doesn't reach forked worker processes — CUDA graph capture (recording a GPU kernel sequence once so it can be replayed cheaply) misses the cross-track `_PT.all_reduce()`, producing all-newline output. **Bug 2**: HuggingFace's `apply_chat_template` tokenizes differently from training's raw SentencePiece — word boundaries shift, producing wrong token IDs that confuse the model into echoing prompts. **Bug 3**: training prepends BOS token id 1, but vLLM doesn't — the model never sees the sequence anchor it was trained with.
+Three bugs prevented PT-MoE 150B from working correctly with CUDA graphs and chat completions on vLLM v1. **Bug 1**: the `_patch_graph_capture_for_pt()` monkey-patch applies in the APIServer process but doesn't reach forked worker processes — CUDA graph capture (recording a GPU kernel sequence once so it can be replayed cheaply) misses the cross-track `_PT.all_reduce()`, producing all-newline output. **Bug 2**: HuggingFace's `apply_chat_template` pre-splits on special tokens before calling SentencePiece — 12 of 32 token positions differ from training's 30-token output, causing prompt echo. **Bug 3**: training prepends BOS id 1 (`<s>`), vLLM omits it — every token's position embedding shifts by −1, breaking role-detection heads that fire only when `<turn_start>` (id 150000) appears at position 1.
 
 ---
 
