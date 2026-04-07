@@ -107,6 +107,7 @@ The kernel alone isn't sufficient — three surrounding constraints must hold. E
 ```python
 hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
 # fused_add_rms_norm: residual = attn_out + old_residual; h = norm(residual)
+# (fusion cost breakdown: [[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]])
 ```
 
 **PT-MoE** (`afm_pt_moe.py:318-326`): NORM → ADD → NORM (two norms). Residual = normed sum.
