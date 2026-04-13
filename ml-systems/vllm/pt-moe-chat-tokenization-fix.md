@@ -81,9 +81,9 @@ The serving/training mismatch has two independent root causes:
 
 ### `<turn_start>` (id 150000) and `<turn_end>` (id 150001) — the root split
 
-These tokens were added AFTER the SP model was trained, via HuggingFace's `add_tokens()` — which is why they have high IDs (150000+). SP has no knowledge of them natively; only the HuggingFace wrapper recognizes them.
+`<turn_start>` and `<turn_end>` were added AFTER the SP model was trained, via HuggingFace's `add_tokens()` — a method on `PreTrainedTokenizer` (HF's base tokenizer class) that registers new tokens into the wrapper's vocabulary without retraining SP — which is why they have high IDs (150000+). SP has no knowledge of them natively; only the HuggingFace wrapper recognizes them.
 
-Because they live in **`additional_special_tokens`** — a list maintained by `PreTrainedTokenizer` — HF's `encode()` scans the input for these tokens, splits the string at their boundaries, maps each special token directly to its ID, then sends each remaining text chunk to SP *separately*, as an isolated string stripped of surrounding context. SP's word-boundary decisions depend on what precedes the current chunk; every split boundary destroys that context. The two token types below are direct consequences.
+Because they live in **`additional_special_tokens`** — a list maintained by `PreTrainedTokenizer` that HF's `encode()` scans before calling SP — HF splits the input string at these token boundaries, maps each special token directly to its ID, then sends each remaining text chunk to SP *separately*, as an isolated string stripped of surrounding context. SP's word-boundary decisions depend on what precedes the current chunk; every split boundary destroys that context. The two token types below are direct consequences of this context loss.
 
 ### `▁` (id 145022) — SentencePiece word boundary marker
 
