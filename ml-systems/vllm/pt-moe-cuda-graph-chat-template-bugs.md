@@ -9,7 +9,7 @@ Three bugs prevented PT-MoE 150B from working correctly with CUDA graphs and cha
 
 ## Core Intuition
 
-**All three bugs share one root shape: an assumption of identity that silently breaks across a boundary.** None crash or log an error — each produces plausible-looking wrong output (all-newlines, prompt echo) because the model still runs a complete forward pass, just on subtly wrong inputs or with a missing kernel. Bug 1 breaks at the process boundary: a monkey-patch applied in the APIServer parent never reaches forked Worker processes, so CUDA graph capture silently omits `_PT.all_reduce()`. Bugs 2 and 3 break at the tokenization boundary: HuggingFace's `apply_chat_template` pre-splits on special tokens before calling SentencePiece (destroying word-boundary context and shifting 12 token IDs), and vLLM omits the BOS token that training unconditionally prepends — shifting every token's position embedding by −1. Each bug is invisible in unit tests because the broken assumption only manifests when the full serving stack runs together: multi-process execution, the HuggingFace tokenizer wrapper, and the vLLM input pipeline must all be active simultaneously.
+**All three bugs share one root shape: an assumption of identity that silently breaks across a boundary.** None crash or log an error — each produces plausible-looking wrong output because the model still runs a complete forward pass on subtly wrong inputs or with a missing kernel. Bug 1 breaks at the process boundary: the monkey-patch applied in the APIServer parent never reaches forked Worker processes, so CUDA graph capture silently omits `_PT.all_reduce()`. Bugs 2 and 3 break at the tokenization boundary: HuggingFace's `apply_chat_template` pre-splits on special tokens before calling SentencePiece (destroying word-boundary context and shifting 12 token IDs), and vLLM omits the BOS token that training unconditionally prepends — shifting every token's position embedding by −1. Each bug is invisible in unit tests because the broken assumption only manifests when the full serving stack runs together: multi-process execution, the HuggingFace tokenizer wrapper, and the vLLM input pipeline must all be active simultaneously.
 
 ---
 
@@ -43,7 +43,7 @@ Without the patch, `_PT.all_reduce()` runs on the default CUDA stream during cap
 
 **Output**: all-newline tokens (`\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n`). The model produces token id 4 (`<n>`) repeatedly because the un-synchronized hidden states collapse to a near-zero distribution where the newline token has highest probability.
 
-**Why newlines, not random garble**: the hidden states aren't random — they're the result of a real forward pass minus the cross-track averaging. Each track's hidden state is a valid but incomplete representation (1/8th of the model's capacity). The softmax over this incomplete representation concentrates on high-prior tokens. Newline (`<n>`, id 4) is one of the most frequent tokens in training data, so it dominates the corrupted distribution.
+**Why newlines, not random garble**: the hidden states are a real forward pass minus cross-track averaging — each track holds a valid but incomplete representation (1/8th of capacity). The softmax over this partial signal concentrates on high-prior tokens, and newline (`<n>`, id 4) is one of the most frequent tokens in training data, so it dominates the corrupted distribution.
 
 ### The fix
 
@@ -111,15 +111,15 @@ IDs: [150000, 145022, 1050, 4, 330, 8440, 1046, 262, ...]
 
 The 12 differing token IDs are small boundary shifts — `▁A` (id 145053) vs `A` (id 330) — not wholesale corruption. HuggingFace splits on special tokens (`<turn_start>`, `<turn_end>`) before calling SentencePiece, so those tokens land at the correct IDs and the model still recognizes chat structure. Only content tokens between boundaries differ.
 
-The failure mode depends on how deeply the corruption penetrates the model's learned patterns:
+The failure mode depends on how deeply the corruption penetrates learned patterns:
 
-**Echo** — instruction-following heads don't fire, so the model falls back to co-occurrence statistics. The model learned to respond to `▁A conversation` (id 145053), not `A conversation` (id 330). That pattern mismatch prevents the instruction-following heads from activating. With no instruction signal, the highest-probability next tokens are the ones that most frequently followed similar partial sequences in training — which are the prompt tokens themselves.
+**Echo** (Bug 2) — structure tokens are intact so the model partially matches trained patterns, but the boundary shift (`▁A` id 145053 → `A` id 330) prevents instruction-following heads from activating. With no instruction signal, the highest-probability next tokens are the prompt tokens themselves — co-occurrence fallback.
 
-**Garble** — no pattern match at all, so the distribution has no strong mode. This requires content tokens to be entirely unrecognizable (e.g., random IDs), not just boundary-shifted. The model produces syntactically plausible but semantically incoherent text because it can't anchor to the prompt's co-occurrence signal either.
+**Garble** — content tokens are entirely unrecognizable (e.g., random IDs), not just boundary-shifted, so the distribution has no strong mode. The model produces syntactically plausible but semantically incoherent text because it can't anchor to any co-occurrence signal.
 
-**Distribution collapse** (newlines, as in Bug 1) — hidden states are numerically corrupted, not just token IDs wrong. With no coherent signal in the activations, the output distribution concentrates on the highest-prior token in the training corpus: `<n>` (id 4).
+**Distribution collapse** (newlines, as in Bug 1) — hidden states are numerically corrupted, not just token IDs wrong, so the output distribution concentrates on the highest-prior token in the training corpus: `<n>` (id 4).
 
-Bug 2 produces echo, not garble or collapse, because the damage is local — structure tokens are intact, only content-boundary tokens shift — so the model partially matches trained patterns but fails to enter instruction-following mode.
+Bug 2 produces echo rather than garble or collapse because the damage is local — structure tokens are intact, only content-boundary tokens shift — so the model partially matches trained patterns but fails to enter instruction-following mode.
 
 ### The fix
 
@@ -171,9 +171,7 @@ Serving:   [150000,      1050,   4,  145053, ...]
 
 ### Why the position shift breaks output
 
-Each token's input embedding is the sum of its content embedding and its **position embedding** — both fixed at training time. The −1 shift means every token activates the wrong position embedding: `<turn_start>` gets the BOS position embedding, `system` gets the `<turn_start>` position embedding, and so on across all N tokens.
-
-This breaks role-detection because the relevant attention heads learned a position-specific trigger: fire when `<turn_start>` (id 150000) appears at position 1. With the shift, `<turn_start>` arrives at position 0 — the slot the model associates with BOS, a sequence-start anchor with no role-switching semantics. The heads never fire, so the model never enters instruction-following mode.
+Each token's input embedding is the sum of its content embedding and its **position embedding** — both fixed at training time. The −1 shift means every token activates the wrong position embedding: `<turn_start>` gets the BOS position embedding, `system` gets the `<turn_start>` position embedding, and so on. This breaks role-detection because the relevant attention heads learned to fire when `<turn_start>` (id 150000) appears at position 1; with the shift it arrives at position 0 — the slot the model associates with BOS, a sequence-start anchor with no role-switching semantics — so the heads never fire and the model never enters instruction-following mode.
 
 | Position | Training sees | Serving sees |
 |----------|---------------|--------------|
