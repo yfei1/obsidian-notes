@@ -189,12 +189,18 @@ The GPU executes a fixed kernel — it cannot inspect sequence state, manage mem
 
 ### Tensor shape differences: prefill vs decode
 
-**Decode (`prepare_decode`)**: Every sequence generates exactly 1 token, so `input_ids`, `positions`, `context_lens`, and `slot_mapping` are all 1D arrays of length `batch_size`. The `block_table` is heavily used to fetch historical KV cache.
+**Decode (`prepare_decode`)** — example: batch_size=2, SeqA at 10 tokens, SeqB at 500 tokens, block_size=16:
+- `input_ids`: `[int64; 2]` — one new token ID per sequence
+- `positions`: `[int64; 2]` — absolute positions `[10, 500]`
+- `context_lens`: `[int32; 2]` — `[10, 500]` (true fill depth per sequence)
+- `slot_mapping`: `[int64; 2]` — pre-computed write addresses `[block_id*16+offset, ...]`
+- `block_table`: `[int32; 2 × 32]` — SeqA uses 1 block (padded to 32 with `-1`); SeqB uses 32 blocks <!-- source: ceil(500/16)=32 -->
 
-**Prefill (`prepare_prefill`)**: Sequences have wildly different lengths (e.g., A=10, B=500), so a rectangular batch is impossible.
-- `input_ids` and `positions` are flattened into a single 1D array: `[A1, A2...A10, B1, B2...B500]`.
-- `context_lens` and `block_table` are not needed. During prefill, all Q and K tokens are being computed in the current step — the attention math runs entirely in-place in SRAM without reading historical KV from HBM. Providing block maps to historical storage would be pointless.
-- Instead, the scheduler passes `cu_seqlens` (cumulative sequence lengths), e.g., `[0, 10, 510]`. The `flash_attn_varlen_func` kernel uses these boundaries to separate sequences within the flattened array.
+**Prefill (`prepare_prefill`)** — same two sequences, first step:
+- `input_ids`: `[int64; 510]` — flattened `[A1…A10, B1…B500]`
+- `positions`: `[int64; 510]` — `[0…9, 0…499]`
+- `cu_seqlens`: `[int32; 3]` — `[0, 10, 510]`; `flash_attn_varlen_func` uses these boundaries to separate sequences within the flat array
+- `context_lens`, `block_table`: **absent** — prefill computes all Q and K in the current step entirely in SRAM; no historical KV to fetch from HBM
 
 ### Prefix caching (exception to the above)
 
