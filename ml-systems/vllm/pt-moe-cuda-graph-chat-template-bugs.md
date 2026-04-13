@@ -109,18 +109,17 @@ IDs: [150000, 145022, 1050, 4, 330, 8440, 1046, 262, ...]
 
 ### Why the model echoes (not garbles)
 
-The 12 differing token IDs are small boundary shifts — `▁A` (id 145053) vs `A` (id 330) — not wholesale corruption. The special tokens (`<turn_start>`, `<turn_end>`, role names) land correctly because HuggingFace splits on them before calling SentencePiece, so the model still recognizes chat structure. The damage is only to content tokens between the boundaries.
+The 12 differing token IDs are small boundary shifts — `▁A` (id 145053) vs `A` (id 330) — not wholesale corruption. HuggingFace splits on special tokens (`<turn_start>`, `<turn_end>`) before calling SentencePiece, so those tokens land at the correct IDs and the model still recognizes chat structure. Only content tokens between boundaries differ.
 
-**Echo** (the model repeats the prompt back) occurs because instruction-following requires content tokens to match the exact trained patterns — the model learned to respond to `▁A conversation` (id 145053), not `A conversation` (id 330). With those patterns broken, the instruction-following heads don't fire. The next-token distribution then falls back to co-occurrence statistics: tokens that appeared immediately after similar partial sequences during training, which are the prompt tokens themselves.
+The failure mode depends on how deeply the corruption penetrates the model's learned patterns:
 
-**Garble** (incoherent text) requires the content tokens to be unrecognizable as any trained pattern — e.g., random IDs. With no pattern match at all, the distribution has no strong mode and the model produces syntactically plausible but semantically incoherent text. This is a stronger failure than echo because the model can't even anchor to the prompt's co-occurrence signal.
+**Echo** — instruction-following heads don't fire, so the model falls back to co-occurrence statistics. The model learned to respond to `▁A conversation` (id 145053), not `A conversation` (id 330). That pattern mismatch prevents the instruction-following heads from activating. With no instruction signal, the highest-probability next tokens are the ones that most frequently followed similar partial sequences in training — which are the prompt tokens themselves.
 
-**Distribution collapse** (newlines, as in Bug 1) requires the hidden states themselves to be numerically corrupted — not wrong token IDs but wrong intermediate activations. With no coherent signal anywhere in the hidden state, the distribution concentrates on the highest-prior token in the training corpus, which is `<n>` (id 4).
+**Garble** — no pattern match at all, so the distribution has no strong mode. This requires content tokens to be entirely unrecognizable (e.g., random IDs), not just boundary-shifted. The model produces syntactically plausible but semantically incoherent text because it can't anchor to the prompt's co-occurrence signal either.
 
-The failure mode scales with the depth of corruption:
-- Boundary-shifted IDs → echo (structure intact, content patterns broken)
-- Unrecognizable IDs → garble (no pattern match, distribution diffuse)
-- Corrupted hidden states → distribution collapse (newlines)
+**Distribution collapse** (newlines, as in Bug 1) — hidden states are numerically corrupted, not just token IDs wrong. With no coherent signal in the activations, the output distribution concentrates on the highest-prior token in the training corpus: `<n>` (id 4).
+
+Bug 2 produces echo, not garble or collapse, because the damage is local — structure tokens are intact, only content-boundary tokens shift — so the model partially matches trained patterns but fails to enter instruction-following mode.
 
 ### The fix
 
