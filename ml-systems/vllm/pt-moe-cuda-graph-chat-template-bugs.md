@@ -17,7 +17,7 @@ Three bugs prevented PT-MoE 150B from working correctly with CUDA graphs and cha
 
 ### The problem
 
-PT-MoE uses a cross-track `_PT.all_reduce()` in `PTSegment.forward()` (`afm_pt_moe.py:393`). During CUDA graph capture, all NCCL collectives must run on the capture stream. vLLM's `parallel_state.graph_capture()` only wraps TP and PP groups — not `_PT`.
+PT-MoE uses a cross-track `_PT.all_reduce()` in `PTSegment.forward()` (`afm_pt_moe.py:393`). During CUDA graph capture, all NCCL collectives must run on the capture stream. vLLM's `parallel_state.graph_capture()` only wraps TP and PP groups (tensor-parallel and pipeline-parallel communication groups) — not `_PT`.
 
 The plugin fixes this with `_patch_graph_capture_for_pt()` (`_vllm_plugin.py:152-204`), which monkey-patches `ps.graph_capture` to additionally nest `_PT.graph_capture(context)`.
 
