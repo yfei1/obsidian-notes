@@ -12,14 +12,14 @@ A single custom Triton kernel (Triton: a Python-embedded GPU kernel language) `f
 
 ## Research Notes
 
-Deep research session (2026-03-27) investigating kernel fusion opportunities for the 4-norm residual pattern in `afm_pt_moe.py`. Each sub-note depends on the one before it — the dependency order below is the reading order:
+Deep research session (2026-03-27) investigating kernel fusion opportunities for the 4-norm residual pattern in `afm_pt_moe.py`. The six sub-notes form a strict dependency chain: each builds on the kernel interface, cost model, or framing established by the notes before it. Read in order.
 
-1. **[[ml-systems/gpu/pt-moe-4norm-postnorm-semantic-mismatch]]** — Start here. Establishes the root constraint: why the existing `fused_add_rms_norm` kernel cannot be reused (Post-LN vs Pre-LN semantics, sequential dependency chain), and derives the custom kernel design with HBM traffic analysis. Every downstream note assumes this mismatch and the resulting kernel interface are understood.
-2. **[[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]]** — Read after note 1 because the savings figures only make sense once the kernel design is fixed. Covers the HBM/SRAM cost model, the 6→4→2 kernel reduction, and a Llama vs PT-MoE norm-order comparison. The resulting cost model is what justifies the integration effort in note 4.
-3. **[[ml-systems/gpu/pt-moe-decode-kernel-launch-analysis]]** — Read after note 2 because the decode vs prefill ROI comparison requires the cost model from note 2. Kernel launch overhead dominates during single-token decode, making fusion ROI higher there than arithmetic intensity alone predicts — this is why the integration targets decode paths first.
-4. **[[ml-systems/gpu/pt-moe-4norm-fused-kernel-integration]]** — Read after notes 1–3 because the integration decisions (CustomOp tier selection, torch.compile interaction, hybrid implementation) only make sense given the kernel interface from note 1 and the ROI justification from notes 2–3. Covers the full integration path and action plan.
-5. **[[ml-systems/gpu/pt-moe-4norm-tp-fusion-opportunity]]** — Read after note 4 because TP fusion extends the CustomOp framing established there. Covers AR+norm fusion, norm locality under tensor parallelism, redundant norm execution across ranks, and Phase 1 vs Phase 2 recommendations.
-6. **[[ml-systems/gpu/pt-moe-ar-norm-fusion-implementation]]** — Read after note 5 because it implements the AR+norm fusion opportunity identified there. Covers the TP sync boundary design, FlashInfer-style kernel structure, and implementation plan.
+1. **[[ml-systems/gpu/pt-moe-4norm-postnorm-semantic-mismatch]]** — Root constraint. Why `fused_add_rms_norm` cannot be reused (Post-LN vs Pre-LN semantics, sequential dependency chain). Derives the custom kernel design and HBM traffic analysis. All downstream notes assume this kernel interface.
+2. **[[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]]** — Cost model. HBM/SRAM pass counts, the 6→4→2 kernel reduction, Llama vs PT-MoE norm-order comparison. Savings figures require the fixed kernel design from note 1; the cost model justifies the integration effort in note 4.
+3. **[[ml-systems/gpu/pt-moe-decode-kernel-launch-analysis]]** — ROI breakdown. Kernel launch overhead dominates during single-token decode, making fusion ROI higher there than arithmetic intensity alone predicts. The decode vs prefill comparison requires the cost model from note 2.
+4. **[[ml-systems/gpu/pt-moe-4norm-fused-kernel-integration]]** — Integration path. CustomOp tier selection, torch.compile interaction, hybrid implementation, and action plan. Decisions here require the kernel interface from note 1 and ROI framing from notes 2–3.
+5. **[[ml-systems/gpu/pt-moe-4norm-tp-fusion-opportunity]]** — TP extension. AR+norm fusion, norm locality under tensor parallelism, redundant norm execution across ranks, Phase 1 vs Phase 2 recommendations. Extends the CustomOp framing from note 4.
+6. **[[ml-systems/gpu/pt-moe-ar-norm-fusion-implementation]]** — AR+norm implementation. TP sync boundary design, FlashInfer-style kernel structure, and implementation plan for the opportunity identified in note 5.
 
 ---
 
