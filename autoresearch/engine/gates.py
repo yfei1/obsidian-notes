@@ -14,6 +14,7 @@ from shared import (
     SHRINKAGE_THRESHOLD, CAUSAL_LOSS_THRESHOLD, BULLET_LOSS_THRESHOLD,
     MAX_NOTE_LINES, NET_ZERO_THRESHOLD,
     has_required_sections, OPTIONAL_SECTIONS, SECTION_EQUIVALENCES,
+    extract_wikilinks,
 )
 
 
@@ -188,9 +189,13 @@ def _gate_net_zero_length(original: str, new_content: str, result: GateResult,
     if orig_lines <= NET_ZERO_THRESHOLD:
         return
     new_lines = len(new_content.split("\n"))
-    # Allow moderate growth (5 lines or 3%, whichever is larger) for clarifications.
-    # Line limit gate (450) still caps absolute size; GRPO judges penalize bloat.
-    tolerance = max(5, int(orig_lines * 0.03))
+    # Clarify gets extra tolerance: bridging sentences and inline definitions
+    # are legitimate growth that the judges reward.
+    if strategy == "clarify":
+        tolerance = max(10, int(orig_lines * 0.05))
+    else:
+        # Allow moderate growth (5 lines or 3%, whichever is larger) for other strategies.
+        tolerance = max(5, int(orig_lines * 0.03))
     if new_lines > orig_lines + tolerance:
         result.fail(
             f"Net-zero violation: note is {orig_lines} lines (>{NET_ZERO_THRESHOLD}), "
@@ -203,13 +208,12 @@ def _gate_broken_wikilinks(original: str, new_content: str, all_notes: list[str]
     """New edit must not introduce broken wikilinks that didn't exist before.
 
     Only checks prose — ignores code blocks where [[42]] is a list literal.
+    Uses extract_wikilinks() which filters false positives and strips anchors.
     """
-    link_re = re.compile(r'\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]')
-
     orig_prose = _strip_code_blocks(original)
     new_prose = _strip_code_blocks(new_content)
-    orig_links = set(link_re.findall(orig_prose))
-    new_links = set(link_re.findall(new_prose))
+    orig_links = set(extract_wikilinks(orig_prose))
+    new_links = set(extract_wikilinks(new_prose))
     added_links = new_links - orig_links
 
     if not added_links:
@@ -499,12 +503,12 @@ def _gate_wikilink_count(original: str, new_content: str, result: GateResult) ->
 
     Counts unique targets so removing a duplicate occurrence of [[note-a]] doesn't
     fire — that's valid cleanup, not information loss.
+    Uses extract_wikilinks() which filters false positives (array notation, ranges).
     """
-    link_re = re.compile(r'\[\[([^\]]+)\]\]')
     orig_prose = _strip_code_blocks(original)
     new_prose = _strip_code_blocks(new_content)
-    orig_unique = len(set(link_re.findall(orig_prose)))
-    new_unique = len(set(link_re.findall(new_prose)))
+    orig_unique = len(set(extract_wikilinks(orig_prose)))
+    new_unique = len(set(extract_wikilinks(new_prose)))
     if orig_unique > 2 and new_unique < orig_unique:
         result.fail(f"Wikilink count regression: {orig_unique} → {new_unique} unique targets")
 
@@ -566,9 +570,9 @@ def check_all_gates(original_content: str, new_content: str,
     # Restructure and densify may rename/merge sections for better flow.
     # Section preservation is redundant when content gates (shrinkage, causal,
     # bullets, code blocks) already catch actual information loss.
-    skip_section_preservation = is_cross_file or strategy in ("restructure", "densify", "normalize", "condense")
+    skip_section_preservation = is_cross_file or strategy in ("restructure", "densify", "normalize", "condense", "merge_sections")
 
-    if not is_cross_file and strategy != "condense":
+    if not is_cross_file and strategy not in ("condense", "compress", "merge_sections"):
         _gate_shrinkage(original_content, new_content, result)
         _gate_net_zero_length(original_content, new_content, result, strategy=strategy)
     if not skip_section_preservation:
@@ -603,20 +607,14 @@ def check_all_gates(original_content: str, new_content: str,
         # Other violations (broken wikilinks, removed sections, etc.) keep exact matching
         # because they reference specific names that matter.
         def _vtype(v: str) -> str:
-            import re as _re
-            return _re.sub(r'(Line limit exceeded):.*', r'\1', v)
+            return re.sub(r'(Line limit exceeded):.*', r'\1', v)
 
         baseline_types = {_vtype(b) for b in baseline_violations}
         regressions = {v for v in new_violations if _vtype(v) not in baseline_types}
 
-        if not regressions:
-            # All violations are the same types as baseline — edit didn't introduce
-            # new categories of problems (line count may have shifted, but was already broken)
-            result = GateResult()
-        else:
-            # Only report genuine regressions (new violation categories)
-            result = GateResult()
-            for v in regressions:
-                result.fail(v)
+        # Replace result with only genuine regressions (if any)
+        result = GateResult()
+        for v in regressions:
+            result.fail(v)
 
     return result
