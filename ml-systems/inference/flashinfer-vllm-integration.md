@@ -187,6 +187,8 @@ Gated behind `VLLM_USE_FLASHINFER_SAMPLER=1` (opt-in, line 39).
 
 File: `vllm/distributed/device_communicators/flashinfer_all_reduce.py`
 
+The bottleneck: after a column-parallel linear layer, each GPU holds a partial sum that must be summed across all GPUs before the next layer runs. Naively, this requires two separate kernel launches — one for the all-reduce, one for the post-all-reduce RMSNorm (Root Mean Square Layer Normalization — a post-LayerNorm variant that normalizes by RMS instead of mean+variance) — plus two full reads of the output tensor from HBM (High Bandwidth Memory — the GPU's main DRAM). FlashInfer fuses these into one kernel, halving the HBM reads for the normalization step.
+
 ```python
 # Line 18-21: imports MNNVL communication backend
 from flashinfer.comm.mnnvl import TorchDistBackend
@@ -201,9 +203,9 @@ flashinfer_comm.allreduce_fusion(
 )
 ```
 
-FlashInfer's all-reduce supports fusion patterns: standalone all-reduce, all-reduce + RMSNorm (Root Mean Square Layer Normalization — a post-LayerNorm variant that normalizes by RMS instead of mean+variance), and quantized variants (FP8/FP4). The workspace is pre-allocated once (line 67-75) and reused across calls.
+FlashInfer's all-reduce supports fusion patterns: standalone all-reduce, all-reduce + RMSNorm, and quantized variants (FP8/FP4). The workspace is pre-allocated once (line 67-75) and reused across calls — because allocating device memory mid-forward-pass would force a CUDA synchronization point, stalling the pipeline.
 
-**Concrete tensor at this point** (Llama-3-8B, tensor parallelism across 2 GPUs, 4 decode tokens): each GPU holds a `[4, 4096]` FP16 partial sum from its column-parallel linear shard. The all-reduce aggregates across 2 GPUs to produce the full `[4, 4096]` hidden state.
+**Concrete tensor at this point** (Llama-3-8B, tensor parallelism — where model weights are split across GPUs so each GPU computes a partial result — across 2 GPUs, 4 decode tokens): each GPU holds a `[4, 4096]` FP16 partial sum from its column-parallel linear shard. The all-reduce aggregates across 2 GPUs to produce the full `[4, 4096]` hidden state.
 
 ```python
 # verify: all-reduce tensor size
