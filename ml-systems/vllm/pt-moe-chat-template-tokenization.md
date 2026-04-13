@@ -233,6 +233,24 @@ encode(text): catches sync path (_tokenize_prompt calls tokenizer.encode(text))
   else: fall through to super().encode
 ```
 
+```
+_encode_chat(text) — shared helper for both entry points:
+  replace all \n → <n> (so SP sees the user-defined symbol, not raw newline)
+  run raw SentencePiece encode on the FULL string as one unit (no HF splitting)
+  if first token is ▁ (id 145022): strip it (SP word-boundary artifact at string start)
+  prepend BOS (id 1); return ids
+
+__call__(text) — intercepts async path (AsyncMicrobatchTokenizer calls tokenizer(text)):
+  if single string containing "<turn_start>": call _encode_chat, wrap result in
+    BatchEncoding dict {"input_ids": ids, "attention_mask": [1]*len(ids)}
+    (wrapper needs dict to slice per-request results across batched N prompts)
+  else: fall through to super().__call__ (completions, non-chat, batch mode)
+
+encode(text) — intercepts sync path (_tokenize_prompt calls tokenizer.encode(text)):
+  if string containing "<turn_start>": call _encode_chat, return list[int]
+  else: fall through to super().encode (completions, non-chat)
+```
+
 ```python
 def _encode_chat(self, text):
     """Raw SP encode matching training. Shared by __call__ and encode."""
