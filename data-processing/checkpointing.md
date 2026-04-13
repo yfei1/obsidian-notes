@@ -56,8 +56,8 @@ Driver held the entire DAG + task assignments in memory
 
 ### The `checkpoint()` escape hatch
 ```python
-rdd_expensive = source.map(gpu_inference)  # takes 2 hours
-rdd_expensive.checkpoint()                  # force-writes ENTIRE RDD to HDFS
+rdd_expensive = source.map(gpu_inference)  # 1M videos × 768-dim → 2.86 GB RDD
+rdd_expensive.checkpoint()                  # force-writes all 2.86 GB to HDFS
 rdd_final = rdd_expensive.map(cheap_fn)     # if this crashes, reads from checkpoint
 ```
 - Opt-in, not automatic
@@ -115,7 +115,7 @@ Unaligned checkpoint (Flink 1.11+):
   Reduce-0 receives BARRIER from Map-0 first.
   Instead of blocking, it snapshots the in-flight records
   from Map-1 and Map-2 that arrived before their barriers.
-  → no stalling, but snapshot is larger (includes in-flight data)
+  → no stalling, but snapshot grows by up to 2 × 29.3 MB (one morsel per blocked channel)
 ```
 
 ### Key constraint
@@ -177,7 +177,7 @@ Shuffle breaks barrier-based checkpointing: once records are repartitioned acros
 Some aggregations (GroupBy, global average) require seeing all data — traditionally a shuffle. Column Link avoids the shuffle entirely by writing partial results to durable storage, then reading them back. Because the intermediate write is durable, a crash at any point just resumes from the last written column.
 
 **Running example**: 1M videos, 768-dim float32 embeddings — brightness column: 1M × 4 B = **3.81 MB**; embedding column: 1M × 768 × 4 B = **2.86 GB**; morsel (10k rows): 10k × 768 × 4 B = **29.3 MB** per morsel, so 100 morsels cover the full dataset.
-<!-- verify: assert 1_000_000 * 4 / 1024**2 - 3.81 < 0.01 and abs(1_000_000 * 768 * 4 / 1024**3 - 2.86) < 0.01 and abs(10_000 * 768 * 4 / 1024**2 - 29.3) < 0.1 -->  
+<!-- verify: assert abs(1_000_000 * 4 / 1024**2 - 3.81) < 0.01 and abs(1_000_000 * 768 * 4 / 1024**3 - 2.86) < 0.01 and abs(10_000 * 768 * 4 / 1024**2 - 29.3) < 0.1 -->
 **Goal**: compute per-video quality score that requires a global average.
 
 ```
@@ -229,6 +229,7 @@ A design for morsel-driven engines, where map pipelines dominate. A **morsel** i
 ```
 1. Coordinator splits source into morsels (batches of rows):
    morsel_0 … morsel_99  (10k videos each; 29.3 MB/morsel × 100 morsels = 2.86 GB total)
+   <!-- verify: assert abs(10_000 * 768 * 4 / 1024**2 * 100 / 1024 - 2.86) < 0.01 -->
 
 2. Worker requests work:
    → Coordinator: "Here's morsel_7, you have 5 min lease"
