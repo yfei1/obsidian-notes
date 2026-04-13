@@ -142,7 +142,7 @@ model(input_ids, positions)
       return output
 ```
 
-Step (1) — dynamic input marking (`decorators.py:381-418`) — runs before tracing because Dynamo **specializes** by default: it bakes the first observed value of each tensor dimension into the compiled graph as a constant. Without marking dim 0 as dynamic, a model compiled on batch size 8 recompiles from scratch on batch size 1, then again on batch size 4, defeating the purpose. Marking dim 0 tells Dynamo to emit a symbolic shape instead of a constant, so one compiled graph handles all batch sizes.
+Step (1) — dynamic input marking (`decorators.py:381-418`) — runs before tracing because Dynamo **specializes** by default: it bakes the first observed shape into the compiled graph as a constant. E.g., LLaMA-7B `forward(hidden: [8, 4096])` compiles a graph with `8` hardcoded — a call with `hidden: [1, 4096]` misses the cache and triggers a full retrace (Dynamo + Inductor again). Marking dim 0 as dynamic emits a symbolic `s0` instead of `8`, so `[1, 4096]`, `[4, 4096]`, and `[8, 4096]` all hit the same compiled graph.
 
 Step (2) runs once and is expensive (30–120s depending on model size) because it runs two sequential phases: **Dynamo** traces the Python `forward()` into a graph IR, then **Inductor** lowers that IR to fused CUDA kernels. Both phases run once; subsequent calls hit the `self.compiled` branch directly, paying only the cost of the fused kernels.
 
