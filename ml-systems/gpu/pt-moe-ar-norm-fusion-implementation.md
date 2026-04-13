@@ -65,6 +65,45 @@ all_reduce -> rms_norm(x) -> add(+residual) -> rms_norm(sum)
 
 There is no `kARRMSNormAddRMSNorm` code in FlashInfer — because no hand-written kernel for this sequence exists — so `AllReduceFusionPass` cannot match it, and the four ops remain separate HBM round-trips. A custom op is required.
 
+## Llama vs PT-MoE: Why the Pattern Differs
+
+**Llama** (`llama.py:322-333`): ADD → NORM (one norm). Residual = un-normed sum.
+
+```python
+hidden_states, residual = self.post_attention_layernorm(hidden_states, residual)
+# fused_add_rms_norm: residual = attn_out + old_residual; h = norm(residual)
+```
+Fusion cost breakdown (kernel launches saved, HBM round-trips eliminated, decode vs prefill): [[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]].
+
+**PT-MoE** (`afm_pt_moe.py:318-326`): NORM → ADD → NORM (two norms). Residual = normed sum.
+
+```python
+hidden_states = self.attn_pre_residual_norm(hidden_states)    # NORM the attn output
+hidden_states = hidden_states + residual                       # ADD residual
+residual = hidden_states = self.attn_post_norm(hidden_states) # NORM again
+```
+
+```
+              After AR output
+                   |
+      +------------+------------+
+      |                         |
+   LLAMA                    PT-MoE
+      |                         |
+ ADD(x + residual)        NORM1(x)           <- PT-MoE norms BEFORE add
+      |                         |
+ NORM(sum)                ADD(normed + residual)
+      |                         |
+ +----+----+              NORM2(sum)          <- PT-MoE norms AFTER add too
+ |         |                    |
+ to MLP  residual          +----+----+
+       (un-normed)         |         |
+                         to MLP   residual
+                                (NORMED)
+```
+
+**Key difference**: Llama applies one norm to the sum (Pre-LN). PT-MoE applies one norm before the add AND one after (sandwich/Post-LN). Residual semantics are fundamentally different — Llama's residual accumulates raw values, PT-MoE's is always normalized. This is why existing `fused_add_rms_norm` doesn't work for PT-MoE's Post-LN variant — see [[ml-systems/gpu/pt-moe-4norm-postnorm-semantic-mismatch]].
+
 ## Custom Fused Op Design
 
 The invariant the kernel must maintain: once the all-reduce result lands in SRAM, it must not touch HBM again until after the final norm. One kernel covers all four steps atomically:
