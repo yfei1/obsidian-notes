@@ -128,7 +128,7 @@ If the outer `forward()` is trivial (just calls inner model + lm_head), both pla
 
 ## The Runtime Compilation Path
 
-On first `__call__` after construction (`decorators.py:434-604`), the decorated class runs a three-branch dispatch:
+The decorated `__call__` must handle three states: compilation disabled, first call (compile hasn't run yet), and subsequent calls (compiled graph cached). Each state has a different cost profile, so the dispatch is explicit rather than implicit.
 
 ```
 model(input_ids, positions)
@@ -142,9 +142,9 @@ model(input_ids, positions)
       return output
 ```
 
-Step (1) — dynamic input marking (`decorators.py:381-418`) — runs before tracing because Dynamo **specializes** by default: it bakes the first observed shape into the compiled graph as a constant. E.g., LLaMA-7B `forward(hidden: [8, 4096])` compiles a graph with `8` hardcoded — a call with `hidden: [1, 4096]` misses the cache and triggers a full retrace (Dynamo + Inductor again). Marking dim 0 as dynamic emits a symbolic `s0` instead of `8`, so `[1, 4096]`, `[4, 4096]`, and `[8, 4096]` all hit the same compiled graph.
+**Step (1) — dynamic input marking** (`decorators.py:381-418`) runs *before* tracing because Dynamo specializes by default: it bakes the first observed shape into the compiled graph as a constant. Without marking, LLaMA-7B `forward(hidden: [8, 4096])` produces a graph with `8` hardcoded — a call with `hidden: [1, 4096]` misses the cache and triggers a full retrace (Dynamo + Inductor again, another 30–120s). Marking dim 0 as dynamic emits a symbolic `s0` instead, so `[1, 4096]`, `[4, 4096]`, and `[8, 4096]` all hit the same compiled graph.
 
-Step (2) runs once and is expensive (30–120s depending on model size) because it runs two sequential phases: **Dynamo** traces the Python `forward()` into a graph IR, then **Inductor** lowers that IR to fused CUDA kernels. Both phases run once; subsequent calls hit the `self.compiled` branch directly, paying only the cost of the fused kernels.
+**Step (2) — compilation** runs once and is expensive (30–120s depending on model size) because it runs two sequential phases: **Dynamo** traces the Python `forward()` into a graph IR, then **Inductor** lowers that IR to fused CUDA kernels. The cost is paid once during warmup before vLLM serves traffic. Subsequent calls hit the `self.compiled` branch, paying only the cost of the fused kernels — the dispatch overhead is a single Python branch check.
 
 ---
 
