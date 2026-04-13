@@ -2,6 +2,10 @@
 
 #ml-systems #pt-moe #kernel-fusion #tensor-parallelism #allreduce #decode
 
+**Scope**: Implementation design for fusing PT-MoE's 4-norm Post-LN sequence with the all-reduce sync boundary in vLLM. Covers why existing FlashInfer patterns don't match, the custom op design, and a two-phase implementation plan.
+
+**Prerequisites**: [[ml-systems/distributed/tensor-parallelism]] (TP all-reduce), [[ml-systems/gpu/gpu-memory-hierarchy]] (HBM/SRAM hierarchy), [[ml-systems/gpu/pt-moe-4norm-postnorm-semantic-mismatch]] (Post-LN semantics vs Llama Pre-LN).
+
 ## TL;DR
 
 After `o_proj`'s all-reduce, all TP ranks hold identical hidden states — the 4-norm Post-LN (Post-Layer Normalization: norm applied after the residual add, not before) ops require zero additional TP sync. AR+norm fusion (FlashInfer-style — FlashInfer is a GPU kernel library for LLM inference that provides fused attention and communication primitives) keeps the all-reduce result in SRAM through all four norm/add ops, writing only the final output to HBM. PT-MoE's Post-LN pattern (`rms_norm → add → rms_norm`) has no matching FlashInfer pattern code, so a custom op + Inductor pattern matcher (a PyTorch compilation pass that recognizes specific op sequences in the compute graph and replaces them with a fused implementation) is required. Phase 1 (bare Triton `fused_add_postnorm`) takes days and captures most of the gain for single-GPU-per-track configs; Phase 2 (full AR+norm fusion) takes weeks and only pays off when within-track TP ≥ 2.
