@@ -179,13 +179,13 @@ self.block_manager.deallocate(seq)   # SeqA finished: blocks [42, 87] → free l
 
 ### The 5 core tensors per forward pass
 
-The GPU is essentially a blind, hyper-optimized calculator. It does not manage memory or track sequences. Every step, the CPU scheduler pre-calculates and sends exactly what to compute, where to read, and where to write:
+The GPU executes a fixed kernel — it cannot inspect sequence state, manage memory, or resolve logical-to-physical block mappings at runtime. The CPU scheduler must pre-compute everything the kernel needs and hand it over as flat tensors before each forward pass. Five tensors carry all the information:
 
-1. **`input_ids`**: The token IDs to process. Prefill: entire prompt. Decode: 1 token per sequence.
-2. **`positions`**: Absolute sequence index of each token, required for Rotary Positional Embeddings (RoPE). RoPE rotates Q and K vectors based on position distance — the kernel needs this array to know the rotation angle per token.
-3. **`block_tables`**: 2D array mapping each sequence to its physical KV cache blocks (e.g., `[42, 87, 103]`). Padded with `-1` to align ragged arrays into the rectangular grid required by CUDA kernels.
-4. **`context_lens`**: 1D array with the true token count per sequence. The last block is usually partially empty, so `context_lens` prevents the kernel from reading garbage past the actual length.
-5. **`slot_mapping`**: 1D array of pre-calculated physical write addresses. After computing a new K/V pair, the GPU writes directly to this address — no modulo math needed in the hot loop.
+1. **`input_ids`**: Token IDs to process. Prefill: the full prompt. Decode: exactly 1 token per sequence — because decode advances one position at a time.
+2. **`positions`**: Absolute sequence index per token, required because RoPE (Rotary Positional Embeddings) rotates Q and K vectors by an angle that depends on position distance. Without this array, the kernel cannot compute the correct rotation per token.
+3. **`block_tables`**: 2D array mapping each sequence to its physical KV cache block IDs (e.g., `[42, 87, 103]`). Ragged sequences are padded with `-1` to form the rectangular grid CUDA kernels require. Uses `int32` rather than `int16` because block IDs are memory pointer offsets — `int16` overflows beyond 32,767 blocks on large-VRAM systems.
+4. **`context_lens`**: 1D array of true token counts per sequence. The last KV block is usually partially filled, so without `context_lens` the kernel reads garbage from the unfilled slots.
+5. **`slot_mapping`**: 1D array of pre-calculated physical write addresses for the new K/V pair each token produces. The CPU computes `block_id * block_size + offset` once per step so the GPU writes directly to the target address — no modulo arithmetic in the hot kernel loop.
 
 ### Tensor shape differences: prefill vs decode
 
