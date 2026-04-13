@@ -218,30 +218,33 @@ nano-vLLM uses **FIFO** scheduling with **LIFO eviction**:
 
 ## Tensor Parallelism via Multiprocessing
 
+Tensor parallelism requires multiple GPU workers executing the same forward pass in lockstep. The CPU must dispatch commands to each worker and wait for all to finish before sampling — because the all-reduce across shards must complete before logits are valid.
+
+nano-vLLM uses `torch.multiprocessing` (not stdlib `multiprocessing`) because CUDA tensors cannot be serialized through OS pipes — `torch.multiprocessing` shares them via **zero-copy shared memory**, avoiding a full HBM → CPU → HBM round-trip per step.
+
 ```python
 # LLMEngine.__init__():
-ctx = mp.get_context("spawn")  # "spawn" required for CUDA (not "fork")
+ctx = mp.get_context("spawn")  # "spawn" forks a clean process — required for CUDA
+                                # "fork" copies parent's CUDA context, causing deadlocks
 for i in range(1, config.tensor_parallel_size):
     event = ctx.Event()        # Per-worker synchronization flag
     process = ctx.Process(target=ModelRunner, args=(config, i, event))
-    process.start()
+    process.start()            # ModelRunner.__init__ → enters self.loop(), blocks on event
 ```
 
-Key details:
-- Uses `torch.multiprocessing` (not native `multiprocessing`) for **zero-copy tensor sharing** via shared memory.
-- `ModelRunner` is a class, not a process. Passing it as `target=` calls its `__init__`, which enters an infinite `self.loop()` waiting for commands.
-- Main process (Rank 0) communicates via SharedMemory — writes commands, calls `event.set()` to wake workers.
-- Workers call `event.wait()` → read command → execute → `event.clear()` → wait again.
+Rank 0 (main process) owns the scheduler. Workers (Rank 1+) own their GPU shards and do nothing except respond to commands. The synchronization model is a tight command/execute loop — because the scheduler cannot issue step N+1 until all workers finish step N:
 
 ```python
 # ModelRunner.loop() — what worker processes do forever:
 def loop(self):
     while True:
         method_name, args = self.read_shm()  # blocks on event.wait()
-        self.call(method_name, *args)
+        self.call(method_name, *args)         # execute: forward pass, load weights, etc.
         if method_name == "exit":
             break                             # only way out
 ```
+
+Rank 0 writes the command to SharedMemory, then calls `event.set()` to wake the worker. The worker executes, calls `event.clear()`, and blocks again. Rank 0 polls `event.wait()` before proceeding — this is the synchronization barrier that serializes steps.
 
 ---
 
