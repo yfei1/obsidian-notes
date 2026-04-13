@@ -12,7 +12,7 @@ After `o_proj`'s all-reduce, all TP ranks hold identical hidden states — the 4
 
 ## TP Sync Boundary: Why the 4 Norms Need Zero Additional Sync
 
-After `o_proj`'s `RowParallelLinear` (a linear layer that splits input columns across TP — tensor-parallel — ranks and all-reduces partial outputs) calls `tensor_model_parallel_all_reduce()` (`linear.py:1517-1518`), **all TP ranks hold identical copies of the full hidden state** — for a single decode token with hidden=8192, bf16, that's a `[1, 8192]` tensor = 16 KB per rank. Each rank then runs the same norm on the same data independently — pure redundant computation, but zero additional communication cost.
+After `o_proj`'s `RowParallelLinear` (a linear layer that splits input columns across TP — tensor-parallel — ranks and all-reduces partial outputs) calls `tensor_model_parallel_all_reduce()` (`linear.py:1517-1518`), **all TP ranks hold identical copies of the full hidden state** — for a single decode token with hidden=8192, bf16, that's a `[1, 8192]` tensor = 1×8192×2 = 16,384 bytes = 16 KB per rank. Each rank then runs the same norm on the same data independently — pure redundant computation, but zero additional communication cost.
 
 ```
 GPU 0:  o_proj_partial_0 -+
@@ -96,7 +96,7 @@ The kernel alone isn't sufficient — three surrounding constraints must hold. E
 
 *The AR sync still happens, but the data stays in SRAM through the norm.
 
-**Phase 1** (days): Simple Triton (an open-source GPU kernel language that compiles Python-like code to PTX, used here to write a custom fused CUDA kernel without raw CUDA C) `fused_add_postnorm` kernel. No weight merging needed — pass both weight tensors to the kernel. Gets 2 fewer kernel launches + 2/6 fewer HBM round-trips on the norm path (hidden=8192, bf16: each round-trip = 8192×2×2 = 32 KB saved per fused pair).
+**Phase 1** (days): Simple Triton (an open-source GPU kernel language that compiles Python-like code to PTX, used here to write a custom fused CUDA kernel without raw CUDA C) `fused_add_postnorm` kernel. No weight merging needed — pass both weight tensors to the kernel. Gets 2 fewer kernel launches + 2 fewer HBM round-trips (hidden=8192, bf16: each round-trip = 1×8192×2 bytes read + written = 32 KB; Phase 1 saves 64 KB of HBM traffic per decode token, 4 round-trips remain vs 6).
 
 **Phase 2** (weeks): Register as `CustomOp` (a PyTorch mechanism to expose a hand-written kernel to the `torch.compile` graph so the compiler treats it as a single atomic op) + write Inductor pattern matcher for `all_reduce -> rms_norm -> add -> rms_norm`. Merge norm weights with custom `weight_loader`. **Only worth it if within-track TP ≥ 2** (i.e., when `o_proj` actually performs an all-reduce). For the V9 150B config (8 tracks × 1 GPU/track), there is no within-track TP — Phase 1 is sufficient. For 16+ GPUs (e.g., 8 tracks × 2 GPUs/track), Phase 2 starts to matter.
 
@@ -152,6 +152,8 @@ assert tensor_bytes == 16384, f"Expected 16 KB tensor, got {tensor_bytes} bytes"
 unfused_trips = 6
 phase1_trips = 4
 assert unfused_trips - phase1_trips == 2
+phase1_hbm_saved_kb = (unfused_trips - phase1_trips) * round_trip_kb
+assert phase1_hbm_saved_kb == 64.0, f"Expected 64 KB saved by Phase 1, got {phase1_hbm_saved_kb}"
 assert math.isclose((unfused_trips - phase1_trips) / unfused_trips, 1/3, rel_tol=1e-9)
 # norm weight vectors: w_pre and w_post each [8192] bf16 = 16 KB; merged = 32 KB
 norm_weight_bytes = hidden * bytes_per_elem
