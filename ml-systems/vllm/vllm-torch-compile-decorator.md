@@ -144,7 +144,7 @@ model(input_ids, positions)
 
 **Step (1) — dynamic input marking** (`decorators.py:381-418`) runs *before* tracing because Dynamo specializes by default: it bakes the first observed shape into the compiled graph as a constant. Without marking, LLaMA-7B `forward(hidden: [8, 4096])` produces a graph with `8` hardcoded — a call with `hidden: [1, 4096]` misses the cache and triggers a full retrace (Dynamo + Inductor again, another 30–120s). Marking dim 0 as dynamic emits a symbolic `s0` instead, so `[1, 4096]`, `[4, 4096]`, and `[8, 4096]` all hit the same compiled graph.
 
-**Step (2) — compilation** runs once and is expensive (30–120s depending on model size) because it runs two sequential phases: **Dynamo** traces the Python `forward()` into a graph IR, then **Inductor** lowers that IR to fused CUDA kernels. The cost is paid once during warmup before vLLM serves traffic. Subsequent calls hit the `self.compiled` branch, paying only the cost of the fused kernels — the dispatch overhead is a single Python branch check.
+**Step (2) — compilation** runs once and is expensive (30–120s depending on model size) because it runs two sequential phases: **Dynamo** traces the Python `forward()` into a graph IR, then **Inductor** lowers that IR to fused CUDA kernels. The cost is paid once during warmup before vLLM serves traffic. Subsequent calls hit the `self.compiled` branch, paying only the cost of the fused kernels — the dispatch overhead is a single Python branch check, negligible compared to GPU kernel execution time.
 
 ---
 
