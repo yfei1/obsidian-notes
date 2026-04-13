@@ -277,9 +277,9 @@ SM 7.5 = Turing (T4), SM 12.1 = Blackwell — this range covers all modern NVIDI
 
 ## Edge Cases & Gotchas
 
-**FlashInfer vs FlashAttention-2**: FlashAttention-2 (implemented in Triton — a Python DSL that compiles to GPU PTX assembly) is more widely deployed and is vLLM's default backend. FlashInfer wins when you need native paged KV cache support (no gather/scatter overhead) or FP8 quantized KV. FlashAttention-2 wins on ecosystem breadth and simpler debugging (Triton source is Python-readable; FlashInfer's C++ is not).
+**FlashInfer vs FlashAttention-2**: FlashAttention-2 (implemented in Triton — a Python DSL that compiles to GPU PTX assembly) is vLLM's default backend. FlashInfer is not the default because it requires paged KV support to justify its complexity — for prefill-only or contiguous-KV workloads, the gather cost is zero and FlashAttention-2's wider GPU support and Python-readable Triton source make it easier to deploy and debug. FlashInfer wins when the paged layout is unavoidable (decode with long context) or when FP8/FP4 quantized KV is needed, because those cases make the gather-before-attend cost large enough to dominate.
 
-**CUDA graph interaction**: FlashInfer's `BatchDecodeWithPagedKVCacheWrapper` supports CUDA graph capture, but requires one wrapper instance per batch size because the `plan()` call encodes batch-specific metadata. vLLM pre-creates wrappers for each captured batch size (line 532-534). With the default captured batch sizes of {1, 2, 4, 8, 16, 32} <!-- source: vLLM CUDAGraphRunner default batch_size_capture_list -->, that means 6 wrapper instances, each holding its own workspace buffer (default 128 MB <!-- source: FlashInfer BatchDecodeWithPagedKVCacheWrapper default workspace_size_in_bytes -->). Total overhead: 6 × 128 MB = 768 MB — non-trivial on a 40 GB A100 <!-- source: NVIDIA A100 datasheet --> where KV cache competes for the same memory pool.
+**CUDA graph interaction**: CUDA graph capture records a fixed sequence of GPU commands, so every tensor shape and kernel argument must be static at capture time. FlashInfer's `plan()` call encodes batch-specific metadata — sequence lengths, block tables — which means a wrapper recorded for batch=4 cannot replay correctly for batch=8. vLLM solves this by pre-creating one wrapper per captured batch size (line 532-534). The memory cost is non-trivial: the default capture set {1, 2, 4, 8, 16, 32} produces 6 wrapper instances, each holding a 128 MB workspace buffer <!-- source: FlashInfer BatchDecodeWithPagedKVCacheWrapper default workspace_size_in_bytes --> — 768 MB total on a 40 GB A100 <!-- source: NVIDIA A100 datasheet --> where KV cache competes for the same pool.
 
 ```python
 # verify: CUDA graph wrapper memory overhead
@@ -289,9 +289,9 @@ total_mb = num_captured_batch_sizes * workspace_mb
 assert total_mb == 768
 ```
 
-**Sampling sync cost**: FlashInfer sampling introduces a CPU-GPU sync that does not exist in vLLM's default `random_sample` path. For latency-sensitive decode where top-k/top-p are not used, the default path is faster.
+**Sampling sync cost**: FlashInfer's rejection sampling must check a stopping condition on the CPU — accept or redraw — which forces a CPU-GPU sync not present in vLLM's default `random_sample` path. That sync stalls the decode loop, so vLLM only activates FlashInfer sampling when top-k or top-p filtering is explicitly requested (gated behind `VLLM_USE_FLASHINFER_SAMPLER=1`, line 39). For greedy or unfiltered random sampling, the default path is faster because it never syncs.
 
-**Relationship to Triton and torch.compile**: FlashInfer sits at the same level as hand-written Triton kernels in the stack (see [[ml-systems/gpu/gpu-kernel-stack]]). Both are registered as `torch.library` custom ops, both are opaque to dynamo, both are compatible with CUDA graph capture. The difference is implementation language: FlashInfer kernels are C++/CUDA; Triton kernels are Python compiled to PTX (NVIDIA's virtual GPU assembly). Inductor (torch.compile's code-generation backend) fuses element-wise ops *around* both, never *into* them.
+**Relationship to Triton and torch.compile**: FlashInfer sits at the same level as hand-written Triton kernels (see [[ml-systems/gpu/gpu-kernel-stack]]): both register as `torch.library` custom ops, both appear as single opaque nodes in the FX graph, both are compatible with CUDA graph capture. The difference is implementation language — FlashInfer kernels are C++/CUDA; Triton kernels are Python compiled to PTX — which matters for debugging: a perf regression inside a FlashInfer kernel requires nsight or nvprof to diagnose, whereas a Triton kernel's source is Python-readable. Inductor fuses element-wise ops *around* both, never *into* them.
 
 ---
 
