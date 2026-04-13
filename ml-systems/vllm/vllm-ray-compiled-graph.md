@@ -88,7 +88,7 @@ The compiled DAG topology (built once at startup, reused every step):
   input ─────────────> worker 3 ───────────────> worker 7 ───────────────> output
 
   Each worker returns: (SchedulerOutput, GrammarOutput, IntermediateTensors)
-  IT = hidden_states [128,8192] + residual [128,8192], bf16 → 2×128×8192×2 = 4,194,304 B = 4 MiB
+  IT = hidden_states [128,8192] + residual [128,8192], bf16 (2 B/elem) → 2 × 128 × 8192 × 2 = 4,194,304 B = 4.0 MiB <!-- verify: 2*128*8192*2 == 4194304 -->
 
   The NCCL arrows exist because with_tensor_transport on stage 0's outputs
   (line 60) tells CG to create NCCL channels for the stage0→stage1 edges,
