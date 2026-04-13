@@ -344,12 +344,11 @@ Full details, safety table, worked arithmetic, and the Pydantic fix: [[ml-system
 - [[ml-systems/gpu/python-import-binding]] — import binding behavior for accessing rebuilt process groups
 - [[ml-systems/vllm/vllm-executor-architecture]] — executor layer that initializes these groups
 - [[ml-systems/vllm/vllm-ray-compiled-graph]] — CG delegates PP tensor routing to vLLM's existing NCCL groups via RayPPCommunicator
-- [[ml-systems/distributed/validating-parallelism-at-scale]]
-- [[ml-systems/foundations/parallel-track-architecture]]
+- [[ml-systems/distributed/validating-parallelism-at-scale]] — correctness checks for group rank assignments at scale
+- [[ml-systems/foundations/parallel-track-architecture]] — track arithmetic and slot-index assignment underlying the PT-MoE rebuild
 
 ## Connections
 
 **Upstream** (concepts this note instantiates): [[ml-systems/distributed/parallelism-strategies]], [[ml-systems/distributed/tensor-parallelism]], [[ml-systems/foundations/mixture-of-experts]] (EP group context), [[ml-systems/inference/kv-cache-internals]] (KV head allocation affected by TP divergence).
 
-**Downstream** (notes that build on this note's group layout): [[ml-systems/distributed/vllm-process-group-rebuild]], [[ml-systems/vllm/pt-moe-vllm-implementation]], [[ml-systems/foundations/pt-moe-architecture]], [[ml-systems/vllm/vllm-weight-loading]], [[ml-systems/vllm/vllm-executor-architecture]].
-- [[ml-systems/vllm/vllm-ray-compiled-graph]]
+**Downstream** (notes that build on this note's group layout): [[ml-systems/distributed/vllm-process-group-rebuild]], [[ml-systems/vllm/pt-moe-vllm-implementation]], [[ml-systems/foundations/pt-moe-architecture]], [[ml-systems/vllm/vllm-weight-loading]], [[ml-systems/vllm/vllm-executor-architecture]], [[ml-systems/vllm/vllm-ray-compiled-graph]].
