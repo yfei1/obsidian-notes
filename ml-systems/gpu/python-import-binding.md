@@ -6,8 +6,8 @@
 `from module import name` creates a **local binding** that snapshots the value at execution
 time. If the module later mutates `name`, the local binding stays stale. `import module;
 module.name` always reads the current value through attribute lookup on the module object.
-This distinction is critical for monkey-patching patterns where a module-level variable
-(like a process group handle) starts as `None` and gets set later at runtime.
+This distinction is critical for monkey-patching patterns (runtime replacement of a function or attribute in an already-imported module) where a module-level variable
+(like a process group handle — an object coordinating communication across distributed workers) starts as `None` and gets set later at runtime.
 
 ---
 
@@ -200,7 +200,7 @@ print("verify: all assertions pass")
 
 ## The Real Pattern: vLLM Plugin Monkey-Patching
 
-Our PT-MoE plugin patches `graph_capture()` at plugin load time. `_PT` is `None` then:
+Our PT-MoE plugin patches `graph_capture()` (the hook vLLM calls before CUDA graph recording) at plugin load time. `_PT` is `None` then:
 
 ```python
 # _vllm_plugin.py — installed at plugin load (Phase 1)
@@ -215,8 +215,8 @@ def patched_graph_capture(device):
     # pt_group = _PT  # always None
 ```
 
-Timeline: plugin loads (Phase 1) → `_PT = None` → model init sets `_PT` (Phase 5) →
-graph capture reads `pt_mod._PT` (Phase 7) → gets the live `GroupCoordinator`.
+Timeline: plugin loads (Phase 1: startup) → `_PT = None` → model init sets `_PT` (Phase 5: weight loading) →
+graph capture reads `pt_mod._PT` (Phase 7: CUDA graph capture) → gets the live `GroupCoordinator`.
 
 Source: `_vllm_plugin.py:169-175`
 
