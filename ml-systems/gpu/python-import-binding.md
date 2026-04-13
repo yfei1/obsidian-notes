@@ -113,7 +113,7 @@ is a plain dict lookup — and unambiguous about intent.
 
 ---
 
-## Concrete Proof
+## Proof: Two Namespaces, Two Fates
 
 Self-contained script (stdlib only, Python 3.8+). All assertions pass:
 
@@ -226,7 +226,7 @@ Source: `_vllm_plugin.py:169-175`
 
 ---
 
-## Key Trade-offs & Decisions
+## When Each Pattern Is Correct
 
 ### When to use module attribute access (`mod.x`)
 
@@ -264,11 +264,9 @@ _PT = GroupCoordinator()   # only rebinds module-level name, not local binding
 
 ## See Also
 
+This note is the canonical reference for Python import binding in the vault. Notes that use monkey-patching or deferred initialization patterns should link here rather than re-explain the `from import` vs `mod.x` distinction.
+
 - [[ml-systems/vllm/vllm-model-integration]] — where the monkey-patching pattern is used
 - [[ml-systems/vllm/pt-moe-vllm-implementation]] — the PT-MoE integration that requires this pattern
 - [[ml-systems/distributed/vllm-distributed-groups]] — process group lifecycle that `_PT` participates in
 - [[ml-systems/gpu/pytorch-module-hooks]] — `nn.Module.__call__` aliasing to `_wrapped_call_impl` is a direct instance of the attribute binding mechanics described here
-
-## Connections
-
-This note is the canonical reference for Python import binding in the vault. Notes that use monkey-patching or deferred initialization patterns should link here rather than re-explain the `from import` vs `mod.x` distinction.
