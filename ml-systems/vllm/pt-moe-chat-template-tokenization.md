@@ -294,5 +294,10 @@ assert 330 in buggy_ids              # bare 'A' (id 330) present in buggy output
 assert training_ids.count(3308) == 2 # ▁user appears twice in training
 assert 3308 not in buggy_ids         # ▁user absent from buggy (split into 308+8103)
 ```
+```text
+# All assertions pass (no output) — confirms:
+#   training: 30 tokens, starts with BOS (1), contains ▁user (3308) ×2
+#   buggy:    32 tokens, starts with <turn_start> (150000), contains bare A (330), no ▁user
+```
 
 ## Connections
