@@ -118,6 +118,11 @@ allreduce_prenorm_add_postnorm(x, residual, w_pre, w_post, eps)
   4. h = rms_norm(h, w_post)  <- post_norm
   return h
 ```
+```text
+# Input:  x=[1,8192] bf16 (partial o_proj output), residual=[1,8192] bf16
+# Output: h=[1,8192] bf16 (post-normed hidden state, written once to HBM)
+# Intermediates 1-3 stay in registers — zero HBM writes until step 4
+```
 
 Three independent failure paths each break the invariant in a different layer of the stack.
 
