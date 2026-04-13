@@ -275,6 +275,12 @@ def encode(self, text, add_special_tokens=True, **kwargs):
     return super().encode(...)
 ```
 
+```text
+# __call__("<turn_start> system\nA...") → BatchEncoding({"input_ids": [1, 150000, 1050, 4, ...], "attention_mask": [1, 1, 1, 1, ...]})
+# encode("<turn_start> system\nA...")  → [1, 150000, 1050, 4, 145053, ...]  (list[int])
+# encode("What is 2+2?")               → super().encode(...)  (standard HF path)
+```
+
 Both override methods delegate to the same `_encode_chat()` helper.
 
 ```text
