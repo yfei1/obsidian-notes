@@ -181,3 +181,5 @@ This is a **data lakehouse** — combining data lake flexibility (store anything
 - [[data-processing/cleantext-pretraining-pipeline]] — deep dive into the text pretraining data pipeline that implements the Bronze→Silver→Gold transition
 - [[data-processing/locality-sensitive-hashing]] — the deduplication algorithm used in CleanText
 - [[data-processing/lance-vs-parquet]] — storage format tradeoffs relevant to the format consolidation discussion
+- [[data-processing/grain-dataloader-architecture]] — the data loader that consumes ArrayRecord Gold-layer datasets during training
+- [[data-processing/checkpointing]] — checkpoint management for the sequential multi-stage pipeline
