@@ -211,11 +211,13 @@ The wrapper needs `__call__` because it returns a `BatchEncoding` dict (`{"input
 - `__call__(text, ...)` → returns `BatchEncoding` (dict: `input_ids`, `attention_mask`, etc.)
 - `encode(text, ...)` → returns `list[int]` (IDs only)
 
-Both delegate to `encode_plus()` (HF's internal method that handles padding, truncation, and special-token logic before calling SP), but they are independent dispatch points — overriding one does not intercept calls to the other.
+Both delegate to `encode_plus()` (HF's internal method that handles padding, truncation, and special-token logic before calling SP), but they are independent dispatch points — overriding one does not intercept calls to the other. This is why the initial `encode()` override silently failed on the async path.
 
-The initial `encode()` override fixed only the sync path because `_tokenize_prompt()` calls `tokenizer.encode()` directly. The async path stayed broken because `AsyncMicrobatchTokenizer` batches N prompts and slices `results["input_ids"][i]` to distribute per-request results — which requires the dict that `__call__` returns. `encode()` returns only `list[int]`: no dict, no per-request index, so the wrapper cannot use it for batched dispatch. The wrapper is therefore forced to call `__call__`, which our `encode()` override never intercepts.
+`AsyncMicrobatchTokenizer` must call `__call__` rather than `encode` because it batches N prompts and distributes results by slicing `results["input_ids"][i]` — a structure that requires the `BatchEncoding` dict that `__call__` returns. `encode()` returns only `list[int]`: no dict, no per-request index. The wrapper cannot use it for batched dispatch, so it is forced to call `__call__`, bypassing the `encode()` override entirely.
 
-The fix requires overriding both entry points and routing each to the same `_encode_chat()` helper.
+The sync `_tokenize_prompt()` calls `tokenizer.encode()` directly — so the `encode()` override did fix the offline/sync path. The async API path was never reached by that override.
+
+The fix requires overriding both entry points and routing each to the same `_encode_chat()` helper — so neither dispatch path can bypass the raw-SP logic.
 
 ### The corrected fix: override both `__call__` and `encode`
 
