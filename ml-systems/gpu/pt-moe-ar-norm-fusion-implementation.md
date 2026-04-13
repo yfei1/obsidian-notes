@@ -12,7 +12,7 @@ After `o_proj`'s all-reduce, all TP ranks hold identical hidden states — the 4
 
 ## TP Sync Boundary: Why the 4 Norms Need Zero Additional Sync
 
-After `o_proj`'s `RowParallelLinear` (a linear layer that splits input columns across TP — tensor-parallel — ranks and all-reduces partial outputs) calls `tensor_model_parallel_all_reduce()` (`linear.py:1517-1518`), **all TP ranks hold identical copies of the full hidden state** — for a single decode token with hidden=8192, bf16, that's a `[1, 8192]` tensor = 1×8192×2 = 16,384 bytes = 16 KB per rank. Each rank then runs the same norm on the same data independently — pure redundant computation, but zero additional communication cost.
+After `o_proj`'s `RowParallelLinear` (a linear layer that splits input columns across TP — tensor-parallel — ranks and all-reduces partial outputs) calls `tensor_model_parallel_all_reduce()` (`linear.py:1517-1518`), **all TP ranks hold identical copies of the full hidden state** — for a single decode token with hidden=8192, bf16 (bfloat16: a 16-bit float format with the same exponent range as float32, standard for LLM weights and activations), that's a `[1, 8192]` tensor = 1×8192×2 = 16,384 bytes = 16 KB per rank. Each rank then runs the same norm on the same data independently — pure redundant computation, but zero additional communication cost.
 
 ```
 GPU 0:  o_proj_partial_0 -+
@@ -34,7 +34,7 @@ The norms, add, and residual are **replicated** across TP ranks. The data only d
 
 It does **not** overlap or pipeline them. The norm runs strictly **after** the all-reduce completes.
 
-The trick: **a single kernel does both operations sequentially, so the intermediate result never leaves SRAM** (the GPU's on-chip memory, 256 KB L1/shared mem per SM on H100 <!-- source: H100 datasheet --> vs HBM — High Bandwidth Memory, the GPU's main off-chip DRAM — at ~3.35 TB/s; SRAM bandwidth is ~100× higher but only ~256 KB per SM).
+The trick: **a single kernel does both operations sequentially, so the intermediate result never leaves SRAM** (the GPU's on-chip memory, 256 KB L1/shared mem per SM — Streaming Multiprocessor, the GPU's basic execution unit — on H100 <!-- source: H100 datasheet --> vs HBM — High Bandwidth Memory, the GPU's main off-chip DRAM — at ~3.35 TB/s; SRAM bandwidth is ~100× higher but only ~256 KB per SM).
 
 ```
 Unfused:
@@ -51,7 +51,7 @@ Fused (FlashInfer):
 
 Between unfused kernels: HBM write latency (~hundreds of ns) + kernel launch overhead (~5–10 µs) + HBM read latency. The fused kernel eliminates all of this.
 
-**The fusion is gated by FlashInfer pattern codes** — FlashInfer's `allreduce_fusion` API dispatches to a kernel implementation based on a pattern code enum (`kARResidualRMSNorm`, `kARResidualRMSNormFP8Quant`, etc.). Because each code maps to a specific hand-written kernel, only op sequences with a registered code can be fused. vLLM's **Inductor pattern matcher** (a PyTorch compilation pass that recognizes specific op sequences in the compute graph and replaces them with a fused implementation) in `allreduce_rms_fusion.py` uses this: `AllReduceFusionPass` scans the compute graph for `all_reduce -> fused_add_rms_norm`, matches it to `kARResidualRMSNorm`, and emits a single FlashInfer kernel (`AllReduceFusedAddRMSNormPattern`, line 306-372). Llama's pattern fits this code exactly:
+**The fusion is gated by FlashInfer pattern codes** — FlashInfer's `allreduce_fusion` API dispatches to a kernel implementation based on a pattern code enum (`kARResidualRMSNorm`, `kARResidualRMSNormFP8Quant`, etc.). Because each code maps to a specific hand-written kernel, only op sequences with a registered code can be fused. vLLM's **Inductor pattern matcher** (a PyTorch compilation pass that recognizes specific op sequences in the compute graph and replaces them with a fused implementation) in `allreduce_rms_fusion.py` uses this: `AllReduceFusionPass` scans the compute graph for `all_reduce -> fused_add_rms_norm` — where `rms_norm` is Root Mean Square normalization, a LayerNorm variant that omits mean-centering — matches it to `kARResidualRMSNorm`, and emits a single FlashInfer kernel (`AllReduceFusedAddRMSNormPattern`, line 306-372). Llama's pattern fits this code exactly:
 
 ```
 o_proj partial output -> all_reduce -> fused_add_rms_norm(output, residual)
@@ -142,7 +142,7 @@ Three independent failure paths each break the invariant in a different layer of
 
 *The AR sync still happens, but the data stays in SRAM through the norm.
 
-**Phase 1** (days): Simple Triton (an open-source GPU kernel language that compiles Python-like code to PTX, used here to write a custom fused CUDA kernel without raw CUDA C) `fused_add_postnorm` kernel. No weight merging needed — pass both weight tensors to the kernel. Gets 2 fewer kernel launches + 2 fewer HBM round-trips (hidden=8192, bf16: each round-trip = 1×8192×2 bytes read + written = 32 KB; Phase 1 saves 64 KB of HBM traffic per decode token, 4 round-trips remain vs 6).
+**Phase 1** (days): Simple Triton (an open-source GPU kernel language that compiles Python-like code to PTX — NVIDIA's intermediate GPU assembly language — used here to write a custom fused CUDA kernel without raw CUDA C) `fused_add_postnorm` kernel. No weight merging needed — pass both weight tensors to the kernel. Gets 2 fewer kernel launches + 2 fewer HBM round-trips (hidden=8192, bf16: each round-trip = 1×8192×2 bytes read + written = 32 KB; Phase 1 saves 64 KB of HBM traffic per decode token, 4 round-trips remain vs 6).
 
 **Phase 2** (weeks): Register as `CustomOp` (a PyTorch mechanism to expose a hand-written kernel to the `torch.compile` graph so the compiler treats it as a single atomic op) + write Inductor pattern matcher for `all_reduce -> rms_norm -> add -> rms_norm`. Merge norm weights with custom `weight_loader`. **Only worth it if within-track TP ≥ 2** (i.e., when `o_proj` actually performs an all-reduce). For the V9 150B config (8 tracks × 1 GPU/track), there is no within-track TP — Phase 1 is sufficient. For 16+ GPUs (e.g., 8 tracks × 2 GPUs/track), Phase 2 starts to matter.
 
