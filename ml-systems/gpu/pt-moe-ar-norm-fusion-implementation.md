@@ -67,7 +67,7 @@ There is no `kARRMSNormAddRMSNorm` code in FlashInfer — because no hand-writte
 
 ## Custom Fused Op Design
 
-The goal: keep the all-reduced tensor in SRAM through all four Post-LN ops, writing only the final output to HBM. One kernel covers all four steps atomically:
+The invariant the kernel must maintain: once the all-reduce result lands in SRAM, it must not touch HBM again until after the final norm. One kernel covers all four steps atomically:
 
 ```
 allreduce_prenorm_add_postnorm(x, residual, w_pre, w_post, eps)
@@ -78,13 +78,13 @@ allreduce_prenorm_add_postnorm(x, residual, w_pre, w_post, eps)
   return h
 ```
 
-The kernel alone isn't sufficient — three independent failure paths reintroduce HBM writes and defeat the fusion.
+Three independent failure paths break this invariant — each reintroduces an HBM write and defeats the fusion.
 
-**Failure 1 — weight stalls break the SRAM-resident chain.** Steps 2 and 4 each read a norm weight vector (`[8192]` bf16 = 16 KB) from HBM. If `w_pre` and `w_post` are stored non-contiguously, the kernel issues two separate 16 KB HBM reads with a stall between them — the all-reduced tensor sits in registers waiting, and the SRAM-resident chain breaks. Fix: **merged weight storage** — pack `w_pre` and `w_post` into a single contiguous `[w_pre | w_post]` buffer (32 KB) so one coalesced HBM transaction (a contiguous read serviced in a single round-trip) loads both before the norm begins. This is the same pattern `MergedColumnParallelLinear` uses for `gate_proj` and `up_proj`.
+**Failure 1 — non-contiguous norm weights stall the SRAM-resident chain.** Steps 2 and 4 each read a norm weight vector (`[8192]` bf16 = 16 KB) from HBM. If `w_pre` and `w_post` are stored non-contiguously, the kernel issues two separate 16 KB HBM reads — the all-reduced tensor sits in registers waiting for each load, breaking the SRAM-resident chain between them. Fix: **merged weight storage** — pack `w_pre` and `w_post` into a single contiguous `[w_pre | w_post]` buffer (32 KB) so one coalesced HBM transaction (a contiguous read serviced in a single round-trip) loads both before the norm begins. This is the same pattern `MergedColumnParallelLinear` uses for `gate_proj` and `up_proj`.
 
-**Failure 2 — incorrect slot placement corrupts norms silently.** The checkpoint stores `attn_pre_residual_norm.weight` and `attn_post_norm.weight` as separate tensors. Without explicit routing, `load_weights()` places them in the wrong merged-buffer slots — step 2 reads `w_post` weights instead of `w_pre`, producing incorrect norms with no error at runtime. Fix: **custom weight loading** — route each tensor into its correct shard (`w_pre` → shard 0, `w_post` → shard 1) explicitly, identical to `stacked_params_mapping` in `afm_pt_moe.py:443-447`.
+**Failure 2 — default weight loading places tensors in wrong merged-buffer slots.** The checkpoint stores `attn_pre_residual_norm.weight` and `attn_post_norm.weight` as separate tensors. Without explicit routing, `load_weights()` has no knowledge of the merged layout and places them arbitrarily — step 2 reads `w_post` weights instead of `w_pre`, producing incorrect norms with no error at runtime. Fix: **custom weight loading** — route each tensor into its correct shard (`w_pre` → shard 0, `w_post` → shard 1) explicitly, identical to `stacked_params_mapping` in `afm_pt_moe.py:443-447`.
 
-**Failure 3 — `torch.compile` decomposes the fused op back into four.** Even with correct kernel and weights, `torch.compile` rewrites the compute graph via Inductor pattern matchers. Without registration, the compiler does not recognize the fused op and decomposes it back into four separate ops, reintroducing HBM writes between them. No existing FlashInfer pattern covers `all_reduce -> rms_norm -> add -> rms_norm` (only `kARResidualRMSNorm` variants exist). Fix: **custom op registration** — register a new class `AllReducePostLNPattern` at `allreduce_rms_fusion.py:824-835` via `direct_register_custom_op()` (a PyTorch mechanism to expose a hand-written kernel to the `torch.compile` graph so the compiler treats it as a single atomic op) so Inductor sees the entire sequence as one node.
+**Failure 3 — `torch.compile` decomposes the fused op back into four separate ops.** Even with correct kernel and weights, `torch.compile` rewrites the compute graph via Inductor pattern matchers. Without registration, the compiler does not recognize the fused op as a single node — it decomposes it back into four ops, reintroducing HBM writes between them. No existing FlashInfer pattern covers `all_reduce -> rms_norm -> add -> rms_norm` (only `kARResidualRMSNorm` variants exist), so there is no automatic match. Fix: **custom op registration** — register a new class `AllReducePostLNPattern` at `allreduce_rms_fusion.py:824-835` via `direct_register_custom_op()` (a PyTorch mechanism to expose a hand-written kernel to the `torch.compile` graph so the compiler treats it as a single atomic op) so Inductor sees the entire sequence as one node.
 
 ## Implementation Phases
 
