@@ -60,8 +60,13 @@ rdd_expensive = source.map(gpu_inference)  # 1M videos × 768-dim → 2.86 GB RD
 rdd_expensive.checkpoint()                  # force-writes all 2.86 GB to HDFS
 rdd_final = rdd_expensive.map(cheap_fn)     # if this crashes, reads from checkpoint
 ```
+```text
+[Stage 0] Writing checkpoint to hdfs:///checkpoints/rdd-42/
+[Stage 0] Checkpoint took 18.3s, wrote 2.86 GB (100 partitions)
+[Stage 1] Reading from checkpoint hdfs:///checkpoints/rdd-42/ (skipping recompute)
+```
 - Opt-in, not automatic
-- Writes entire RDD (not incremental)
+- Writes entire RDD (RDD — Resilient Distributed Dataset, Spark's immutable distributed collection; not incremental)
 - Still loses progress on driver crash unless you manually code resume logic
 
 ### Why Spark chose this
