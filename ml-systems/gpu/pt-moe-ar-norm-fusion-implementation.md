@@ -178,28 +178,27 @@ residual = hidden_states = self.attn_post_norm(hidden_states) # NORM again
 
 **Key difference**: Llama applies one norm to the sum (Pre-LN). PT-MoE applies one norm before the add AND one after (sandwich/Post-LN). Residual semantics are fundamentally different — Llama's residual accumulates raw values, PT-MoE's is always normalized. This is why existing `fused_add_rms_norm` doesn't work for PT-MoE's Post-LN variant — see [[ml-systems/gpu/pt-moe-4norm-postnorm-semantic-mismatch]].
 
-<!-- verify
+```python
 import math
-hidden = 8192
-bytes_per_elem = 2  # bfloat16
-batch_seq = 1  # single decode token
-tensor_bytes = batch_seq * hidden * bytes_per_elem
+hidden = 8192; bytes_per_elem = 2  # bfloat16, single decode token
+tensor_bytes = 1 * hidden * bytes_per_elem
 round_trip_kb = tensor_bytes * 2 / 1024  # read + write
-assert round_trip_kb == 32.0, f"Expected 32 KB per round-trip, got {round_trip_kb}"
-# [1, 8192] bf16 = 1 * 8192 * 2 = 16384 bytes = 16 KB per rank after all-reduce
-assert tensor_bytes == 16384, f"Expected 16 KB tensor, got {tensor_bytes} bytes"
-unfused_trips = 6
-phase1_trips = 4
-assert unfused_trips - phase1_trips == 2
-phase1_hbm_saved_kb = (unfused_trips - phase1_trips) * round_trip_kb
-assert phase1_hbm_saved_kb == 64.0, f"Expected 64 KB saved by Phase 1, got {phase1_hbm_saved_kb}"
-assert math.isclose((unfused_trips - phase1_trips) / unfused_trips, 1/3, rel_tol=1e-9)
-# norm weight vectors: w_pre and w_post each [8192] bf16 = 16 KB; merged = 32 KB
-norm_weight_bytes = hidden * bytes_per_elem
-assert norm_weight_bytes == 16384, f"Expected 16 KB per norm weight, got {norm_weight_bytes}"
-merged_weight_bytes = 2 * norm_weight_bytes
-assert merged_weight_bytes == 32768, f"Expected 32 KB merged weights, got {merged_weight_bytes}"
--->
+assert round_trip_kb == 32.0
+assert tensor_bytes == 16384
+phase1_hbm_saved_kb = (6 - 4) * round_trip_kb
+assert phase1_hbm_saved_kb == 64.0
+assert math.isclose((6 - 4) / 6, 1/3, rel_tol=1e-9)
+assert hidden * bytes_per_elem == 16384        # 16 KB per norm weight
+assert 2 * hidden * bytes_per_elem == 32768    # 32 KB merged
+print(f"tensor: {tensor_bytes} B = {tensor_bytes/1024:.0f} KB per rank")
+print(f"round-trip: {round_trip_kb:.0f} KB  |  phase1 saves: {phase1_hbm_saved_kb:.0f} KB ({(6-4)/6:.0%} of 6 trips)")
+print(f"norm weights: {hidden*bytes_per_elem//1024} KB each, {2*hidden*bytes_per_elem//1024} KB merged")
+```
+```text
+tensor: 16384 B = 16 KB per rank
+round-trip: 32 KB  |  phase1 saves: 64 KB (33% of 6 trips)
+norm weights: 16 KB each, 32 KB merged
+```
 
 ## See Also
 
