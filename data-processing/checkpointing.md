@@ -138,11 +138,11 @@ The pipeline has three structural shapes, each requiring a different checkpoint 
 
 ### Mode 1: Barrier (map-only pipelines)
 
-Stateless map operators carry no in-memory state between records — each record is processed independently. This means the barrier protocol requires no alignment: each operator snapshots nothing, forwards the barrier immediately, and resumes. Intermediate map results are always recomputable from source, so the only state that must survive a crash is the final output.
+Stateless map operators carry no in-memory state between records — each record is processed independently. Because there is no operator state to snapshot, the barrier protocol requires no alignment: each operator forwards the barrier immediately and resumes. Intermediate map results are always recomputable from source, so the only state that must survive a crash is the final output.
 
-Durability is therefore enforced **at the sink only**. But a naive sink write creates a new problem: a crash mid-write leaves partial output that is neither fully present nor fully absent. The fix is **two-phase commit** (**2PC** — the coordinator first asks each participant "can you commit?", then issues the final commit only after all confirm; this ensures output is either fully visible or fully absent after a crash, never partial). Maps don't participate in 2PC because they write nothing durable — only the sink's committed write needs crash-safety.
+Durability is therefore enforced **at the sink only**. But a naive sink write introduces a new failure mode: a crash mid-write leaves partial output that is neither fully present nor fully absent — readers see corrupted data, and the pipeline cannot tell whether to skip or retry that output. The fix is **two-phase commit** (**2PC** — the coordinator first asks each participant "can you commit?", waits for all confirmations, then issues the final commit; this ensures output is either fully visible or fully absent after a crash). Maps don't participate in 2PC because they write nothing durable — only the sink's committed write needs crash-safety.
 
-2PC requires the sink format to support **atomic visibility** — data files are written speculatively, and a single metadata update makes them visible. Bilibili uses two formats with this property:
+2PC requires the sink format to support **atomic visibility**: data files are written speculatively to storage, and a single metadata update makes them visible to readers. This metadata update is the commit boundary — it either lands or it doesn't, with no partial state. Bilibili uses two formats with this property:
 - **Lance** — appends data as independent fragment files; the manifest update (defined fully in Mode 3) is the atomic commit step
 - **Iceberg** (Apache Iceberg — a table format that tracks committed files in a metadata log, making new data atomically visible on manifest commit)
 
