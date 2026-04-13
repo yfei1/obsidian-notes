@@ -219,3 +219,4 @@ After the Beam pipeline finishes: `tfds_writer.write_metadata()` (TFDS schema/st
 - [[data-processing/afm-training-pipeline]] — the broader pipeline context this note operates within
 - [[data-processing/locality-sensitive-hashing#known-gap-subset-superset-blindness]] — deep dive on the LSH algorithm used in Stage 7
 - [[data-processing/lance-vs-parquet]] — storage format tradeoffs relevant to input/output formats
+- [[data-processing/locality-sensitive-hashing]]
