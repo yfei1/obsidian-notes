@@ -93,6 +93,15 @@ Scaling to the 32-GPU running example (TP=32, all others=1): `all_ranks` has sha
 
 Verification — total ranks equal world_size, reshape arithmetic, post-rebuild group structure, and KV-head corruption arithmetic:
 
+```
+Verify the rank-layout arithmetic for three configurations:
+  4-GPU toy (DP=2, TP=2): TP groups=[0,1],[2,3]; DP groups=[0,2],[1,3]
+  32-GPU initial (TP=32): one TP group [0..31]; 32 singleton DP groups
+  Post-rebuild (8 tracks × TP=4): each rank in exactly one 4-GPU track;
+    cross-track group for slot s = [s, s+4, s+8, …, s+28]; rank_in_group = track index
+  Also verifies: new_group call counts, KV head overrun (7 heads × 0.875 MiB/layer/GPU), weight shard shapes
+```
+
 ```python
 # --- 4-GPU toy: verify TP and DP group extraction ---
 world_size_toy = 4
