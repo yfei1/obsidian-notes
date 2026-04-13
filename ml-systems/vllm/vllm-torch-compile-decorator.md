@@ -172,14 +172,20 @@ model(input_ids, positions)
 
 ## See Also
 
+**Foundations**
+- [[ml-systems/foundations/transformer-model-internals]] — ForCausalLM / inner model class hierarchy this decorator targets
+- [[ml-systems/foundations/attention-mechanics]] — attention prefill/decode kernels are the primary compute targets that torch.compile and CUDA graph capture optimize
 - [[ml-systems/gpu/torch-compile-graph-breaks]] — empirical results: what patterns break `fullgraph=True` vs compile fine
 - [[ml-systems/gpu/torch-compile-cuda-graphs-hook-interaction]] — `@torch.compile` vs `module.compile()`, CUDA graph mechanics, kernel fusion benchmarks
-- [[ml-systems/vllm/vllm-model-integration]] — how to register a custom model in vLLM's plugin system
-- [[ml-systems/vllm/pt-moe-vllm-implementation]] — PT-MoE integration where cross-track `all_reduce` creates piecewise compilation
-- [[ml-systems/inference/lora-vllm-serving]] — LoRA adapter serving; compile interaction matters when adapters modify the forward path
 - [[ml-systems/gpu/pytorch-module-hooks]] — `nn.Module.__call__` hook dispatch and how `@torch.compile` vs `module.compile()` determines whether hooks run inside or outside the compiled region
-- [[ml-systems/inference/cuda-graph-inference-optimization]]
-- [[ml-systems/foundations/attention-mechanics]] — attention prefill/decode kernels are the primary compute targets that torch.compile and CUDA graph capture optimize
-- [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]]
-- [[ml-systems/vllm/pt-moe-inductor-pad-mm-bug]]
-- [[ml-systems/vllm/vllm-cuda-graph-collective-streams]]
+
+**Closely related**
+- [[ml-systems/vllm/vllm-model-integration]] — how to register a custom model in vLLM's plugin system
+- [[ml-systems/inference/cuda-graph-inference-optimization]] — CUDA graph capture mechanics and decode-step replay optimization
+- [[ml-systems/vllm/vllm-cuda-graph-collective-streams]] — how vLLM handles collective ops (all_reduce) inside CUDA graph capture
+
+**Downstream**
+- [[ml-systems/vllm/pt-moe-vllm-implementation]] — PT-MoE integration where cross-track `all_reduce` creates piecewise compilation
+- [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]] — 4-norm fusion opportunity that depends on graph-break-free inner model compilation
+- [[ml-systems/vllm/pt-moe-inductor-pad-mm-bug]] — Inductor-level bug triggered during torch.compile of PT-MoE matmuls
+- [[ml-systems/inference/lora-vllm-serving]] — LoRA adapter serving; compile interaction matters when adapters modify the forward path
