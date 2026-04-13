@@ -100,7 +100,7 @@ Bytes per block (FP8):  32,768 × 1     = 32,768 B = 32 KB
 512 blocks (FP8):  512 × 32 KB = 16 MB  ← why FP8 KV matters
 ```
 
-A naive gather-then-attend kernel would copy all 512 blocks into one contiguous `[8192, 8, 128]` buffer before running attention, wasting 32 MB of bandwidth per forward pass. FlashInfer reads the block table and fetches each 64 KB block directly during the QK^T computation.
+A naive gather-then-attend kernel would copy all 512 blocks into one contiguous `[8192, 8, 128]` buffer before running attention, wasting 32 MB of bandwidth per forward pass. FlashInfer reads the block table and fetches each 64 KB block directly during the QK^T (query-key dot product, the first matrix multiply in attention) computation.
 
 ```python
 # verify: NHD element count and byte sizes
@@ -201,7 +201,7 @@ flashinfer_comm.allreduce_fusion(
 )
 ```
 
-FlashInfer's all-reduce supports fusion patterns: standalone all-reduce, all-reduce + RMSNorm, and quantized variants (FP8/FP4). The workspace is pre-allocated once (line 67-75) and reused across calls.
+FlashInfer's all-reduce supports fusion patterns: standalone all-reduce, all-reduce + RMSNorm (Root Mean Square Layer Normalization — a post-LayerNorm variant that normalizes by RMS instead of mean+variance), and quantized variants (FP8/FP4). The workspace is pre-allocated once (line 67-75) and reused across calls.
 
 **Concrete tensor at this point** (Llama-3-8B, tensor parallelism across 2 GPUs, 4 decode tokens): each GPU holds a `[4, 4096]` FP16 partial sum from its column-parallel linear shard. The all-reduce aggregates across 2 GPUs to produce the full `[4, 4096]` hidden state.
 
@@ -277,7 +277,7 @@ SM 7.5 = Turing (T4), SM 12.1 = Blackwell — this range covers all modern NVIDI
 
 ## Edge Cases & Gotchas
 
-**FlashInfer vs FlashAttention-2**: FlashAttention-2 (implemented in Triton — a Python DSL that compiles to GPU PTX assembly) is vLLM's default backend. FlashInfer is not the default because it requires paged KV support to justify its complexity — for prefill-only or contiguous-KV workloads, the gather cost is zero and FlashAttention-2's wider GPU support and Python-readable Triton source make it easier to deploy and debug. FlashInfer wins when the paged layout is unavoidable (decode with long context) or when FP8/FP4 quantized KV is needed, because those cases make the gather-before-attend cost large enough to dominate.
+**FlashInfer vs FlashAttention-2**: FlashAttention-2 (implemented in Triton — a Python DSL that compiles to GPU PTX (NVIDIA's intermediate assembly language, one level above machine code) assembly) is vLLM's default backend. FlashInfer is not the default because it requires paged KV support to justify its complexity — for prefill-only or contiguous-KV workloads, the gather cost is zero and FlashAttention-2's wider GPU support and Python-readable Triton source make it easier to deploy and debug. FlashInfer wins when the paged layout is unavoidable (decode with long context) or when FP8/FP4 quantized KV is needed, because those cases make the gather-before-attend cost large enough to dominate.
 
 **CUDA graph interaction**: CUDA graph capture records a fixed sequence of GPU commands, so every tensor shape and kernel argument must be static at capture time. FlashInfer's `plan()` call encodes batch-specific metadata — sequence lengths, block tables — which means a wrapper recorded for batch=4 cannot replay correctly for batch=8. vLLM solves this by pre-creating one wrapper per captured batch size (line 532-534). The memory cost is non-trivial: the default capture set {1, 2, 4, 8, 16, 32} produces 6 wrapper instances, each holding a 128 MB workspace buffer <!-- source: FlashInfer BatchDecodeWithPagedKVCacheWrapper default workspace_size_in_bytes --> — 768 MB total on a 40 GB A100 <!-- source: NVIDIA A100 datasheet --> where KV cache competes for the same pool.
 
@@ -291,7 +291,7 @@ assert total_mb == 768
 
 **Sampling sync cost**: FlashInfer's rejection sampling must check a stopping condition on the CPU — accept or redraw — which forces a CPU-GPU sync not present in vLLM's default `random_sample` path. That sync stalls the decode loop, so vLLM only activates FlashInfer sampling when top-k or top-p filtering is explicitly requested (gated behind `VLLM_USE_FLASHINFER_SAMPLER=1`, line 39). For greedy or unfiltered random sampling, the default path is faster because it never syncs.
 
-**Relationship to Triton and torch.compile**: FlashInfer sits at the same level as hand-written Triton kernels (see [[ml-systems/gpu/gpu-kernel-stack]]): both register as `torch.library` custom ops, both appear as single opaque nodes in the FX graph, both are compatible with CUDA graph capture. The difference is implementation language — FlashInfer kernels are C++/CUDA; Triton kernels are Python compiled to PTX — which matters for debugging: a perf regression inside a FlashInfer kernel requires nsight or nvprof to diagnose, whereas a Triton kernel's source is Python-readable. Inductor fuses element-wise ops *around* both, never *into* them.
+**Relationship to Triton and torch.compile**: FlashInfer sits at the same level as hand-written Triton kernels (see [[ml-systems/gpu/gpu-kernel-stack]]): both register as `torch.library` custom ops, both appear as single opaque nodes in the FX graph, both are compatible with CUDA graph capture. The difference is implementation language — FlashInfer kernels are C++/CUDA; Triton kernels are Python compiled to PTX — which matters for debugging: a perf regression inside a FlashInfer kernel requires nsight or nvprof to diagnose, whereas a Triton kernel's source is Python-readable. Inductor (torch.compile's code-generation backend, which fuses and lowers the FX graph to GPU kernels) fuses element-wise ops *around* both, never *into* them.
 
 ---
 
