@@ -194,6 +194,11 @@ Async path (OpenAI API server):
 async def encode(self, prompt, **kwargs) -> list[int]:
     return (await self(prompt, **kwargs)).input_ids
 ```
+```text
+# Returns: list[int] — e.g. [150000, 1050, 330, ...] (buggy, pre-fix)
+# Internally calls self(prompt) → __call__ → queues to _batch_encode_loop
+# .encode() on the wrapper is NOT the same as .encode() on the underlying HF tokenizer
+```
 
 The queue processor (`_batch_encode_loop`) dequeues requests and calls the underlying HF tokenizer:
 

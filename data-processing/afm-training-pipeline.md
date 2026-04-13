@@ -103,6 +103,13 @@ Three repos manage different concerns:
 - **Data repo** — dataset catalog and registry (also feeds **Compliance Reporting**)
 - **Ajax** — experiment framework running training jobs
 
+**Two pipeline archetypes** exist in DataCraft:
+
+1. **Organic data processing** (e.g., [[data-processing/cleantext-pretraining-pipeline|CleanText]]): Parquet/WARC raw data → Filters → Deduplication → Decontamination → TFDS conversion. Processes real web crawl data through Beam transforms.
+2. **Synthetic data generation** (e.g., agentic multi-turn synthesis): Each stage calls an LLM Model API — Description Gen → Function Gen → Schema Gen → Task Gen → TFDS/ArrayRecord conversion. Bootstraps SFT training data for tool-use and agentic capabilities by using a strong model (or the previous AFM version) to generate training data for the next version.
+
+Both end with format conversion and registration in the Data repo.
+
 ---
 
 ## Data Lifecycle: Medallion Architecture
@@ -113,7 +120,7 @@ AFM maps its data lifecycle to the **medallion architecture** (a data engineerin
 |-------|-------------|-------------|
 | **Bronze** | Landing zone, immutable history. Raw data exactly as received. Never modified — serves as audit trail | JSONL from vendors, WARC from AppleBot, Parquet from HuggingFace |
 | **Silver** | Filtered, cleaned, augmented with algorithms and ML models. Data processing pipelines (Beam transforms) live here | Iceberg tables in CleanText pipeline, Gemini-processed image datasets |
-| **Gold** | Training mixture ready. Efficient format and packing (combining short sequences to maximize GPU utilization) | TFRecord/ArrayRecord datasets in GCS |
+| **Gold** | Training mixture ready. Efficient format and packing — combining multiple short sequences into single training examples to maximize GPU utilization (no wasted padding tokens) | TFRecord/ArrayRecord datasets in GCS |
 
 ---
 
