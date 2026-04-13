@@ -269,11 +269,11 @@ Async scheduling (v0.15.0) overlaps CPU scheduling of step N+1 with GPU executio
 
 *(Derived from code-path analysis, not benchmarked.)*
 
-Async scheduling hides dispatch latency by overlapping it with GPU compute — but only when a second batch is available to schedule while the GPU runs the first. Three configurations break this assumption:
+Async scheduling hides dispatch latency only when a second batch is ready to schedule while the GPU runs the first — because the overlap requires the CPU to be doing useful work (scheduling N+1) during GPU execution of N. Three configurations break this assumption:
 
-- **PP=1 without async scheduling config**: `max_concurrent_batches` (the number of batches the engine can have in-flight simultaneously) returns 1 (`multiproc_executor.py:468-472`), so `batch_queue` is `None` (`core.py:187-189`). The engine falls back to synchronous `step()` — no overlap window exists, so every step pays dispatch latency (~150 µs MQ, ~500 µs CG) on the critical path.
-- **Cold start (first batch)**: Even with `batch_queue_size=2`, the first batch has nothing to overlap with — the queue is empty, so there is no prior GPU execution to hide behind. Dispatch latency is fully exposed for the first step.
-- **Very short decode steps**: With a tiny model where GPU forward takes <1 ms, `batch_queue[-1][0].done()` at `core.py:479` returns `True` before the engine finishes scheduling the next batch — the overlap window closes before scheduling completes, and every step becomes effectively synchronous.
+- **PP=1 without async scheduling config**: `max_concurrent_batches` (the number of batches the engine can have in-flight simultaneously) returns 1 (`multiproc_executor.py:468-472`), so `batch_queue` is `None` (`core.py:187-189`). Without a queue, the engine falls back to synchronous `step()` — no overlap window exists, so every step pays full dispatch latency (~150 µs MQ, ~500 µs CG) on the critical path.
+- **Cold start (first batch)**: Even with `batch_queue_size=2`, the first batch has no prior GPU execution to hide behind — the queue is empty, so the CPU cannot start scheduling a second batch until the first dispatch completes. Dispatch latency is fully exposed for the first step.
+- **Very short decode steps**: With a tiny model where GPU forward takes <1 ms, `batch_queue[-1][0].done()` at `core.py:479` returns `True` before the engine finishes scheduling the next batch — because GPU execution completes faster than the scheduler runs, the overlap window closes before scheduling finishes, and every step becomes effectively synchronous.
 
 ### RFC #35848: Removal Is Sound
 
