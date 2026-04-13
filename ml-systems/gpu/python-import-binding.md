@@ -168,6 +168,34 @@ print("All 5 assertions pass")
 All 5 assertions pass
 ```
 
+<!-- verify
+import sys, types
+
+def make_module():
+    mod = types.ModuleType("_test_mod")
+    mod._PT = None
+    def init_groups(): mod._PT = "LIVE_VALUE"
+    mod.init_groups = init_groups
+    sys.modules["_test_mod"] = mod
+    return mod
+
+mod = make_module(); local_PT = mod._PT; mod.init_groups()
+assert local_PT is None
+assert mod._PT == "LIVE_VALUE"
+mod = make_module(); mod.init_groups()
+assert mod._PT == "LIVE_VALUE"
+mod = make_module(); mod.init_groups()
+def f(): return sys.modules["_test_mod"]._PT
+assert f() == "LIVE_VALUE"
+mod = make_module(); captured = mod._PT
+def g(): return captured
+mod.init_groups(); assert g() is None
+mod = make_module(); id_before = id(mod._PT); local_snap = mod._PT; mod.init_groups()
+assert id(local_snap) == id_before
+assert id(mod._PT) != id_before
+print("verify: all assertions pass")
+-->
+
 ---
 
 ## The Real Pattern: vLLM Plugin Monkey-Patching
@@ -202,7 +230,7 @@ Use `mod.x` whenever the variable may be rebound after your code's import time �
 
 - **Deferred initialization** (e.g., `_PT = None` → `GroupCoordinator` later): the variable's final value doesn't exist yet at import time, so a snapshot is always stale — because the snapshot is taken before `init_groups()` runs
 - **Monkey-patches and plugin callbacks**: these execute before the target variable is set by definition, so the snapshot would always capture the sentinel value — because plugin load (Phase 1) precedes model init (Phase 5)
-- **Hot-path function calls**: `mod.x` is a single `__dict__` key lookup, while `from import` inside a function re-runs the full import machinery (`sys.modules` lookup + frame construction) on every call — because Python re-executes the import statement each time the function body runs
+- **Hot-path function calls**: `mod.x` is a single `__dict__` key lookup (1 dict read: `module.__dict__["x"]`), while `from import` inside a function re-runs the full import machinery on every call: `sys.modules` hash lookup → `LOAD_ATTR` on the module → `STORE_FAST` into the local frame — because Python re-executes the import statement each time the function body runs
 
 ### When `from import` is fine
 
