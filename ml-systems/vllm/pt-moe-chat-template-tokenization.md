@@ -70,17 +70,16 @@ vLLM always calls `apply_chat_template(tokenize=False)` for HF tokenizers. The r
 
 ## Token vocabulary
 
-Four token types each contribute a distinct mismatch between training and serving. The common thread: HuggingFace's `additional_special_tokens` mechanism forces SP to encode chunks in isolation, and three of the four token types break when SP loses surrounding context.
+Four token types each contribute a distinct mismatch between training and serving. They split into two root causes:
 
-### `additional_special_tokens` — HuggingFace concept
+- **`<turn_start>` / `<turn_end>`** trigger HF's `additional_special_tokens` split, which destroys SP word-boundary context. `▁` artifacts and `<n>` mismatches are downstream consequences of that split.
+- **BOS** is an independent misconfiguration in the HF tokenizer config — not caused by the split.
 
-**`additional_special_tokens`** is a list maintained by `PreTrainedTokenizer`. During `encode()`, HF scans the input for these tokens, splits the string at their boundaries, maps each special token directly to its ID, then sends each remaining text chunk to SP *separately* — as an isolated string stripped of surrounding context.
+### `<turn_start>` (id 150000) and `<turn_end>` (id 150001) — the root split
 
-SP's word-boundary decisions depend on what precedes the current chunk. Splitting at `<turn_start>` / `<turn_end>` boundaries destroys that context at every turn delimiter — which is why three of the four token types below produce wrong IDs under the HF path.
+These tokens were added AFTER the SP model was trained, via HuggingFace's `add_tokens()` — which is why they have high IDs (150000+). SP has no knowledge of them natively; only the HuggingFace wrapper recognizes them.
 
-### `<turn_start>` (id 150000) and `<turn_end>` (id 150001) — chat turn delimiters
-
-These tokens were added AFTER the SP model was trained, via HuggingFace's `add_tokens()` — which is why they have high IDs (150000+). SP has no knowledge of them natively; only the HuggingFace wrapper recognizes them. Because they live in `additional_special_tokens`, HF's `encode()` splits the prompt at every `<turn_start>` / `<turn_end>` boundary, producing the chunk isolation described above. Every other token type's mismatch flows from this split.
+Because they live in **`additional_special_tokens`** — a list maintained by `PreTrainedTokenizer` — HF's `encode()` scans the input for these tokens, splits the string at their boundaries, maps each special token directly to its ID, then sends each remaining text chunk to SP *separately*, as an isolated string stripped of surrounding context. SP's word-boundary decisions depend on what precedes the current chunk; every split boundary destroys that context. The two token types below are direct consequences.
 
 ### `▁` (id 145022) — SentencePiece word boundary marker
 
@@ -90,9 +89,9 @@ SP uses U+2581 to mark the start of a new word. When a chunk begins without prio
 
 Raw `\n` is ambiguous to SP: depending on training corpus statistics, it can be merged with surrounding text, split inconsistently, or dropped. To get deterministic newline handling, the SP model was trained with `<n>` as a **user-defined symbol** (`--user_defined_symbols=<n>`) — a SentencePiece flag that marks a string as one indivisible token, bypassing all whitespace normalization. The training pipeline replaces all `\n` → `<n>` before feeding text to SP, so every newline maps to exactly token id 4. The HF path never performs this substitution, so `\n` inside a split chunk reaches SP as a raw character — producing a different token ID.
 
-### `<s>` / BOS (id 1) — beginning of sequence
+### `<s>` / BOS (id 1) — independent misconfiguration
 
-The model was trained with BOS (id 1) as the first token in every sequence, so it uses position 0 as a fixed anchor for positional embeddings — without BOS, the model has no signal that position 0 is a sequence start. The HF tokenizer config has `bos_token_id: 153600` (wrong — out of SP's vocabulary range) and `add_bos_token: False`, so neither SP nor HF adds the correct BOS automatically. Training overrides `bos_id=1` at `afm_150k_20241209.py:12`; the fix must replicate this manually.
+The model was trained with BOS (id 1) as the first token in every sequence, so it uses position 0 as a fixed anchor for positional embeddings — without BOS, the model has no signal that position 0 is a sequence start. The HF tokenizer config has `bos_token_id: 153600` (wrong — out of SP's vocabulary range) and `add_bos_token: False`, so neither SP nor HF adds the correct BOS automatically. This misconfiguration is independent of the `additional_special_tokens` split: it would be missing even if the split were fixed. Training overrides `bos_id=1` at `afm_150k_20241209.py:12`; the fix must replicate this manually.
 
 ## Training tokenization path (ground truth)
 
