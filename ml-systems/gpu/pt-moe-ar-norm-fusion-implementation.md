@@ -48,8 +48,12 @@ Fused (FlashInfer):
     step 3: write only the final normed output to HBM
   }
 ```
-
-Between unfused kernels: HBM write latency (~hundreds of ns) + kernel launch overhead (~5–10 µs) + HBM read latency. The fused kernel eliminates all of this.
+```text
+# Unfused cost per token (hidden=8192, bf16): 2 kernel launches, 2× HBM round-trips
+#   = 2 × 32 KB = 64 KB HBM traffic + ~10–20 µs launch overhead
+# Fused cost: 1 kernel launch, 1× HBM write (16 KB output only)
+#   intermediates stay in registers — ~5–10 µs saved per AR+norm boundary
+```
 
 **The fusion is gated by FlashInfer pattern codes** — FlashInfer's `allreduce_fusion` API dispatches to a kernel implementation based on a pattern code enum (`kARResidualRMSNorm`, `kARResidualRMSNormFP8Quant`, etc.). Because each code maps to a specific hand-written kernel, only op sequences with a registered code can be fused. vLLM's **Inductor pattern matcher** (a PyTorch compilation pass that recognizes specific op sequences in the compute graph and replaces them with a fused implementation) in `allreduce_rms_fusion.py` uses this: `AllReduceFusionPass` scans the compute graph for `all_reduce -> fused_add_rms_norm` — where `rms_norm` is Root Mean Square normalization, a LayerNorm variant that omits mean-centering — matches it to `kARResidualRMSNorm`, and emits a single FlashInfer kernel (`AllReduceFusedAddRMSNormPattern`, line 306-372). Llama's pattern fits this code exactly:
 
