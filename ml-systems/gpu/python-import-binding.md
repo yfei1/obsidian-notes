@@ -196,31 +196,36 @@ Source: `_vllm_plugin.py:169-175`
 
 ## Key Trade-offs & Decisions
 
-**When to use module attribute access (`mod.x`):**
-- The variable is mutated after your code's import time — because `from import` snapshots the reference once, any later rebind is invisible to your code
-- Monkey-patches, plugin callbacks, lazy initialization patterns — because these patterns by definition execute before the target variable is set
-- Performance matters — because `mod.x` is a single `__dict__` key lookup, while `from import` inside a function re-runs the full import machinery (`sys.modules` lookup + frame construction) on every call
+### When to use module attribute access (`mod.x`)
 
-**When `from import` is fine:**
-- The imported name is a class, function, or constant that never changes — because the snapshot taken at import time will always match the live value
-- You import inside a function body and accept the import overhead — because the import re-executes on each call, so the snapshot is always fresh
-- The binding happens after the mutation (import order guarantees it) — because the snapshot is taken after the final value is already in place
+Use `mod.x` whenever the variable may be rebound after your code's import time — because `from import` snapshots the reference once, so any later rebind in the module's `__dict__` is invisible to your local binding.
 
-**The mutable object workaround:**
-If the variable points to a mutable container (list, dict), `from import` works because
-both names reference the same object and mutations are visible through either name. The
-problem is specifically with **rebinding** (reassigning the name), not mutating the object.
+- **Deferred initialization** (e.g., `_PT = None` → `GroupCoordinator` later): the variable's final value doesn't exist yet at import time, so a snapshot is always stale — because the snapshot is taken before `init_groups()` runs
+- **Monkey-patches and plugin callbacks**: these execute before the target variable is set by definition, so the snapshot would always capture the sentinel value — because plugin load (Phase 1) precedes model init (Phase 5)
+- **Hot-path function calls**: `mod.x` is a single `__dict__` key lookup, while `from import` inside a function re-runs the full import machinery (`sys.modules` lookup + frame construction) on every call — because Python re-executes the import statement each time the function body runs
+
+### When `from import` is fine
+
+Use `from import` when the snapshot taken at import time will always match the live value — because no rebind will occur after that point.
+
+- **Classes, functions, and constants**: these are defined once and never rebound — because module-level `def` and `class` statements execute once at import and the name is never reassigned
+- **Import inside a function body**: re-executes on each call, so the snapshot is always fresh — because the `from import` statement runs again, reading the current `__dict__` value each time (though `mod.x` is cheaper for the same result)
+- **Import order guarantees**: if the import happens after the mutation (e.g., the module is fully initialized before any other module imports from it) — because the snapshot captures the final value
+
+### The mutable object workaround
+
+If the variable points to a **mutable container** (list, dict), `from import` works because both names reference the same object — mutations to the object are visible through either name. The problem is specifically with **rebinding** (reassigning the name to a new object), not mutating the existing object.
 
 ```python
 # Mutable container — from-import works
 registry = {}
 from mod import registry   # both point to same dict
-registry["key"] = "val"    # visible through both names
+registry["key"] = "val"    # visible through both names — same object, mutated in place
 
 # Rebinding — from-import breaks
 _PT = None
 from mod import _PT        # local = None
-_PT = GroupCoordinator()   # only rebinds module-level, not local
+_PT = GroupCoordinator()   # only rebinds module-level name, not local binding
 ```
 
 ---
