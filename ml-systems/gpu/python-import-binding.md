@@ -21,7 +21,7 @@ _PT = None          # None at import time
 
 def init_groups():  # called later during model __init__
     global _PT
-    _PT = GroupCoordinator(...)
+    _PT = GroupCoordinator(...)  # GroupCoordinator: object managing cross-worker communication channels
 ```
 
 A monkey-patch installed at plugin load time needs to read `_PT` at runtime (after
@@ -200,7 +200,7 @@ print("verify: all assertions pass")
 
 ## The Real Pattern: vLLM Plugin Monkey-Patching
 
-Our PT-MoE plugin patches `graph_capture()` (the hook vLLM calls before CUDA graph recording) at plugin load time. `_PT` is `None` then:
+Our PT-MoE plugin patches `graph_capture()` (the hook vLLM calls before CUDA graph recording — capturing a replayable sequence of GPU ops to avoid Python overhead on each forward pass) at plugin load time. `_PT` is `None` then:
 
 ```python
 # _vllm_plugin.py — installed at plugin load (Phase 1)
