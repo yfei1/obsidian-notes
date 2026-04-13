@@ -2,6 +2,10 @@
 
 #ml-systems #inference #interview-prep
 
+**Scope**: Architecture and mechanisms of LLM inference engines — scheduler, model runner, memory management, and batching strategies. Covers nano-vLLM as a pedagogical reference with comparisons to production vLLM.
+
+**Prerequisites**: [[ml-systems/foundations/transformer-model-internals]] (transformer forward pass), [[ml-systems/foundations/attention-mechanics]] (prefill vs decode attention kernels), [[ml-systems/inference/kv-cache-internals]] (KV cache structure), [[ml-systems/gpu/gpu-memory-hierarchy]] (HBM bandwidth constraints).
+
 ## TL;DR
 
 A GPU forward pass can process many tokens in parallel, but requests arrive at different times, run for different lengths, and share scarce HBM (High Bandwidth Memory — the on-package DRAM on modern GPUs, faster but smaller than system RAM). Naive approaches — one request at a time, static batching, contiguous KV allocation — leave the GPU mostly idle. An LLM inference engine solves this with three layers: a **scheduler** (CPU, manages memory + request queues), a **model runner** (GPU, executes forward passes), and optionally an **async server frontend** (HTTP, routes user requests). The key mechanisms are **continuous batching** (eject finished sequences mid-batch, insert new ones immediately), **PagedAttention** (virtual memory for KV cache — eliminates fragmentation, enables sharing), and **chunked prefill** (mix prefill + decode tokens in one step to prevent decode starvation). Studied via `nano-vLLM` (educational, ~400 LOC) with comparisons to production `vLLM`.
@@ -342,16 +346,13 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 
 - [[ml-systems/foundations/transformer-model-internals]]
 - [[ml-systems/foundations/attention-mechanics]] — attention math, causal mask, prefill vs decode kernels, KV cache Triton writes
-- [[ml-systems/distributed/parallelism-strategies]]
-- [[ml-systems/inference/prefix-caching]]
-- [[ml-systems/vllm/vllm-weight-loading]] — `load_weights()` name remapping and `weight_loader` convention
-- [[ml-systems/gpu/gpu-memory-hierarchy]] — memory wall, tiling vs split-K, quantization as compression
-- [[ml-systems/gpu/pytorch-module-hooks]]
-- [[ml-systems/inference/kv-cache-internals]]
 - [[ml-systems/foundations/parallel-track-architecture]]
-- [[ml-systems/vllm/vllm-model-integration]]
+- [[ml-systems/distributed/parallelism-strategies]]
+- [[ml-systems/inference/kv-cache-internals]]
+- [[ml-systems/inference/prefix-caching]]
+- [[ml-systems/inference/cuda-graph-inference-optimization]] — CUDA graphs eliminate kernel launch overhead dominating decode latency; covers graph capture phases, pinned memory, and GC pitfalls
+- [[ml-systems/gpu/gpu-memory-hierarchy]] — memory wall, tiling vs split-K, quantization as compression
+- [[ml-systems/gpu/pytorch-module-hooks]] — `nn.Module` hook dispatch used for feature extraction, shape debugging, and compile integration; bypassing via `.forward()` silently disables hooks
 - [[ml-systems/gpu/torch-compile-cuda-graphs-hook-interaction]]
-- [[ml-systems/vllm/vllm-weight-loading]] — weight loading pipeline that runs during engine initialization before serving begins
-- [[ml-systems/gpu/pytorch-module-hooks]] — `nn.Module` hook dispatch is the low-level mechanism inference engines use for feature extraction, shape debugging, and compile integration
-- [[ml-systems/gpu/pytorch-module-hooks]] — inference engines built on `nn.Module` depend on the `__call__` dispatch chain; bypassing it via `.forward()` silently disables instrumentation hooks
-- [[ml-systems/inference/cuda-graph-inference-optimization]] — CUDA graphs eliminate the kernel launch overhead that dominates decode latency; pinned memory and UVA optimize the per-step CPU→GPU metadata transfer
+- [[ml-systems/vllm/vllm-model-integration]]
+- [[ml-systems/vllm/vllm-weight-loading]] — `load_weights()` name remapping and `weight_loader` convention; runs during engine initialization before serving begins
