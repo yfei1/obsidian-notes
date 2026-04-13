@@ -23,7 +23,7 @@ api_router.py:47 → OpenAIServingCompletion.create_completion
           → base.py:343 tokenizer.encode(prompt, add_special_tokens=True)
 ```
 
-No template. Raw text → `encode()` → model. `add_special_tokens=True` (default for completions, set at `base.py:267-279` `default_cmpl_tok_params`).
+No template. Raw text → `encode()` → model. `add_special_tokens=True` (default for completions, set at `base.py:267-279` `default_cmpl_tok_params`). No chat template rendering — the tokenization mismatch described in this note does not affect this path.
 
 ### Chat (`/v1/chat/completions`) — two-phase path
 
