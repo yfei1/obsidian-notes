@@ -166,3 +166,4 @@ Items in the prefetch buffer are Futures, not materialized data. Once resolved, 
 ## See Also
 
 - [[data-processing/lance-vs-parquet]] — Storage formats used in ML data pipelines
+- [[data-processing/afm-training-pipeline]] — pipeline that produces the ArrayRecord Gold-layer datasets this dataloader consumes during training

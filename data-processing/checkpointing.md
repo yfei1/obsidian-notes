@@ -294,3 +294,4 @@ A design for morsel-driven engines, where map pipelines dominate. A **morsel** i
 - [[distributed-systems/chandy-lamport]] — full derivation of the Chandy-Lamport snapshot algorithm that Flink's barrier checkpointing is based on
 - [[data-processing/lance-vs-parquet]] — why Lance fragment files enable concurrent multi-worker writes where Parquet requires full rewrites
 - [[data-processing/morsel-driven-parallelism]] — the underlying execution model for the morsel-lease checkpointing strategy
+- [[data-processing/afm-training-pipeline]] — the sequential multi-stage pipeline whose checkpoints this note describes managing
