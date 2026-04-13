@@ -211,7 +211,11 @@ The wrapper needs `__call__` because it returns a `BatchEncoding` dict (`{"input
 - `__call__(text, ...)` → returns `BatchEncoding` (dict: `input_ids`, `attention_mask`, etc.)
 - `encode(text, ...)` → returns `list[int]` (IDs only)
 
-Both delegate to `encode_plus()` (HF's internal method that handles padding, truncation, and special-token logic before calling SP) internally but are independent dispatch points — overriding one does not intercept calls to the other. The initial `encode()` override fixed the sync path because `_tokenize_prompt()` calls `tokenizer.encode()` directly. It left the async path broken because `AsyncMicrobatchTokenizer` must call `__call__()`, not `encode()`: the wrapper batches N prompts, gets back `{"input_ids": [[ids1], [ids2], ...]}`, and slices `results["input_ids"][i]` per request. `encode()` returns only `list[int]` — no dict, no per-request index — so the wrapper cannot use it for batched dispatch. The fix requires overriding both entry points and routing each to the same `_encode_chat()` helper.
+Both delegate to `encode_plus()` (HF's internal method that handles padding, truncation, and special-token logic before calling SP), but they are independent dispatch points — overriding one does not intercept calls to the other.
+
+The initial `encode()` override fixed only the sync path because `_tokenize_prompt()` calls `tokenizer.encode()` directly. The async path stayed broken because `AsyncMicrobatchTokenizer` batches N prompts and slices `results["input_ids"][i]` to distribute per-request results — which requires the dict that `__call__` returns. `encode()` returns only `list[int]`: no dict, no per-request index, so the wrapper cannot use it for batched dispatch. The wrapper is therefore forced to call `__call__`, which our `encode()` override never intercepts.
+
+The fix requires overriding both entry points and routing each to the same `_encode_chat()` helper.
 
 ### The corrected fix: override both `__call__` and `encode`
 
