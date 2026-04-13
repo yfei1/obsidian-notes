@@ -1,5 +1,9 @@
 # PT-MoE Chat Template Tokenization Fix
 
+## TL;DR
+
+vLLM's `/v1/chat/completions` path produces echo or garbled output because it tokenizes chat prompts differently from training. The root cause: HuggingFace's `encode()` splits the prompt on `additional_special_tokens` (`<turn_start>`, `<turn_end>`) before calling SentencePiece, destroying word-boundary context at every split. Training feeds the full string to raw SP as one unit, strips the leading `▁` artifact, and prepends BOS (id 1) manually. The fix overrides **both** `__call__` and `encode` on the tokenizer — because vLLM's async API path calls `__call__` (via `AsyncMicrobatchTokenizer`) while the sync offline path calls `encode` — routing both through a shared `_encode_chat()` helper that replicates the training path exactly.
+
 ## Problem
 
 **The `/v1/chat/completions` endpoint produces echo/garbled output because vLLM tokenizes chat prompts differently from training.** vLLM's chat path calls `apply_chat_template(tokenize=False)` to render a string, then tokenizes it via `tokenizer.encode()` — but HuggingFace's `encode()` splits on `additional_special_tokens` (`<turn_start>`, `<turn_end>`) — a list of tokens that `PreTrainedTokenizer` scans for and splits out before passing remaining text chunks to the underlying tokenizer — before calling SentencePiece, destroying the word-boundary context SP (SentencePiece — a subword tokenizer that segments text into pieces based on a trained unigram or BPE model) needs at each split boundary. Training feeds the full string to raw SP as one unit, strips the leading `▁` artifact, and prepends BOS manually. The result: the same prompt produces different token IDs on the serving path vs. training, so the model sees input it was never trained on.
