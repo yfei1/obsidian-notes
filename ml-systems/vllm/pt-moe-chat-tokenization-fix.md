@@ -209,6 +209,11 @@ self.tokenizer(prompts, **kwargs)      # HF __call__, NOT .encode()
 # Single mode (different kwargs per request):
 self.tokenizer(p, **kw)               # HF __call__, NOT .encode()
 ```
+```text
+# Both call HF __call__ on TammSentencePieceTokenizer — never .encode()
+# Batch: returns BatchEncoding{"input_ids": [[ids1],[ids2],...]} — sliced per request
+# Single: returns BatchEncoding{"input_ids": [ids]} for one prompt
+```
 
 `self.tokenizer` is our `TammSentencePieceTokenizer`. But the wrapper calls `tokenizer(text)` (HF's `__call__`), not `tokenizer.encode(text)`. Our `encode()` override is never reached.
 
