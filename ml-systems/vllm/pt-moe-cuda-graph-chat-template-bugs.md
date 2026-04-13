@@ -109,15 +109,13 @@ IDs: [150000, 145022, 1050, 4, 330, 8440, 1046, 262, ...]
 
 ### Why the model echoes (not garbles)
 
-HuggingFace splits on special tokens (`<turn_start>`, `<turn_end>`) before calling SentencePiece, so those tokens land at the correct IDs — the model still recognizes chat structure. Only content tokens between boundaries differ. This locality determines the failure mode.
+HuggingFace splits on special tokens (`<turn_start>`, `<turn_end>`) before calling SentencePiece, so those tokens land at the correct IDs — the model still recognizes chat structure. Only content tokens between boundaries differ. This locality determines the failure mode: the depth of corruption sets which failure mode fires.
 
-Three failure modes arise from different corruption depths:
+**Echo** (Bug 2) — structure tokens are intact, but the boundary shift (`▁A` id 145053 → `A` id 330) prevents instruction-following heads from activating, because those heads learned to fire on the specific token IDs that signal the start of user content. With no instruction signal, the model falls back to co-occurrence: the highest-probability next tokens are the prompt tokens themselves, so the model repeats the prompt.
 
-**Echo** (Bug 2) — structure tokens are intact, but the boundary shift (`▁A` id 145053 → `A` id 330) prevents instruction-following heads from activating, because those heads learned to fire on the specific token IDs that signal the start of user content. With no instruction signal, the model falls back to co-occurrence: the highest-probability next tokens are the prompt tokens themselves.
+**Garble** — content tokens are entirely unrecognizable (e.g., random IDs), not just boundary-shifted. Because no trained co-occurrence pattern matches the corrupted IDs, the distribution has no strong mode — the model produces syntactically plausible but semantically incoherent text.
 
-**Garble** — content tokens are entirely unrecognizable (e.g., random IDs), not just boundary-shifted. The distribution has no strong co-occurrence mode, so the model produces syntactically plausible but semantically incoherent text.
-
-**Distribution collapse** (newlines, as in Bug 1) — hidden states are numerically corrupted (not just token IDs wrong), so the output distribution concentrates on the highest-prior token in the training corpus: `<n>` (id 4).
+**Distribution collapse** (newlines, as in Bug 1) — hidden states are numerically corrupted (not just token IDs wrong), so the output distribution concentrates on the highest-prior token in the training corpus: `<n>` (id 4). Token IDs may be correct; the corruption is in the activations, not the input.
 
 Bug 2 produces echo rather than garble because the damage is local: structure tokens are intact, only content-boundary tokens shift. The model partially matches trained chat patterns but never enters instruction-following mode — so it defaults to repeating what it saw.
 
