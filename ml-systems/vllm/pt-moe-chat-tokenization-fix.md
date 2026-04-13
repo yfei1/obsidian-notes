@@ -12,7 +12,7 @@ The fix requires overriding **both** `__call__` and `encode` on the tokenizer �
 
 ## How vLLM processes chat vs completion requests
 
-### Completion (`/v1/completions`) — simple path
+### Completion (`/v1/completions`) — single phase
 
 ```
 api_router.py:47 → OpenAIServingCompletion.create_completion
@@ -23,7 +23,7 @@ api_router.py:47 → OpenAIServingCompletion.create_completion
           → base.py:343 tokenizer.encode(prompt, add_special_tokens=True)
 ```
 
-No template. Raw text → `encode()` → model. `add_special_tokens=True` (default for completions, set at `base.py:267-279` `default_cmpl_tok_params`). No chat template rendering — the tokenization mismatch described in this note does not affect this path.
+No template. Raw text → `encode()` → model. `add_special_tokens=True` (default for completions, set at `base.py:267-279` `default_cmpl_tok_params`). The tokenization mismatch described in this note does not affect this path.
 
 ### Chat (`/v1/chat/completions`) — two-phase path
 
