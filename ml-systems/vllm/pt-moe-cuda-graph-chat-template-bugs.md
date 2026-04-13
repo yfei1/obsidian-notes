@@ -237,3 +237,4 @@ Without the override, step 4 would be `self.encode()` which goes through Hugging
 - `ajax/experiments/post_train/input_grain/text.py:336-389` — training tokenization
 - `ajax/instruct_lm/input/preprocess_utils_numpy.py:155-203` — `encode_with_special_tokens()`
 - `ajax/omnie/tokenizer/impls/afm_150k_20241209.py:12` — `override_bos_id=1`
+- [[ml-systems/vllm/pt-moe-chat-tokenization-fix]]

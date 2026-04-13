@@ -312,3 +312,5 @@ assert 3308 not in buggy_ids         # ▁user absent from buggy (split into 308
 ```
 
 ## Connections
+- [[ml-systems/vllm/pt-moe-cuda-graph-chat-template-bugs]] — related chat template bugs in CUDA graph path
+
