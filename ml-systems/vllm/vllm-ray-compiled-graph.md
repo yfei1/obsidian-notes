@@ -173,9 +173,9 @@ Neither type knows about Ray, CG, or the executor. Per step through the DAG:
 
 ### Why CG Cannot Broadcast Like MessageQueue
 
-Ray's compiled DAG channel abstraction is **per-edge** — each DAG edge gets its own independent shared memory buffer (`CompositeChannel`, `shared_memory_channel.py:648`). When the DAG fans out the same SchedulerOutput to 4 workers, it creates 4 edges, each with a separate buffer, and `SynchronousWriter` (`common.py:617`) serializes and writes to each one in a loop.
+Ray's compiled DAG channel abstraction is **per-edge** — each DAG edge gets its own independent shared memory buffer (`CompositeChannel`, `shared_memory_channel.py:648`). Because a general-purpose DAG must allow each edge to carry different data, CG cannot assume that fanning out to 4 workers means 4 copies of the same payload. So when the DAG fans out the same SchedulerOutput to 4 workers, it creates 4 independent edges and `SynchronousWriter` (`common.py:617`) serializes and writes to each buffer in a loop — O(TP) blocking writes, not one.
 
-MessageQueue was purpose-built for broadcast: one POSIX SHM region (a named OS-level shared memory segment all processes map into their address space), one `memcpy`, N readers on the same mapped memory. This is a Ray architectural choice — general-purpose DAGs where each edge may carry different data — not a bug, but a structural mismatch with vLLM's broadcast pattern.
+MessageQueue avoids this because it was purpose-built for broadcast: one POSIX SHM region (a named OS-level shared memory segment all processes map into their address space), one `memcpy`, N readers all mapping the same memory. The write cost is O(1) regardless of worker count. The gap is architectural, not tunable — CG's per-edge model is the correct design for a general DAG runtime; it is simply a structural mismatch with vLLM's broadcast-only dispatch pattern.
 
 ### Dispatch Latency Comparison
 
