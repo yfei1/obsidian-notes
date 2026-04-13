@@ -70,10 +70,10 @@ vLLM always calls `apply_chat_template(tokenize=False)` for HF tokenizers. The r
 
 ## Token vocabulary
 
-Four token types each contribute a distinct mismatch between training and serving. They split into two root causes:
+The serving/training mismatch has two independent root causes:
 
-- **`<turn_start>` / `<turn_end>`** trigger HF's `additional_special_tokens` split, which destroys SP word-boundary context. `▁` artifacts and `<n>` mismatches are downstream consequences of that split.
-- **BOS** is an independent misconfiguration in the HF tokenizer config — not caused by the split.
+- **`additional_special_tokens` split** — HF's `encode()` splits the input string at `<turn_start>`/`<turn_end>` boundaries before calling SP, destroying the word-boundary context SP needs. `▁` artifacts and `<n>` mismatches are downstream consequences of this split.
+- **BOS misconfiguration** — the HF tokenizer config points to the wrong BOS token ID; this is independent of the split and would be missing even if the split were fixed.
 
 ### `<turn_start>` (id 150000) and `<turn_end>` (id 150001) — the root split
 
@@ -83,7 +83,7 @@ Because they live in **`additional_special_tokens`** — a list maintained by `P
 
 ### `▁` (id 145022) — SentencePiece word boundary marker
 
-SP uses U+2581 to mark the start of a new word. When a chunk begins without prior context — which happens at every split boundary — SP prepends a spurious `▁` before the first real word, because it has no preceding text to attach the boundary marker to. Training strips this artifact at `preprocess_utils_numpy.py:194-202`. The HF split path re-introduces it at every chunk boundary, so affected tokens get wrong IDs (e.g., `A` → id `330` instead of training's `▁A` → id `145053`).
+SP uses U+2581 to mark the start of a new word. When a chunk begins without prior context — which happens at every split boundary — SP prepends a spurious `▁` before the first real word, because it has no preceding text to attach the boundary marker to. Training strips this artifact at `preprocess_utils_numpy.py:194-202`. The HF split path re-introduces it at every chunk boundary, producing wrong IDs (e.g., `A` → id `330` instead of training's `▁A` → id `145053`).
 
 ### `<n>` (id 4) — newline representation
 
@@ -91,7 +91,7 @@ Raw `\n` is ambiguous to SP: depending on training corpus statistics, it can be 
 
 ### `<s>` / BOS (id 1) — independent misconfiguration
 
-The model was trained with BOS (id 1) as the first token in every sequence, so it uses position 0 as a fixed anchor for positional embeddings — without BOS, the model has no signal that position 0 is a sequence start. The HF tokenizer config has `bos_token_id: 153600` (wrong — out of SP's vocabulary range) and `add_bos_token: False`, so neither SP nor HF adds the correct BOS automatically. This misconfiguration is independent of the `additional_special_tokens` split: it would be missing even if the split were fixed. Training overrides `bos_id=1` at `afm_150k_20241209.py:12`; the fix must replicate this manually.
+The model was trained with BOS (id 1) as the first token in every sequence, so it uses position 0 as a fixed anchor for positional embeddings — without BOS, the model has no signal that position 0 is a sequence start. The HF tokenizer config has `bos_token_id: 153600` (wrong — out of SP's vocabulary range) and `add_bos_token: False`, so neither SP nor HF adds the correct BOS automatically. Because this misconfiguration is independent of the `additional_special_tokens` split, fixing the split alone still leaves BOS missing. Training overrides `bos_id=1` at `afm_150k_20241209.py:12`; the fix must replicate this manually.
 
 ## Training tokenization path (ground truth)
 
