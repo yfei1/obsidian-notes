@@ -162,7 +162,7 @@ records = records | "LSH Deduplication" >> BucketedLSHDeduplication(
 )
 ```
 
-Removes **near-duplicates** — documents >90% similar but not byte-identical. Full algorithm explained in [[data-processing/locality-sensitive-hashing]].
+Removes **near-duplicates** — documents >90% similar but not byte-identical. Full algorithm explained in [[data-processing/locality-sensitive-hashing#known-gap-subset-superset-blindness]].
 
 **Key parameters** (`near_dedupe.py:81-116`): 13-word shingles, 180 MinHash signatures, 15 bands of 12 rows, Jaccard threshold 0.9, sliding window size 10.
 
@@ -217,5 +217,5 @@ After the Beam pipeline finishes: `tfds_writer.write_metadata()` (TFDS schema/st
 ## See Also
 
 - [[data-processing/afm-training-pipeline]] — the broader pipeline context this note operates within
-- [[data-processing/locality-sensitive-hashing]] — deep dive on the LSH algorithm used in Stage 7
+- [[data-processing/locality-sensitive-hashing#known-gap-subset-superset-blindness]] — deep dive on the LSH algorithm used in Stage 7
 - [[data-processing/lance-vs-parquet]] — storage format tradeoffs relevant to input/output formats

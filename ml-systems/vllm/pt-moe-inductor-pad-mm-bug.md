@@ -277,4 +277,3 @@ The UNBACKED dynamic shapes mode was never the real fix — it was an accidental
 - [[ml-systems/vllm/pt-moe-vllm-implementation]] — PT-MoE's track parallelism architecture and why per-track numerical drift doesn't cancel at all-reduce boundaries
 - [[ml-systems/vllm/vllm-torch-compile-decorator]] — how vLLM's `@support_torch_compile` sets up Inductor with BACKED vs UNBACKED dynamic shapes
 - [[ml-systems/vllm/fused-moe-vllm-implementation]] — the FusedMoE custom op that receives the (potentially corrupted) router logits
-- [[ml-systems/gpu/bf16-precision]] — bf16 mantissa width and ULP calculations (if this note exists)

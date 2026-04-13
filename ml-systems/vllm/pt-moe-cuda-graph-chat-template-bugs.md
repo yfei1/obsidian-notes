@@ -230,7 +230,7 @@ Without the override, step 4 would be `self.encode()` which goes through Hugging
 
 ## See Also
 
-- [[ml-systems/vllm/vllm-cuda-graph-collective-streams]] — architectural explanation of capture stream management and the _PT patch
+- [[ml-systems/vllm/vllm-cuda-graph-collective-streams#core-intuition]] — architectural explanation of capture stream management and the _PT patch
 - `afm_pt_moe.py:103-162` — `init_track_parallel_groups()`, `_rebuild_tp()`, `_build_pt()`
 - `_vllm_plugin.py:152-204` — `_patch_graph_capture_for_pt()`
 - `tamm_afm.py:169-195` — `apply_chat_template()` override
