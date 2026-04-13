@@ -31,7 +31,7 @@ If a tensor is created without `.cuda()` or `device="cuda"`, PyTorch defaults to
 
 ### The problem: kernel launch overhead
 
-During decode, a single forward pass across 32 transformer layers requires ~100+ separate CUDA kernel launches from Python. The GPU computation takes ~0.1ms, but Python dispatch overhead takes ~1.5ms. The GPU spends >90% of its time idle, waiting for launch instructions.
+During decode, a single forward pass across 32 transformer layers requires ≥224 separate CUDA kernel launches from Python (32 layers × ~7 kernels/layer: Q/K/V/O projections, MLP gate+up, MLP down, layer norm — plus embeddings and sampling). The GPU computation takes ~0.1ms, but Python dispatch overhead takes ~1.5ms. The GPU spends >90% of its time idle, waiting for launch instructions.
 
 ### CUDA graphs: record once, replay many
 
@@ -39,7 +39,7 @@ A CUDA graph records a sequence of GPU instructions once, compiles them into a s
 
 Three phases:
 
-1. **Pre-allocation**: Graph memory shapes cannot change after recording, so input/output tensors must be statically sized before capture. `max_model_len` is the maximum sequence length the engine supports (e.g., 8192 tokens); `block_size` is the fixed number of token slots per KV cache block (vLLM default: 16). <!-- source: vLLM default block_size --> Example: `block_tables = torch.zeros(256, 512)` — shape `[max_batch_size=256, max_model_len//block_size = 8192//16 = 512]`, costing `256 × 512 × 4 = 524,288 bytes` (0.5 MB at int32). Sizing to `max_model_len` guarantees the buffer is large enough for any sequence the engine will process.
+1. **Pre-allocation**: Graph memory shapes cannot change after recording, so input/output tensors must be statically sized before capture. `max_model_len` is the maximum sequence length the engine supports (e.g., 8192 tokens); `block_size` is the fixed number of token slots per KV cache block (vLLM default: 16). <!-- source: vLLM default block_size --> Example: `block_tables = torch.zeros(256, 512)` — shape `[max_batch_size=256, max_model_len//block_size = 8192//16 = 512]`, costing `256 × 512 × 4 = 524,288 bytes` (0.5 MB at int32); `slot_mappings = torch.zeros(256)` — shape `[max_batch_size=256]`, costing `256 × 4 = 1,024 bytes` (1 slot per sequence per decode step). Sizing to `max_model_len` guarantees the buffer is large enough for any sequence the engine will process.
 2. **Capture**: Run exactly one forward pass using the static tensors. PyTorch records the execution sequence.
 3. **Replay**: Each inference step, copy dynamic data into the static tensors and call `graph.replay()`.
 
