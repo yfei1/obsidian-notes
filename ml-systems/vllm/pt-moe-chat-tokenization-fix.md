@@ -215,11 +215,9 @@ The wrapper needs `__call__` because it returns a `BatchEncoding` dict (`{"input
 - `__call__(text, ...)` → returns `BatchEncoding` (dict: `input_ids`, `attention_mask`, etc.)
 - `encode(text, ...)` → returns `list[int]` (IDs only)
 
-Both delegate to `encode_plus()` — HF's internal method that handles padding, truncation, and special-token logic before calling SP. But they are **independent dispatch points**: overriding one does not intercept calls to the other, because Python method resolution dispatches `tokenizer(text)` to `__call__` and `tokenizer.encode(text)` to `encode` — two separate method objects on the class.
+Both ultimately delegate to `encode_plus()` — HF's internal method that handles padding, truncation, and special-token logic before calling SP. But they are **independent dispatch points**: Python method resolution dispatches `tokenizer(text)` to `__call__` and `tokenizer.encode(text)` to `encode` — two separate method objects. Overriding one does not intercept calls to the other.
 
-`AsyncMicrobatchTokenizer` must call `__call__` rather than `encode` because it batches N prompts and distributes results by slicing `results["input_ids"][i]`. That slice requires the `BatchEncoding` dict — `encode()` returns only `list[int]`, which has no per-request index and no batchable structure.
-
-The initial `encode()` override therefore fixed only the sync path: `_tokenize_prompt()` calls `tokenizer.encode()` directly, so the override ran there. But the async path calls `tokenizer(text)` — `__call__` — which bypassed the override entirely, leaving the live server still on the broken HF path. The fix requires overriding both entry points and routing each to the same `_encode_chat()` helper.
+`AsyncMicrobatchTokenizer` calls `__call__` rather than `encode` because it needs a `BatchEncoding` dict to distribute results across N batched prompts by slicing `results["input_ids"][i]`. `encode()` returns only `list[int]` — no dict, no per-request index. This is why overriding `encode()` alone fixed the sync path (`_tokenize_prompt()` calls `tokenizer.encode()` directly) but left the async path broken (`AsyncMicrobatchTokenizer` calls `tokenizer(text)` → `__call__`, bypassing the override entirely). The fix must override both entry points and route each to the same `_encode_chat()` helper.
 
 ### The corrected fix: override both `__call__` and `encode`
 
