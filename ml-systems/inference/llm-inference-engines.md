@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-A GPU forward pass can process many tokens in parallel, but requests arrive at different times, run for different lengths, and share scarce HBM. Naive approaches — one request at a time, static batching, contiguous KV allocation — leave the GPU mostly idle. An LLM inference engine solves this with three layers: a **scheduler** (CPU, manages memory + request queues), a **model runner** (GPU, executes forward passes), and optionally an **async server frontend** (HTTP, routes user requests). The key mechanisms are **continuous batching** (eject finished sequences mid-batch, insert new ones immediately), **PagedAttention** (virtual memory for KV cache — eliminates fragmentation, enables sharing), and **chunked prefill** (mix prefill + decode tokens in one step to prevent decode starvation). Studied via `nano-vLLM` (educational, ~400 LOC) with comparisons to production `vLLM`.
+A GPU forward pass can process many tokens in parallel, but requests arrive at different times, run for different lengths, and share scarce HBM (High Bandwidth Memory — the on-package DRAM on modern GPUs, faster but smaller than system RAM). Naive approaches — one request at a time, static batching, contiguous KV allocation — leave the GPU mostly idle. An LLM inference engine solves this with three layers: a **scheduler** (CPU, manages memory + request queues), a **model runner** (GPU, executes forward passes), and optionally an **async server frontend** (HTTP, routes user requests). The key mechanisms are **continuous batching** (eject finished sequences mid-batch, insert new ones immediately), **PagedAttention** (virtual memory for KV cache — eliminates fragmentation, enables sharing), and **chunked prefill** (mix prefill + decode tokens in one step to prevent decode starvation). Studied via `nano-vLLM` (educational, ~400 LOC) with comparisons to production `vLLM`.
 
 ---
 
@@ -33,8 +33,8 @@ nano-vLLM (educational):
 ```
 vLLM (production):
 
-  AsyncLLM (FastAPI)        ← HTTP server, streams tokens via SSE
-       ↓ ZMQ sockets
+  AsyncLLM (FastAPI)        ← HTTP server, streams tokens via SSE (Server-Sent Events — a one-way HTTP push protocol)
+       ↓ ZMQ sockets (inter-process message queue)
   EngineCore (separate process)
   ├── Scheduler             ← Same role, more sophisticated
   ├── ModelExecutor         ← Manages GPU worker processes
@@ -247,7 +247,7 @@ def loop(self):
 
 ## Async Server Architecture (What nano-vLLM Skips)
 
-nano-vLLM exposes `generate()` — a **blocking batch API**. For a MaaS server, you need to decouple request intake from the engine loop:
+nano-vLLM exposes `generate()` — a **blocking batch API**. For a MaaS (Model-as-a-Service) server, you need to decouple request intake from the engine loop:
 
 ```python
 # WRONG — generate() blocks, serializes all users:
@@ -311,7 +311,7 @@ The GPU forward pass takes ~10-50ms. Python scheduler overhead is ~1ms (<5% of t
 | Component | Language | Why |
 |---|---|---|
 | Scheduler, BlockManager | Python | Developer velocity (800+ contributors), GPU is the bottleneck |
-| Attention kernels | CUDA C++ / Triton | Must be fast — this IS the bottleneck |
+| Attention kernels | CUDA C++ / Triton (GPU kernel language that compiles to PTX, like CUDA but in Python) | Must be fast — this IS the bottleneck |
 | MoE dispatch | CUDA C++ / Triton | Same reason |
 | Tokenizer | Rust (HuggingFace) | CPU-bound string processing — Python IS the bottleneck here |
 
