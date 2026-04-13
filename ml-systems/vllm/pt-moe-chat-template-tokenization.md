@@ -269,6 +269,15 @@ def encode(self, text, add_special_tokens=True, **kwargs):
 
 Both override methods delegate to the same `_encode_chat()` helper.
 
+```text
+# _encode_chat("<turn_start> system\nA conversation...")
+# → replace \n → <n>, SP.Encode on full string, strip leading ▁, prepend BOS
+# → [1, 150000, 1050, 4, 145053, ...] — 30 tokens, matches training exactly
+# __call__(chat_text) → BatchEncoding({"input_ids": [1, 150000, ...], "attention_mask": [1, 1, ...]})
+# encode(chat_text)   → [1, 150000, 1050, 4, 145053, ...]  (same IDs, list[int])
+# encode(non_chat)    → super().encode(...) — standard HF path unchanged
+```
+
 ### Why this works
 
 1. **Async chat path**: `AsyncMicrobatchTokenizer` → `tokenizer(text)` → our `__call__` → `_encode_chat()` → raw SP
