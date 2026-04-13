@@ -217,38 +217,21 @@ Both delegate to `encode_plus()` (HF's internal method that handles padding, tru
 
 In `tamm_afm.py`, we now override three methods:
 
-```
-Define _encode_chat(text) — shared helper:
-  preprocess text (replace \n → <n>)
-  run raw SentencePiece encode on full string as one unit
-  if first token is ▁ (id 145022): strip it (SP word-boundary artifact)
-  prepend BOS (id 1); return ids
-
-__call__(text): catches async path (AsyncMicrobatchTokenizer calls tokenizer(text))
-  if single string containing "<turn_start>": call _encode_chat, wrap in BatchEncoding dict
-  else: fall through to super().__call__ (completions, non-chat)
-
-encode(text): catches sync path (_tokenize_prompt calls tokenizer.encode(text))
-  if string containing "<turn_start>": call _encode_chat, return ids
-  else: fall through to super().encode
-```
-
-```
-_encode_chat(text) — shared helper for both entry points:
-  replace all \n → <n> (so SP sees the user-defined symbol, not raw newline)
-  run raw SentencePiece encode on the FULL string as one unit (no HF splitting)
-  if first token is ▁ (id 145022): strip it (SP word-boundary artifact at string start)
-  prepend BOS (id 1); return ids
-
-__call__(text) — intercepts async path (AsyncMicrobatchTokenizer calls tokenizer(text)):
-  if single string containing "<turn_start>": call _encode_chat, wrap result in
-    BatchEncoding dict {"input_ids": ids, "attention_mask": [1]*len(ids)}
-    (wrapper needs dict to slice per-request results across batched N prompts)
-  else: fall through to super().__call__ (completions, non-chat, batch mode)
-
-encode(text) — intercepts sync path (_tokenize_prompt calls tokenizer.encode(text)):
-  if string containing "<turn_start>": call _encode_chat, return list[int]
-  else: fall through to super().encode (completions, non-chat)
+```python
+# _encode_chat(text): shared helper — both entry points route here for chat prompts
+#   replace \n → <n>  (SP user-defined symbol; raw \n produces wrong ID)
+#   SP.Encode on FULL string as one unit  (no HF split, preserves word-boundary ctx)
+#   strip leading ▁ (id 145022) if present  (SP artifact at string start)
+#   prepend BOS (id 1)  (training prepends manually; HF config has wrong bos_token_id 153600)
+#
+# __call__(text): async path — AsyncMicrobatchTokenizer calls tokenizer(text)
+#   chat string → _encode_chat → BatchEncoding({"input_ids": ids, "attention_mask": [1]*N})
+#   (wrapper needs dict to slice results["input_ids"][i] across N batched prompts)
+#   non-chat / batch → super().__call__
+#
+# encode(text): sync path — _tokenize_prompt calls tokenizer.encode(text)
+#   chat string → _encode_chat → list[int]
+#   non-chat → super().encode
 ```
 
 ```python
