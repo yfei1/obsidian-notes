@@ -2,7 +2,7 @@
 
 ## Problem
 
-**The `/v1/chat/completions` endpoint produces echo/garbled output because vLLM tokenizes chat prompts differently from training.** vLLM's chat path calls `apply_chat_template(tokenize=False)` to render a string, then tokenizes it via `tokenizer.encode()` — but HuggingFace's `encode()` splits on `additional_special_tokens` (`<turn_start>`, `<turn_end>`) before calling SentencePiece, destroying the word-boundary context SP (SentencePiece — a subword tokenizer that segments text into pieces based on a trained unigram or BPE model) needs at each split boundary. Training feeds the full string to raw SP as one unit, strips the leading `▁` artifact, and prepends BOS manually. The result: the same prompt produces different token IDs on the serving path vs. training, so the model sees input it was never trained on.
+**The `/v1/chat/completions` endpoint produces echo/garbled output because vLLM tokenizes chat prompts differently from training.** vLLM's chat path calls `apply_chat_template(tokenize=False)` to render a string, then tokenizes it via `tokenizer.encode()` — but HuggingFace's `encode()` splits on `additional_special_tokens` (`<turn_start>`, `<turn_end>`) — a list of tokens that `PreTrainedTokenizer` scans for and splits out before passing remaining text chunks to the underlying tokenizer — before calling SentencePiece, destroying the word-boundary context SP (SentencePiece — a subword tokenizer that segments text into pieces based on a trained unigram or BPE model) needs at each split boundary. Training feeds the full string to raw SP as one unit, strips the leading `▁` artifact, and prepends BOS manually. The result: the same prompt produces different token IDs on the serving path vs. training, so the model sees input it was never trained on.
 
 The fix requires overriding **both** `__call__` and `encode` on the tokenizer — because vLLM's async API path calls `__call__` (via `AsyncMicrobatchTokenizer` — a wrapper that makes the HF tokenizer async-safe by batching concurrent encode requests and offloading them to a thread), while the sync offline path calls `encode`. Overriding only `encode()`, as the initial attempt did, leaves the async path broken because `AsyncMicrobatchTokenizer` never calls `.encode()` — it calls `tokenizer(text)` to get a `BatchEncoding` (a dict containing `input_ids`, `attention_mask`, etc.) it can slice across batched requests.
 
@@ -35,7 +35,7 @@ api_router.py:47 → OpenAIServingChat.create_chat_completion
       → hf.py:666 safe_apply_chat_template(tokenize=False)
           → hf.py:496 tokenizer.apply_chat_template(tokenize=False)
           → returns STRING (not token IDs)
-      → preprocess.py:124 parse_dec_only_prompt(string) → TextPrompt
+      → preprocess.py:124 parse_dec_only_prompt(string) → TextPrompt (a plain struct holding the rendered string, no token IDs yet)
 
       Phase 2: TOKENIZE (string → token IDs)
       → base.py:829 tokenize_prompts_async()
