@@ -131,8 +131,27 @@ def extract_wikilinks(content: str) -> list[str]:
     """Extract all [[wikilink]] targets from content.
 
     Handles piped syntax: [[target|display text]] returns just 'target'.
+    Strips Obsidian anchor syntax: [[note#section]] returns just 'note'.
+    Filters out false positives: array notation like [[0, 1, 2, 3]],
+    range notation like [[0..31]], and strips .md suffixes.
     """
-    return re.findall(r'\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]', content)
+    raw = re.findall(r'\[\[([^\]|]+?)(?:\|[^\]]+?)?\]\]', content)
+    filtered = []
+    for link in raw:
+        # Skip array/matrix notation: purely numeric/punctuation/bracket entries
+        if re.fullmatch(r'[\d\s,;.+\-*/\[\]]+', link):
+            continue
+        if '..' in link:
+            continue
+        # Strip Obsidian section anchors: [[note#section]] → note
+        if '#' in link:
+            link = link.split('#')[0]
+            if not link:  # bare [[#section]] anchor — skip
+                continue
+        if link.endswith('.md'):
+            link = link[:-3]
+        filtered.append(link)
+    return filtered
 
 
 # ---------------------------------------------------------------------------

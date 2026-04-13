@@ -93,7 +93,7 @@ SUBJECTIVE_PROMPTS = {
         "excellent": "Clear scope, explicit prerequisites with links, well-connected to related notes, consistent terminology, reader can navigate the vault from this note",
     },
     "Conciseness": {
-        "description": "Could this be said in fewer words or lines without losing information? Penalizes verbose explanations, redundant phrasing, unnecessary qualifiers, filler phrases ('it is worth noting', 'essentially', 'basically'), and paragraphs that could be sentences. Sections > 20 lines of prose signal bloat. Distinct from Knowledge Density: a note can be dense but still verbose.",
+        "description": "Could this be said in fewer words or lines without losing information? Penalizes verbose explanations, redundant phrasing, unnecessary qualifiers, filler phrases ('it is worth noting', 'essentially', 'basically'), and paragraphs that could be sentences. Sections > 20 lines of prose signal bloat. Distinct from Knowledge Density: a note can be dense but still verbose. Sections of 25-35 lines are acceptable when doing genuine progressive build-up with each paragraph introducing one new concept — do not penalize mechanically on line count alone.",
         "poor": "Verbose explanations, redundant phrasing, filler phrases, paragraphs that should be sentences, could be half the length",
         "excellent": "Every sentence earns its place, no tighter version exists without losing meaning, no filler phrases",
     },
@@ -430,7 +430,7 @@ def score_uniqueness(note: Path, content: str, all_notes: list[Path],
 
     # Intra-file: check if sections within this note restate each other
     rel = relative_path(note)
-    intra = detect_intra_overlaps({rel: content}, threshold=0.6)
+    intra = detect_intra_overlaps({rel: content})
     if intra:
         n = len(intra)
         worst = intra[0]
