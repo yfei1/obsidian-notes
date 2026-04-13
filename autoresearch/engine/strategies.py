@@ -399,6 +399,107 @@ The note ({target_path}):
 ---
 """ + OPS_FORMAT_INSTRUCTIONS,
     ),
+
+    Strategy(
+        name="fill_cross_links",
+        description="Populate empty See Also/Connections with valid wikilinks to related notes",
+        prompt_template="""You are populating the linking section of this Obsidian note.
+
+The note's linking section (See Also, Connections, or Related Concepts) is empty or
+contains very few links. Your job: add wikilinks to genuinely related notes.
+
+RULES:
+1. Only link to notes that exist in the vault: {note_list}
+2. Each link must have a one-line context description
+3. Only add links that are genuinely related — not every note in the vault
+4. Do NOT modify any other section of the note
+5. Format: - [[topic/subtopic]] — one-line description of how it relates
+
+If the note has no linking section at all, add one:
+- If note has ## TL;DR: add ## See Also
+- If note has ## Core Intuition: add ## Connections
+- If note has ## Role in System: add ## Related Concepts
+
+Constitution (quality goals):
+---
+{constitution}
+---
+
+Note ({target_path}):
+---
+{content}
+---
+""" + OPS_FORMAT_INSTRUCTIONS,
+    ),
+
+    Strategy(
+        name="add_template_sections",
+        description="Add missing TL;DR, tags, See Also scaffolding to notes lacking them",
+        prompt_template="""You are adding missing structural sections to this Obsidian note.
+
+The note is missing one or more required sections. Your job: add the minimum
+scaffolding to make it structurally compliant.
+
+WHAT TO ADD (only if missing):
+1. Tags on line 3 (e.g. #ml-systems #interview-prep) — infer from directory and content
+2. ## TL;DR (or ## Core Intuition) — write 3-4 self-sufficient sentences summarizing
+   the note's content. Extract this from the existing content, don't invent.
+3. ## See Also (or ## Connections) — add at least one wikilink to a related note.
+   Available notes: {note_list}
+
+RULES:
+- Do NOT rewrite or restructure existing content
+- Do NOT remove any existing sections
+- Keep additions minimal — just the scaffolding, not new content
+- TL;DR must be extractable from the note's existing content
+- Tags must match the directory naming convention
+
+Constitution (quality goals):
+---
+{constitution}
+---
+
+Note ({target_path}):
+---
+{content}
+---
+""" + OPS_FORMAT_INSTRUCTIONS,
+    ),
+
+    Strategy(
+        name="fix_code_output",
+        description="Add output blocks after unpaired code blocks to show results",
+        prompt_template="""You are adding output blocks to code examples in this Obsidian note.
+
+Goal: For each code block that lacks a paired output block, add the expected output
+immediately after it. This follows the constitution: "Always pair code with output."
+
+RULES:
+1. Only add output blocks — do NOT modify existing code blocks
+2. Output must be realistic and match what the code would actually produce
+3. Use appropriate language tags: ```text, ```json, ```output, or no tag
+4. If you cannot determine the output with certainty, add a comment explaining
+   what the output would show (e.g., "# Output: tensor of shape [B, S, D]")
+5. Skip code blocks that already have output, are configuration (YAML/JSON),
+   or are shell commands
+6. Keep outputs concise — show the key result, not pages of log output
+
+LINE BUDGET — CRITICAL:
+Your edit MUST be net-zero or net-negative on line count. For every line of output
+you add, remove the corresponding vague prose description of what the code does.
+The output IS the explanation.
+
+Constitution (quality goals):
+---
+{constitution}
+---
+
+Note ({target_path}):
+---
+{content}
+---
+""" + OPS_FORMAT_INSTRUCTIONS,
+    ),
 ]
 
 
@@ -548,6 +649,60 @@ Constitution:
 ---
 
 Note ({target_path}):
+---
+{content}
+---
+""" + OPS_FORMAT_INSTRUCTIONS,
+)
+
+
+# ---------------------------------------------------------------------------
+# Merge sections strategy — collapses subsections into parent sections
+# ---------------------------------------------------------------------------
+
+MERGE_SECTIONS_STRATEGY = Strategy(
+    name="merge_sections",
+    description="Merge a subsection into its parent section to reduce section count toward the template target",
+    prompt_template="""You are merging two related sections in an Obsidian note to move it toward
+the constitution's template structure (5-6 top-level sections).
+
+MERGE TARGET: Absorb '{section_b}' into '{section_a}'.
+
+RULES:
+1. Produce ONE edit_file op that replaces the region from '{section_a}' through
+   the end of '{section_b}' with a single merged section.
+2. The merged section keeps the header of '{section_a}'.
+3. ALL facts, code blocks, numbers, bold terms, and wikilinks from BOTH sections
+   must appear in the merged result. Nothing is deleted — only reorganized.
+4. If '{section_b}' has content that doesn't fit under '{section_a}', weave it
+   into the flow — don't just concatenate.
+5. Compress redundant transitions between the two sections.
+6. The merged section should be SHORTER than the two sections combined
+   (remove the header + any redundant bridging text).
+
+CRITICAL — INLINE DEFINITIONS (auto-rejected if violated):
+A gate checks that every **bold term** (parenthetical definition) from the original
+survives in the output. Before writing your edit, LIST every **term** (...) pattern
+in BOTH sections. Then verify each one appears VERBATIM in your merged output.
+Common mistake: dropping a **bold term** (explanation) during reflow. The gate will
+catch this and reject your edit. Copy-paste definitions exactly.
+
+WHAT NOT TO DO:
+- Do NOT touch any section outside the merge target
+- Do NOT remove code blocks, numbers, or inline definitions
+- Do NOT add new content — only reorganize existing content
+- Do NOT rename '{section_a}' — keep its exact header
+
+The constitution target structure for this note type:
+  Implementation Walkthrough: Role in System → Mental Model → Step-by-Step Walkthrough → Failure Modes → Connections
+  Concept Note: Core Intuition → How It Works → Trade-offs & Decisions → Connections
+
+Constitution (quality goals):
+---
+{constitution}
+---
+
+Note ({target_path}, {line_count} lines, currently {section_count} sections):
 ---
 {content}
 ---
@@ -881,6 +1036,46 @@ Note summaries:
 {note_summaries}
 
 The index note ({target_path}):
+---
+{content}
+---
+""" + OPS_FORMAT_INSTRUCTIONS,
+)
+
+
+# ---------------------------------------------------------------------------
+# Fix bidirectional links strategy (cross-file)
+# ---------------------------------------------------------------------------
+
+FIX_BIDI_LINKS_STRATEGY = Strategy(
+    name="fix_bidi_links",
+    description="Add reverse wikilinks in target notes to make links bidirectional",
+    prompt_template="""You are fixing bidirectional wikilinks in an Obsidian vault.
+
+This note ({target_path}) has wikilinks that are NOT reciprocated by the target notes.
+The following links need reverse links added:
+
+{missing_reverse_links}
+
+For each missing reverse link, produce an append_file op that adds a bullet entry
+to the target note's linking section (## Connections, ## Related Concepts, or ## See Also).
+
+FORMAT for each append:
+- [[{target_stem}]] — brief one-line description of the relationship
+
+RULES:
+1. Do NOT modify the source note ({target_path}) — only append to target notes
+2. Append to the EXISTING linking section in each target note
+3. If a target note has no linking section, create ## Connections at the end
+4. Each reverse link gets a contextual one-line description
+5. Do NOT duplicate links that already exist in the target
+
+Constitution (quality goals):
+---
+{constitution}
+---
+
+Source note ({target_path}):
 ---
 {content}
 ---

@@ -18,7 +18,7 @@ from pathlib import Path
 from shared import (
     REPO_ROOT, AUTORESEARCH_DIR, git_commit, git_push, git_head_hash,
     fix_bidirectional_links, discover_notes, read_note, relative_path,
-    is_conforming, is_index_note,
+    is_conforming, is_index_note, extract_wikilinks,
 )
 from autoresearch_core.util import detect_overlaps, Overlap, detect_intra_overlaps
 from engine.delta import Delta, Op
@@ -26,7 +26,9 @@ from engine.grpo import grpo_rank, IDENTITY_ID
 from engine.strategies import (
     NOTE_STRATEGIES, SPLIT_STRATEGY, DEDUP_STRATEGY, SYSTEMATIZE_STRATEGY,
     REWRITE_STRATEGY, CONSOLIDATE_STRATEGY, RENAME_STRATEGY, CROSSLINK_STRATEGY,
-    NORMALIZE_STRATEGY, CONDENSE_STRATEGY, SPLIT_LINE_THRESHOLD, Strategy,
+    NORMALIZE_STRATEGY, CONDENSE_STRATEGY, FIX_BIDI_LINKS_STRATEGY,
+    MERGE_SECTIONS_STRATEGY,
+    SPLIT_LINE_THRESHOLD, Strategy,
 )
 from engine.gates import (
     check_all_gates, GateResult,
@@ -40,7 +42,7 @@ from engine.state import (
     AttemptRecord, append_history, save_delta_ops, load_history, save_generation_metadata,
 )
 from judges.ensemble import default_ensemble
-from score import score_all_notes_batched, DIMENSIONS, RULE_BASED_DIMS
+from score import score_all_notes_batched, score_rule_based, DIMENSIONS, RULE_BASED_DIMS
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -49,7 +51,7 @@ from score import score_all_notes_batched, DIMENSIONS, RULE_BASED_DIMS
 GROUP_SIZE = 4              # 3 strategies + identity
 MAX_GENERATIONS = 100
 
-CROSS_FILE_STRATEGIES = {"split", "dedup", "cross_link", "consolidate", "rename"}
+CROSS_FILE_STRATEGIES = {"split", "dedup", "cross_link", "consolidate", "rename", "fix_bidi_links"}
 REWRITE_ADVANTAGE_THRESHOLD = 1.5  # Rewrites need strong judge consensus
 SOFT_GATE_ADVANTAGE_THRESHOLD = 1.5  # Soft gates relax when judges strongly agree
 
@@ -107,7 +109,6 @@ def _verify_concretize_claims(ops: list, original_content: str,
     import tempfile
 
     # Build a diff summary of what concretize changed
-    from engine.delta import Delta, Op
     temp_delta = Delta(generation=0, strategy="concretize", intent="", ops=ops)
     file_contents = {target_path: original_content}
     new_contents, err = temp_delta.execute_all(file_contents)
@@ -124,7 +125,6 @@ def _verify_concretize_claims(ops: list, original_content: str,
         original_content.splitlines(), new_content.splitlines(), n=0))
     added_lines = [l[1:] for l in diff_lines if l.startswith("+") and not l.startswith("+++")]
     # Filter to lines containing numbers
-    import re
     numeric_lines = [l for l in added_lines if re.search(r'\d+\.?\d*\s*(MB|GB|TB|ms|us|µs|ns|TFLOPS|GFLOPS|lines|tokens|bytes|KB|%)', l, re.IGNORECASE)]
 
     if not numeric_lines:
@@ -184,7 +184,6 @@ def _extract_fact_inventory(content: str) -> str:
     Returns a formatted string listing all numbers, code blocks, wikilinks,
     bold terms, and file:line references that must survive a rewrite.
     """
-    import re
     items: list[str] = []
 
     # Numbers with units
@@ -247,7 +246,6 @@ def _verify_fact_preservation(original: str, new_content: str) -> list[str]:
 
     Returns list of missing artifacts (empty = all preserved).
     """
-    import re
     missing: list[str] = []
 
     # Fix 8: Number normalization — compare numeric values, not string representations.
@@ -299,14 +297,15 @@ def _verify_fact_preservation(original: str, new_content: str) -> list[str]:
 
 
 def _record_losers(deltas: list[Delta], winner_id: str, generation: int,
-                   target_path: str, advantages: dict):
+                   target_path: str, advantages: dict,
+                   outcome: str = "identity_won"):
     """Record history for all non-winning deltas."""
     for d in deltas:
         if d.id != winner_id:
             append_history(AttemptRecord(
                 generation=generation, target=target_path,
                 strategy=d.strategy, delta_id=d.id,
-                outcome="identity_won",
+                outcome=outcome,
                 advantage=advantages.get(d.id, 0.0),
             ))
 
@@ -321,7 +320,6 @@ def _extract_prereq_terms(target_content: str, file_contents: dict[str, str]) ->
     Returns a formatted block for injection into the clarify prompt, or empty string.
     Only activates for notes with explicit **Prerequisites**: declarations.
     """
-    import re
     # Parse prerequisite wikilinks from the note
     prereq_match = re.search(
         r'\*\*Prerequisites?\*\*:?\s*(.*?)(?:\n\n|\n##|\n---)',
@@ -565,7 +563,8 @@ def select_target(notes: list[Path], history: list[dict],
 # and append wikilinks, but cannot edit unrelated existing files.
 _SINGLE_FILE_STRATEGIES = {
     "densify", "concretize", "motivate", "restructure", "clarify",
-    "scope_tighten", "systematize",
+    "scope_tighten", "systematize", "merge_sections",
+    "add_template_sections", "fix_code_output", "compress", "fill_cross_links",
 }
 
 
@@ -695,6 +694,41 @@ def _check_gates_cross_file(winner: Delta, file_contents: dict[str, str],
         return True, all_violations
 
 
+def _rescore_rule_based(winner, cached_scores: dict, all_notes: list[Path],
+                        file_contents: dict[str, str]) -> None:
+    """Re-run rule-based scoring on modified notes + their wikilink neighbors after adoption.
+
+    Rule-based scoring is instant (no LLM), so this has zero performance cost.
+    Updates cached_scores in-place for Cross-Linking, Code Quality, and Uniqueness.
+    """
+    # Collect affected paths + their wikilink neighbors
+    paths_to_rescore: set[str] = set()
+    for path in winner.affected_paths():
+        paths_to_rescore.add(path)
+        content = file_contents.get(path, "")
+        if not content and (REPO_ROOT / path).exists():
+            content = read_note(REPO_ROOT / path)
+        for link in extract_wikilinks(content):
+            neighbor = link + ".md"
+            if neighbor in file_contents:
+                paths_to_rescore.add(neighbor)
+
+    rescored = 0
+    for path in paths_to_rescore:
+        note_path = REPO_ROOT / path
+        if not note_path.exists():
+            continue
+        content = read_note(note_path)
+        rule_scores = score_rule_based(note_path, content, all_notes,
+                                        content_cache=file_contents)
+        cached_scores.setdefault(path, {}).update(rule_scores)
+        rescored += 1
+
+    if rescored:
+        print(f"  [Rescore] Rule-based re-scored {rescored} note(s) "
+              f"({', '.join(sorted(paths_to_rescore)[:3])}{'...' if len(paths_to_rescore) > 3 else ''})")
+
+
 # ---------------------------------------------------------------------------
 # Main evolution loop
 # ---------------------------------------------------------------------------
@@ -718,6 +752,14 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
     note_tried: dict[str, dict[str, str]] = {}
     # Rate limit: notes that have been rewritten this run (max once per note)
     rewritten_notes: set[str] = set()
+    # Target-level backoff: consecutive generations targeting the same note without adoption.
+    # After MAX_CONSECUTIVE_NO_ADOPT, the note is temporarily suppressed.
+    # With the min_deltas=1 relaxation kicking in at 2 consecutive failures,
+    # the note gets real attempts before suppression.
+    MAX_CONSECUTIVE_NO_ADOPT = 6
+    consecutive_target: str = ""
+    consecutive_no_adopt: int = 0
+    suppressed_targets: set[str] = set()
 
     print("=" * 60)
     print("Residual-GRPO Evolution Loop — Phase 1 (Op-based)")
@@ -763,7 +805,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
         # Pre-filter: for strategies with preconditions, only consider eligible notes
         _pre_overlaps = None
         if strategy_filter == "dedup":
-            _pre_overlaps = detect_overlaps(file_contents, threshold=0.7)
+            _pre_overlaps = detect_overlaps(file_contents)
             _overlap_notes = set()
             for o in _pre_overlaps:
                 _overlap_notes.add(o.source_path)
@@ -771,6 +813,12 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             filtered_notes = [n for n in filtered_notes if relative_path(n) in _overlap_notes]
             if not filtered_notes:
                 print(f"\n  No notes have cross-file overlaps. Stopping early.")
+                break
+        # Target-level backoff: exclude suppressed notes so the loop makes progress elsewhere
+        if suppressed_targets:
+            filtered_notes = [n for n in filtered_notes if relative_path(n) not in suppressed_targets]
+            if not filtered_notes:
+                print(f"\n  All remaining notes are suppressed ({len(suppressed_targets)}). Stopping early.")
                 break
         target_note = select_target(filtered_notes, history, cached_scores,
                                      note_tried=note_tried, strategy_filter=strategy_filter)
@@ -782,11 +830,25 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
         target_lines = len(target_content.splitlines())
         print(f"\n[Target] {target_path} ({target_lines} lines)")
 
+        # Track consecutive targeting for backoff
+        if target_path == consecutive_target:
+            consecutive_no_adopt += 1
+            if consecutive_no_adopt >= MAX_CONSECUTIVE_NO_ADOPT:
+                suppressed_targets.add(target_path)
+                print(f"  [Backoff] Suppressing {target_path} after {consecutive_no_adopt} "
+                      f"consecutive generations without adoption")
+                consecutive_target = ""
+                consecutive_no_adopt = 0
+                continue
+        else:
+            consecutive_target = target_path
+            consecutive_no_adopt = 0
+
         # ── BUILD CANDIDATE POOL (Fix 2: unified, no guaranteed conditional slots) ──
         n_candidates = group_size - 1  # total strategy slots (excl. identity)
 
         # Detect context for conditional strategies (reuse pre-computed if available)
-        overlaps = _pre_overlaps if _pre_overlaps is not None else detect_overlaps(file_contents, threshold=0.7)
+        overlaps = _pre_overlaps if _pre_overlaps is not None else detect_overlaps(file_contents)
         target_overlap = None
         for o in overlaps:
             if o.source_path == target_path:
@@ -913,7 +975,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
         if not is_conforming(target_content):
             candidate_pool.append((NORMALIZE_STRATEGY, {}))
         # condense: when sections within the note restate each other
-        intra_overlaps = detect_intra_overlaps({target_path: target_content}, threshold=0.6)
+        intra_overlaps = detect_intra_overlaps({target_path: target_content})
         if intra_overlaps:
             # Prioritize ITP/See Also overlaps (most actionable), then body-body
             def _overlap_priority(o):
@@ -930,6 +992,76 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 "overlap_ratio": f"{best.overlap_ratio:.0%}",
                 "overlap_preview_a": best.preview_a[:150],
                 "overlap_preview_b": best.preview_b[:150],
+            }))
+
+        # merge_sections: when note has too many sections (>8), find adjacent mergeable pair
+        _all_headers = re.findall(r'^(#{2,3}) (.+)$', target_content, re.MULTILINE)
+        if len(_all_headers) > 8:
+            # Find best merge pair: a ### subsection and its preceding ## parent,
+            # or two adjacent ## sections that could be combined.
+            # Priority: ### under ## (natural child→parent merge), then short ## sections.
+            _section_lines: list[tuple[str, str, int]] = []  # (level, header, line_count)
+            _lines = target_content.split('\n')
+            for i, (level, header) in enumerate(_all_headers):
+                start = next(j for j, l in enumerate(_lines) if l.strip() == f"{level} {header}")
+                if i + 1 < len(_all_headers):
+                    next_level, next_header = _all_headers[i + 1]
+                    end = next(j for j, l in enumerate(_lines) if l.strip() == f"{next_level} {next_header}")
+                else:
+                    end = len(_lines)
+                _section_lines.append((level, header, end - start))
+
+            best_a, best_b = None, None
+            # First: find a ### that can merge into its preceding ##
+            for i in range(1, len(_section_lines)):
+                level, header, lines = _section_lines[i]
+                prev_level, prev_header, prev_lines = _section_lines[i - 1]
+                if level == "###" and prev_level == "##":
+                    best_a = f"## {prev_header}"
+                    best_b = f"### {header}"
+                    break
+                if level == "###" and prev_level == "###":
+                    # Two sibling subsections — find their shared ## parent
+                    for j in range(i - 1, -1, -1):
+                        if _section_lines[j][0] == "##":
+                            best_a = f"## {_section_lines[j][1]}"
+                            best_b = f"### {header}"
+                            break
+                    if best_a:
+                        break
+
+            # Fallback: two adjacent short ## sections
+            if not best_a:
+                for i in range(1, len(_section_lines)):
+                    level, header, lines = _section_lines[i]
+                    prev_level, prev_header, prev_lines = _section_lines[i - 1]
+                    if level == "##" and prev_level == "##" and lines + prev_lines < 60:
+                        best_a = f"## {prev_header}"
+                        best_b = f"## {header}"
+                        break
+
+            if best_a and best_b:
+                candidate_pool.append((MERGE_SECTIONS_STRATEGY, {
+                    "section_a": best_a,
+                    "section_b": best_b,
+                    "section_count": str(len(_all_headers)),
+                }))
+
+        # fix_bidi_links: when the note has outgoing links without reverse links in targets
+        target_stem = target_path.replace(".md", "")
+        outgoing_links = extract_wikilinks(target_content)
+        missing_reverse: list[str] = []
+        for link in outgoing_links:
+            link_path = link + ".md"
+            link_content = file_contents.get(link_path, "")
+            if link_content and f"[[{target_stem}]]" not in link_content:
+                missing_reverse.append(link)
+        if missing_reverse:
+            missing_desc = "\n".join(f"- [[{link}]] does not link back to [[{target_stem}]]"
+                                     for link in missing_reverse[:10])
+            candidate_pool.append((FIX_BIDI_LINKS_STRATEGY, {
+                "missing_reverse_links": missing_desc,
+                "target_stem": target_stem,
             }))
 
         # Apply strategy filter if set
@@ -1137,12 +1269,14 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 paths = delta.affected_paths()
                 print(f"  {strategy.name}: ok ({len(delta.ops)} ops, {len(paths)} file(s))")
 
-        min_deltas = 1 if strategy_filter else 2
+        # Require at least 2 valid deltas for a meaningful GRPO ranking — a single
+        # delta vs identity has no reference point for reliable UCB learning.
+        # EXCEPT: relax to 1 when --strategy filter is active, OR when the note has
+        # been targeted multiple times without adoption (siblings keep crashing —
+        # don't throw away the one strategy that works).
+        note_is_stuck = consecutive_target == target_path and consecutive_no_adopt >= 2
+        min_deltas = 1 if (strategy_filter or note_is_stuck) else 2
         if len(deltas) < min_deltas:
-            # Fix 1: require at least 2 valid deltas for a meaningful GRPO ranking.
-            # A single delta vs identity is a degenerate comparison — the advantage
-            # score has no reference point and UCB learning is unreliable.
-            # Exception: when --strategy filter is active, allow 1 delta (vs identity).
             print(f"  Fewer than {min_deltas} valid deltas ({len(deltas)}). Skipping generation.")
             for d in deltas:
                 append_history(AttemptRecord(
@@ -1444,7 +1578,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 veto_violations = []
 
         # Rewrite higher bar: needs advantage > REWRITE_ADVANTAGE_THRESHOLD
-        if not gate_failed and winner.strategy == "rewrite":
+        if not gate_failed and winner.strategy == "section_rewrite":
             if winner_advantage < REWRITE_ADVANTAGE_THRESHOLD:
                 gate_failed = True
                 veto_violations = [f"Rewrite advantage {winner_advantage:.2f} < {REWRITE_ADVANTAGE_THRESHOLD} threshold"]
@@ -1488,6 +1622,7 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             runner_adv = result.advantages.get(runner_up.id, 0) if runner_up else 0
             if runner_up and runner_adv >= 1.0:
                 print(f"  Trying runner-up: {runner_up.strategy} (adv={runner_adv:.2f})")
+                runner_up.ops = _enforce_op_scope(runner_up.ops, runner_up.strategy, target_path)
                 ru_new_contents, _ = runner_up.execute_all(file_contents)
                 ru_gate_failed, ru_violations = _check_gates_cross_file(
                     runner_up, file_contents, ru_new_contents, all_note_paths,
@@ -1520,6 +1655,17 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                         if d.id not in (winner.id, runner_up.id):
                             note_tried.setdefault(target_path, {})[d.strategy] = "identity_won"
                     cached_scores.pop(target_path, None)
+                    # Update file_contents with newly-written content before re-scoring
+                    for _p in runner_up.affected_paths():
+                        _upd = ru_new_contents.get(_p)
+                        if _upd is not None:
+                            file_contents[_p] = _upd
+                    # Re-score rule-based dimensions for modified notes + neighbors
+                    _rescore_rule_based(runner_up, cached_scores, all_notes, file_contents)
+                    # Reset target backoff on successful adoption
+                    consecutive_no_adopt = 0
+                    if runner_up.strategy == "section_rewrite":
+                        rewritten_notes.add(target_path)
                     history = load_history()
                     save_generation_metadata(generation, {
                         "generation": generation, "target": target_path,
@@ -1535,7 +1681,8 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             for d in deltas:
                 if d.id != winner.id:
                     note_tried.setdefault(target_path, {})[d.strategy] = "identity_won"
-            _record_losers(deltas, winner.id, generation, target_path, result.advantages)
+            _record_losers(deltas, winner.id, generation, target_path, result.advantages,
+                           outcome="vetoed")
             history = load_history()
             save_generation_metadata(generation, {
                 "generation": generation, "target": target_path,
@@ -1582,16 +1729,22 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
 
         # Per-note memory: clear cache for adopted note (note changed, old data stale)
         note_tried.pop(target_path, None)
+        # Reset target backoff on successful adoption
+        consecutive_no_adopt = 0
 
         # Rate limit: mark rewritten notes
-        if winner.strategy == "rewrite":
+        if winner.strategy == "section_rewrite":
             rewritten_notes.add(target_path)
 
-        # Invalidate score cache for adopted note (content changed)
-        cached_scores.pop(target_path, None)
-        # Also invalidate any newly created files
+        # Invalidate score cache and update file_contents for all affected files
         for p in winner.affected_paths():
             cached_scores.pop(p, None)
+            updated = new_contents.get(p)
+            if updated is not None:
+                file_contents[p] = updated
+
+        # Re-score rule-based dimensions for modified notes + neighbors (instant, no LLM)
+        _rescore_rule_based(winner, cached_scores, all_notes, file_contents)
 
         history = load_history()
 
