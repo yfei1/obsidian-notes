@@ -160,7 +160,7 @@ Training always prepends `bos_id=1` (`<s>`) before the chat tokens (`ajax text.p
 flattened_input_ids = [vocab.bos_id] + flattened_input_ids
 ```
 
-Training sets `override_bos_id=1` in the vocabulary config (`afm_150k_20241209.py:12`), so `bos_id` resolves to 1. The tokenizer config exposed to vLLM has `bos_token_id: 153600` and `add_bos_token: False`, and SentencePiece's native `bos_id()` returns -1 — so vLLM adds no BOS.
+Training sets `override_bos_id=1` in the vocabulary config (`afm_150k_20241209.py:12`), so `bos_id` resolves to 1. The tokenizer config exposed to vLLM has `bos_token_id: 153600` and `add_bos_token: False`, and SentencePiece's native `bos_id()` returns -1 — so vLLM adds no BOS. Result: every token shifts one position earlier.
 
 ```
 Training:  [1,   150000,      1050,   4,  145053, ...]
@@ -169,7 +169,11 @@ Serving:   [150000,      1050,   4,  145053, ...]
             <turn_start> system  <n>  ▁A
 ```
 
-Every token is at the wrong position — a uniform shift of −1 across all indices:
+### Why the position shift breaks output
+
+Each token's input embedding is the sum of its content embedding and its **position embedding** — both fixed at training time. The −1 shift means every token activates the wrong position embedding: `<turn_start>` gets the BOS position embedding, `system` gets the `<turn_start>` position embedding, and so on across all N tokens.
+
+This breaks role-detection because the relevant attention heads learned a position-specific trigger: fire when `<turn_start>` (id 150000) appears at position 1. With the shift, `<turn_start>` arrives at position 0 — the slot the model associates with BOS, a sequence-start anchor with no role-switching semantics. The heads never fire, so the model never enters instruction-following mode.
 
 | Position | Training sees | Serving sees |
 |----------|---------------|--------------|
@@ -178,17 +182,11 @@ Every token is at the wrong position — a uniform shift of −1 across all indi
 | 2        | `1050` (`system`) | `4` (`<n>`) |
 | 3        | `4` (`<n>`)   | `145053` (`▁A`) |
 
-### Why the position shift breaks output
-
-Each token's input embedding is the sum of its content embedding and its position embedding — both fixed at training time. The −1 shift means every token activates the wrong position embedding: `<turn_start>` gets the BOS position embedding, `system` gets the `<turn_start>` position embedding, and so on across all N tokens.
-
-The consequence is role-detection failure. During training, the attention heads that signal a role boundary learned to fire when they see `<turn_start>` (id 150000) at position 1. With the shift, `<turn_start>` arrives at position 0 — the slot the model associates with BOS, a sequence-start anchor with no role-switching semantics. Those heads never fire, so the model never enters instruction-following mode.
-
-**Output**: prompt echo or incoherent continuation. This is the same surface symptom as Bug 2, but the mechanism differs: Bug 2 corrupts token IDs at specific boundary positions (local damage); Bug 3 shifts every token's position embedding uniformly (global damage to role-detection across the full sequence).
+**Output**: prompt echo or incoherent continuation — same surface symptom as Bug 2, different mechanism. Bug 2 corrupts token IDs at specific boundary positions (local damage); Bug 3 shifts every token's position embedding uniformly (global damage to role-detection across the full sequence).
 
 ### The fix
 
-Prepend id 1 in `apply_chat_template` — this restores the BOS token that training unconditionally added, realigning every subsequent token to its trained position. **Awaiting verification** (server restarting as of this writing).
+Prepend id 1 in `apply_chat_template` — restoring the BOS token realigns every subsequent token to its trained position embedding, so the role-detection heads see `<turn_start>` at position 1 as expected. **Awaiting verification** (server restarting as of this writing).
 
 ---
 
