@@ -117,3 +117,5 @@ Either way: no engine does this natively (you build it yourself), and random row
 
 - [[data-processing/checkpointing]]
 - [[data-processing/grain-dataloader-architecture]] — Grain DataLoader reads from these storage formats
+- [[data-processing/afm-training-pipeline]]
+- [[data-processing/cleantext-pretraining-pipeline]]
