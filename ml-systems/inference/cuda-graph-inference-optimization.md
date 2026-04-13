@@ -23,7 +23,7 @@ During training, PyTorch builds a computation graph to calculate gradients, cons
 
 ### Global device allocation
 
-If a tensor is created without `.cuda()` or `device="cuda"`, PyTorch defaults to CPU allocation. When that tensor is used in GPU math, it triggers a synchronous PCIe copy that destroys throughput. Engines run `torch.set_default_device("cuda")` at startup to force all tensor factory functions to allocate directly in VRAM.
+If a tensor is created without `.cuda()` or `device="cuda"`, PyTorch defaults to CPU allocation. When that tensor is used in GPU math, it triggers a synchronous PCIe copy that destroys throughput. Engines run `torch.set_default_device("cuda")` at startup to force all tensor factory functions (e.g., `torch.zeros`, `torch.ones`, `torch.tensor` — any call that creates a new tensor) to allocate directly in VRAM.
 
 ---
 
@@ -67,7 +67,7 @@ The decode padding cost is low for two reasons:
 - **Compute shapes are predictable**: the `1` dimension never changes, so zero compute is wasted on padding.
 - **Memory padding is cheap**: the `block_table` (array mapping sequences to their KV cache blocks) is padded with `-1` entries for unused slots. FlashAttention — a memory-efficient attention kernel — accepts explicit per-sequence lengths via a `context_lens` argument and uses those lengths as a read boundary, so padded entries are never accessed.
 
-The prefill padding cost is prohibitive. A 72-token prompt in a graph sized for 8,192 is padded with 8,120 zero tokens. `nn.Linear` layers (linear projections: QKV, output) and MLP blocks execute dense matrix multiplication (`X @ W`) with no short-circuit for zero-valued rows — all 8,192 rows multiply against the full weight matrix. Because these layers dominate transformer compute (each of 32 layers runs 6 linear passes: Q proj, K proj, V proj, O proj = 4; MLP gate+up and down = 2), a 72-token prompt wastes (8192−72)/8192 ≈ 99.1% of tensor core cycles on padding. Compute cost scales with graph size, not actual prompt length.
+The prefill padding cost is prohibitive. A 72-token prompt in a graph sized for 8,192 is padded with 8,120 zero tokens. `nn.Linear` layers (linear projections: QKV, output) and MLP blocks execute dense matrix multiplication (`X @ W`) with no short-circuit for zero-valued rows — all 8,192 rows multiply against the full weight matrix. Because these layers dominate transformer compute (each of 32 layers runs 6 linear passes: Q proj, K proj, V proj, O proj = 4; MLP gate+up and down = 2), a 72-token prompt wastes (8192−72)/8192 ≈ 99.1% of tensor core cycles (the GPU's specialized matrix-multiply units, introduced in Volta-era hardware) on padding. Compute cost scales with graph size, not actual prompt length.
 
 ---
 
