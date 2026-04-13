@@ -106,7 +106,9 @@ residual = hidden_states = self.attn_post_norm(hidden_states) # NORM again
 
 ## Custom Fused Op Design
 
-The invariant the kernel must maintain: once the all-reduce result lands in SRAM, it must not touch HBM again until after the final norm. One kernel covers all four steps atomically:
+**The invariant**: once the all-reduce result lands in SRAM, it must not touch HBM again until after the final norm. Breaking this invariant at any step reintroduces an HBM write + read round-trip (~32 KB, ~5–10 µs kernel launch overhead) between two of the four ops — defeating the fusion.
+
+One kernel covers all four steps atomically, keeping intermediate results in registers:
 
 ```
 allreduce_prenorm_add_postnorm(x, residual, w_pre, w_post, eps)
@@ -117,7 +119,7 @@ allreduce_prenorm_add_postnorm(x, residual, w_pre, w_post, eps)
   return h
 ```
 
-Three independent failure paths break this invariant — each reintroduces an HBM write and defeats the fusion.
+Three independent failure paths each break the invariant in a different layer of the stack.
 
 **Failure 1 — non-contiguous norm weights stall the SRAM-resident chain.** Steps 2 and 4 each read a norm weight vector (`[8192]` bf16 = 16 KB) from HBM. If `w_pre` and `w_post` are stored non-contiguously, the kernel issues two separate 16 KB HBM reads — the all-reduced tensor sits in registers waiting for each load, breaking the SRAM-resident chain between them. Fix: **merged weight storage** — pack `w_pre` and `w_post` into a single contiguous `[w_pre | w_post]` buffer (32 KB) so one coalesced HBM transaction (a contiguous read serviced in a single round-trip) loads both before the norm begins. This is the same pattern `MergedColumnParallelLinear` uses for `gate_proj` and `up_proj`.
 
