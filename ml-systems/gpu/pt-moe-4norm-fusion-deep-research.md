@@ -6,7 +6,7 @@
 
 **PT-MoE's 4-norm sandwich pattern (norm→add→norm per sub-layer) cannot reuse vLLM's existing `fused_add_rms_norm` kernel** because that kernel implements Pre-LN semantics (normalize *before* adding to the residual stream), returning an un-normed residual — but PT-MoE requires Post-LN semantics (normalize *after* adding), where the residual itself must be normed. ("Residual stream": the running sum tensor passed between sub-layers, updated by each block's output.) The sequential dependency (output of add feeds into norm) means the two operations cannot be split across separate kernels without an extra HBM (High Bandwidth Memory — the GPU's main DRAM) roundtrip between them.
 
-A single custom Triton kernel (Triton: a Python-embedded GPU kernel language) `fused_add_rmsnorm_postln` resolves this by fusing each add+post_norm pair, reducing HBM passes from 6→4 per decoder layer and eliminating 2 kernel launches. Each eliminated pair removes one read+write roundtrip: hidden_dim=4096, dtype=bf16 → 2 × 4096 × 2 B = **16 KB per token per fused pair** (×2 pairs = 32 KB/token/layer) — with no new vLLM layer required.
+The unfused baseline requires 6 HBM passes per decoder layer: each of the two add+post_norm pairs costs 3 passes (read residual, read block output, write normed result), and the two pairs are independent. A single custom Triton kernel (Triton: a Python-embedded GPU kernel language) `fused_add_rmsnorm_postln` resolves this by fusing each add+post_norm pair, reducing HBM passes from 6→4 per decoder layer and eliminating 2 kernel launches. Each eliminated pair removes one read+write roundtrip: hidden_dim=4096, dtype=bf16 → 2 × 4096 × 2 B = **16 KB per token per fused pair** (×2 pairs = 32 KB/token/layer) — with no new vLLM layer required.
 
 ---
 
