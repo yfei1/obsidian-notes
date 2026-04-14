@@ -99,7 +99,14 @@ for band_idx in range(15):
     yield (f"{band_idx}:{band_key}", doc_info)
 ```
 
-Every document emits 15 (bucket_key, doc_info) pairs — one per band.
+```text
+# One document emits 15 pairs:
+("0:3a7f9c2b", doc_info)
+("1:d84e1f05", doc_info)
+("2:7b3c8a91", doc_info)
+...  # 12 more bands
+("14:2e6d4f87", doc_info)
+```
 
 ### Step 3: Candidate Selection
 
@@ -223,4 +230,5 @@ The current pipeline implements layers 1-2 but not 3-4. In practice, the combina
 ## See Also
 
 - [[data-processing/cleantext-pretraining-pipeline]] — the pipeline that uses MinHash LSH for Stage 7 deduplication
-- [[data-processing/afm-training-pipeline]] — broader context for why data quality and dedup matter at training scale
+- [[data-processing/llm-training-data-pipeline]] — broader context for why data quality and dedup matter at training scale
+- [[data-processing/lance-vs-parquet]] — deduplication output (hash buckets, near-duplicate sets) lands in columnar storage; format choice (Lance vs Parquet) affects downstream pipeline cost for column additions and random access

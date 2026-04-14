@@ -93,6 +93,12 @@ self._buffer = collections.deque(
     for i in range(next_index, next_index + 500)
 )
 ```
+```text
+# len(self._buffer) == 500
+# self._buffer[0]   → Future<state=running>   (16 threads resolving immediately)
+# self._buffer[499] → Future<state=pending>   (queued, not yet started)
+# memory: ~500 × ~200 bytes ≈ 100 KB total (handles only; tensor data not yet materialized)
+```
 
 16 threads begin resolving Futures — each calls `data_source[idx]`.
 
@@ -104,6 +110,11 @@ self._buffer = collections.deque(
 # grain_pool.py:263 — blocks here until parent .get()s
 multiprocessing_common.add_element_to_queue(element, output_queue, ...)
 # internally: output_queue.put(element, timeout=0.5) → queue.Full → retry
+```
+```text
+# output_queue.qsize() == 1  (full, maxsize=1)
+# put() raises queue.Full → caught → sleep(0.5s) → retry
+# worker loop stalls here; ThreadPoolExecutor threads continue resolving Futures independently
 ```
 
 **Step 4 — Threads continue independently**: While the worker loop is blocked, the 16 threads keep resolving remaining Futures, each calling `data_source[idx]`. But no new Futures are submitted because the worker loop isn't calling `__next__`.
@@ -139,15 +150,22 @@ Items in the prefetch buffer are Futures, not materialized data. Once resolved, 
 
 ## Key Trade-offs & Decisions
 
-**`worker_buffer_size` (B)**: Controls backpressure strength. B=1 (default) means the worker blocks after producing 1 item — lowest memory, but the parent must consume before the next item arrives. B=4-8 smooths out parent jitter at the cost of proportionally more output queue memory.
+Four knobs tune throughput vs. memory. Each maps to exactly one layer from the architecture above.
 
-**`prefetch_buffer_size` (P)**: Controls read-ahead depth. P=500 means 500 Futures submitted to the thread pool. Good for high-latency sources (tens of ms per read). **Caution**: P determines the initial burst size — if each `__getitem__` has memory side effects (e.g., caching layers), P controls the burst.
+**`worker_buffer_size` (B)** — inter-process output queue depth (worker → parent).
+Default B=1: the worker blocks after producing one item, so at most B resolved tensors exist per worker at any time. Raise to B=4–8 when the parent has transient slow steps (e.g., batch collation) — the worker stays ahead instead of stalling — but output queue memory grows as N×B×item_size.
 
-**`num_threads` (T)**: Concurrent `__getitem__` calls per worker. T=16 parallelizes I/O-bound reads. T=1 minimizes contention.
+**`prefetch_buffer_size` (P)** — Future deque depth inside each worker's `PrefetchDatasetIterator`.
+P=500 means 500 Futures are submitted on the first `__next__()` call, triggering P concurrent data source accesses before backpressure engages. Larger P hides high-latency reads (tens of ms per `__getitem__`) because T threads work far ahead of the consumer. **Caution**: if `__getitem__` has memory side effects (e.g., an internal cache), P is the burst size before the worker loop's backpressure can respond — a large P can spike memory transiently.
 
-**`worker_count` (N)**: Spawned processes. Uses `multiprocessing.get_context("spawn")` (`grain_pool.py:626`) — NOT fork — because data sources hold non-fork-safe resources (network connections, mmap handles, thread pools). N×T concurrent `__getitem__` calls system-wide. All per-worker state is duplicated N times because spawn doesn't share memory.
+**`num_threads` (T)** — concurrent `__getitem__` calls within one worker's `ThreadPoolExecutor`.
+T=16 is appropriate for I/O-bound reads (network, disk) because threads overlap their wait times. T=1 is appropriate when `__getitem__` is CPU-bound (e.g., heavy decompression) or when the data source has shared mutable state that makes concurrent access unsafe. Total system-wide concurrent reads: N×T.
 
-**Shuffle**: `IndexSampler` uses a Feistel cipher (`index_shuffle`) — O(1) per lookup, no array allocation. An O(n)-memory shuffle like `randperm(100B)` would need ~800GB (100B × 8 bytes); Grain's is constant memory at any scale.
+**`worker_count` (N)** — number of spawned worker processes.
+Grain uses `multiprocessing.get_context("spawn")` (`grain_pool.py:626`) rather than fork because fork duplicates the parent's file descriptors and thread state — data sources holding network connections, mmap handles, or their own thread pools deadlock or corrupt state after fork. Spawn starts a clean process at the cost of initializing all per-worker state (data source handles, thread pools, prefetch buffers) independently N times.
+
+**Shuffle** — `IndexSampler` uses a Feistel cipher (`index_shuffle`): O(1) per index, no permutation array stored.
+A standard `randperm(100B)` requires 100B × 8 bytes ≈ 800 GB. The Feistel cipher computes `shuffled_index = f(original_index)` on demand, so memory cost is constant regardless of dataset size.
 
 ---
 
@@ -166,4 +184,7 @@ Items in the prefetch buffer are Futures, not materialized data. Once resolved, 
 ## See Also
 
 - [[data-processing/lance-vs-parquet]] — Storage formats used in ML data pipelines
-- [[data-processing/afm-training-pipeline]] — pipeline that produces the ArrayRecord Gold-layer datasets this dataloader consumes during training
+- [[data-processing/llm-training-data-pipeline]] — pipeline that produces tokenized training datasets this dataloader consumes
+- [[data-processing/morsel-driven-parallelism]] — alternative parallel data-processing model; contrasts push-based morsel dispatch with Grain's pull-based bounded-queue backpressure
+- [[data-processing/checkpointing]] — training-pipeline concern that pairs with deterministic data loading: reproducible restarts require both a checkpoint and a recoverable dataloader state
+- [[data-processing/cleantext-pretraining-pipeline]] — upstream pretraining pipeline whose output artifacts (sharded, tokenized records) are the concrete data sources this dataloader reads

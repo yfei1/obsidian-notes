@@ -10,9 +10,11 @@ The 4 norms in PT-MoE's Post-LN pattern are purely local elementwise ops with ze
 
 ## Core Intuition
 
-The norms sit entirely after the all-reduce boundary. After `o_proj`'s all-reduce syncs the activations, all 4 GPUs (in TP=4) hold identical copies of the full hidden state. Each GPU independently runs `attn_pre_residual_norm → add → attn_post_norm` on the same data — pure redundant computation. The data only diverges again when `qkv_proj` (ColumnParallel) shards the output.
+Every all-reduce in TP leaves a gap: data lands in HBM, then the next op reads it back. For PT-MoE's Post-LN pattern, that gap spans 4 norm ops — each a separate kernel launch and HBM round-trip on the critical path between `o_proj`'s all-reduce and `qkv_proj`'s GEMM.
 
-The norms add zero communication cost but do add **latency** on the critical path between the all-reduce and the next GEMM. That's exactly why `AllReduceFusionPass` exists.
+The norms are also fully redundant across TP ranks. After `o_proj`'s all-reduce syncs the activations, all 4 GPUs hold identical copies of the full hidden state. Each independently runs `attn_pre_residual_norm → add → attn_post_norm` on the same data — same weights, same inputs, same outputs. The data only diverges again when `qkv_proj` (ColumnParallel) shards the output.
+
+Fusing the all-reduce with the norm sequence eliminates the HBM round-trip entirely — data stays in SRAM from sync through the final norm. That's the AR+norm fusion opportunity.
 
 ---
 
@@ -62,7 +64,7 @@ The norms, the add, and the residual are all **replicated** across TP ranks — 
 
 ---
 
-## The AR+Norm Fusion Opportunity
+## Why Llama's AR+Norm Fusion Doesn't Port to PT-MoE
 
 vLLM has an **Inductor pattern matcher** (`allreduce_rms_fusion.py`) that fuses `all_reduce -> fused_add_rms_norm` into a single FlashInfer kernel for **Llama**:
 
@@ -72,15 +74,9 @@ o_proj partial output -> all_reduce -> fused_add_rms_norm(output, residual)
                         fused into ONE FlashInfer call (zero HBM round-trip between AR and norm)
 ```
 
-### Why this doesn't work for PT-MoE
+This doesn't port directly to PT-MoE. The Llama pattern is `all_reduce -> fused_add_rms_norm(x, residual) -> (normed, residual_sum)`, but PT-MoE's Post-LN pattern is `all_reduce -> rms_norm(x) -> add(+residual) -> rms_norm(sum)`. FlashInfer's API only supports specific pattern codes (`kARResidualRMSNorm`, etc.) — there is no `kARRMSNormAddRMSNorm` for our two-norm variant. A custom kernel is required.
 
-The Llama pattern: `all_reduce -> fused_add_rms_norm(x, residual) -> (normed, residual_sum)`
-
-Our Post-LN pattern: `all_reduce -> rms_norm(x) -> add(+residual) -> rms_norm(sum)`
-
-FlashInfer's API only supports specific pattern codes (`kARResidualRMSNorm`, etc.). No `kARRMSNormAddRMSNorm` for our variant.
-
-### Custom AR+norm kernel with merged weights
+## Custom AR+Norm Kernel: What It Takes
 
 If we wrote `allreduce_prenorm_add_postnorm(x, residual, w_pre, w_post, eps)`:
 
@@ -92,7 +88,7 @@ If we wrote `allreduce_prenorm_add_postnorm(x, residual, w_pre, w_post, eps)`:
 return h                    <- both hidden_states and residual
 ```
 
-...all in one kernel, with the all-reduced data **never touching HBM** between steps 1-4, then:
+...all in one kernel, with the all-reduced data **never touching HBM** between steps 1-4. Three integration pieces are required:
 
 1. **Merged weight storage** — pack `w_pre` and `w_post` into `[w_pre | w_post]`, like `MergedColumnParallelLinear` packs `gate_proj` and `up_proj`
 2. **Custom weight loading** — route `attn_pre_residual_norm.weight` → shard 0, `attn_post_norm.weight` → shard 1, similar to `stacked_params_mapping` in `afm_pt_moe.py:443-447`

@@ -673,9 +673,9 @@ def _check_gates_cross_file(winner: Delta, file_contents: dict[str, str],
         return True, all_violations
 
     # Aggregate content across all affected files for combined check
-    affected = winner.affected_paths()
+    affected = list(winner.affected_paths())
     combined_original = "\n".join(file_contents.get(p, "") for p in affected)
-    combined_new = "\n".join(new_contents.get(p) or "" for p in affected)
+    combined_new = "\n".join((new_contents.get(p) or file_contents.get(p, "")) for p in affected)
 
     combined_result = GateResult()
     _gate_causal_reasoning(combined_original, combined_new, combined_result)
@@ -994,13 +994,32 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 "overlap_preview_b": best.preview_b[:150],
             }))
 
-        # merge_sections: when note has too many sections (>8), find adjacent mergeable pair
+        # Template-aware section planning: detect note type and compute section delta
         _all_headers = re.findall(r'^(#{2,3}) (.+)$', target_content, re.MULTILINE)
-        if len(_all_headers) > 8:
-            # Find best merge pair: a ### subsection and its preceding ## parent,
-            # or two adjacent ## sections that could be combined.
-            # Priority: ### under ## (natural child→parent merge), then short ## sections.
-            _section_lines: list[tuple[str, str, int]] = []  # (level, header, line_count)
+        _h2_names = [h for lvl, h in _all_headers if lvl == "##"]
+        _has_subsections = any(lvl == "###" for lvl, _ in _all_headers)
+
+        # Detect note type from existing sections
+        _is_impl = any(kw in target_content.lower() for kw in
+                       ["file:line", "code block", "step-by-step", "implementation",
+                        "walkthrough", "the fix", "the bug"])
+        if _is_impl:
+            _template_sections = ["TL;DR", "What This Component Does",
+                                  "Step-by-Step Walkthrough", "Edge Cases & Gotchas",
+                                  "Interview Talking Points", "See Also"]
+        else:
+            _template_sections = ["TL;DR", "Core Intuition", "How It Works",
+                                  "Key Trade-offs & Decisions", "Interview Talking Points",
+                                  "See Also"]
+
+        # Sections that already match a template name (case-insensitive)
+        _template_lower = {t.lower() for t in _template_sections}
+        _link_sections = {"connections", "see also", "related concepts"}
+        _matching = {h for h in _h2_names if h.lower() in _template_lower or h.lower() in _link_sections}
+
+        # merge_sections: when note has subsections (###) or too many ## sections
+        if _has_subsections or len(_h2_names) > len(_template_sections) + 2:
+            _section_lines: list[tuple[str, str, int]] = []
             _lines = target_content.split('\n')
             for i, (level, header) in enumerate(_all_headers):
                 start = next(j for j, l in enumerate(_lines) if l.strip() == f"{level} {header}")
@@ -1011,8 +1030,8 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                     end = len(_lines)
                 _section_lines.append((level, header, end - start))
 
-            best_a, best_b = None, None
-            # First: find a ### that can merge into its preceding ##
+            best_a, best_b, target_name = None, None, None
+            # Priority 1: merge a ### into its parent ##
             for i in range(1, len(_section_lines)):
                 level, header, lines = _section_lines[i]
                 prev_level, prev_header, prev_lines = _section_lines[i - 1]
@@ -1021,7 +1040,6 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                     best_b = f"### {header}"
                     break
                 if level == "###" and prev_level == "###":
-                    # Two sibling subsections — find their shared ## parent
                     for j in range(i - 1, -1, -1):
                         if _section_lines[j][0] == "##":
                             best_a = f"## {_section_lines[j][1]}"
@@ -1030,22 +1048,32 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                     if best_a:
                         break
 
-            # Fallback: two adjacent short ## sections
+            # Priority 2: merge two adjacent non-template ## sections
             if not best_a:
                 for i in range(1, len(_section_lines)):
                     level, header, lines = _section_lines[i]
                     prev_level, prev_header, prev_lines = _section_lines[i - 1]
-                    if level == "##" and prev_level == "##" and lines + prev_lines < 60:
+                    if (level == "##" and prev_level == "##"
+                            and prev_header not in _matching and header not in _matching
+                            and lines + prev_lines < 80):
                         best_a = f"## {prev_header}"
                         best_b = f"## {header}"
+                        # Suggest the closest template section name for the merged result
+                        _combined = (prev_header + " " + header).lower()
+                        for t in _template_sections:
+                            if any(w in _combined for w in t.lower().split()):
+                                target_name = t
+                                break
                         break
 
             if best_a and best_b:
-                candidate_pool.append((MERGE_SECTIONS_STRATEGY, {
+                ev = {
                     "section_a": best_a,
                     "section_b": best_b,
                     "section_count": str(len(_all_headers)),
-                }))
+                    "target_name": target_name or "(not specified — keep the header of section_a)",
+                }
+                candidate_pool.append((MERGE_SECTIONS_STRATEGY, ev))
 
         # fix_bidi_links: when the note has outgoing links without reverse links in targets
         target_stem = target_path.replace(".md", "")
@@ -1064,14 +1092,13 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
                 "target_stem": target_stem,
             }))
 
-        # Apply strategy filter if set
+        # Apply strategy filter if set (supports comma-separated list)
         if strategy_filter:
-            candidate_pool = [(s, ev) for s, ev in candidate_pool if s.name == strategy_filter]
+            _filter_set = set(strategy_filter.split(","))
+            candidate_pool = [(s, ev) for s, ev in candidate_pool if s.name in _filter_set]
             if not candidate_pool:
                 print(f"  Strategy '{strategy_filter}' not available for {target_path} "
                       f"(no overlap detected or precondition unmet), skipping.")
-                # Mark this strategy as unavailable for this note so target selection
-                # doesn't keep picking it (precondition failure, not LLM-dependent)
                 note_tried.setdefault(target_path, {})[strategy_filter] = "unavailable"
                 continue
 
@@ -1310,8 +1337,20 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
             active_judges = judges
             print("  [Judges] Restored full ensemble (too few after filtering)")
 
-        # Build extra context for judges when dedup or condense is involved
+        # Build extra context for judges when dedup, condense, or merge_sections is involved
         extra_context = ""
+        if any(d.strategy == "merge_sections" for d in deltas):
+            _section_count = len(re.findall(r'^#{2,3} ', target_content, re.MULTILINE))
+            extra_context = (
+                f"## Structural context\n"
+                f"This note has {_section_count} sections but the constitution template targets "
+                f"5-6 top-level sections. One candidate merges a subsection into its parent "
+                f"to reduce section count. This is a deliberate structural improvement.\n\n"
+                f"Evaluate whether the merged content PRESERVES all information from both "
+                f"sections and reads as coherent prose — NOT whether you prefer the old "
+                f"subsection header. A merge that preserves all facts while reducing section "
+                f"count is an improvement even if you'd normally prefer the header."
+            )
         if any(d.strategy == "condense" for d in deltas) and intra_overlaps:
             overlap_desc = "\n".join(
                 f"- '{o.section_b}' restates '{o.section_a}' ({o.overlap_ratio:.0%} word overlap)"
@@ -1492,8 +1531,14 @@ def run_evolution(max_gen: int = MAX_GENERATIONS, group_size: int = GROUP_SIZE,
         # Minimum advantage threshold: advantage is (borda_score - mean) / std, so
         # adv >= 1.0 means the winner is ≥1σ above the mean of all candidates.
         # adv < 1.0 means the winner did not clearly separate from the pack — reject.
-        if winner_advantage < 1.0:
-            print(f"\n  IDENTITY WINS — advantage {winner_advantage:.2f} < 1.0 (minimum threshold).")
+        # Structural strategies (merge_sections) get a lower bar: they need to not be
+        # clearly worse, not clearly better. The value comes from section reduction.
+        # Structural strategies (merge_sections, dedup) get a lower bar: they need to not be
+        # clearly worse, not clearly better. The value comes from section reduction / dedup.
+        _structural_strategies = {"merge_sections", "dedup"}
+        min_advantage = 0.0 if winner.strategy in _structural_strategies else 1.0
+        if winner_advantage < min_advantage:
+            print(f"\n  IDENTITY WINS — advantage {winner_advantage:.2f} < {min_advantage} (minimum threshold).")
             _record_losers(deltas, IDENTITY_ID, generation, target_path, result.advantages)
             for d in deltas:
                 note_tried.setdefault(target_path, {})[d.strategy] = "below_threshold"

@@ -9,7 +9,7 @@ CleanText is an Apache Beam pipeline that transforms raw AppleBot web crawl data
 
 ## What This Pipeline Does
 
-CleanText implements the Bronze→Silver→Gold transition from the [[data-processing/afm-training-pipeline|medallion architecture]]. It takes raw Parquet files from AppleBot web crawls (Bronze), applies filtering, deduplication, and decontamination (Silver), then writes TensorFlow Datasets format for training (Gold).
+CleanText implements the Bronze→Silver→Gold transition from the [[data-processing/llm-training-data-pipeline|LLM data pipeline]]. It takes raw Parquet files from web crawls (Bronze), applies filtering, deduplication, and decontamination (Silver), then writes training-ready format (Gold).
 
 The orchestrator is `cleantext.py` — a ~180-line file that composes all stages into a single Beam pipeline. Each stage is a reusable `BaseCheckpointTransform` with Beam metrics counters for observability.
 
@@ -118,7 +118,7 @@ The specific threshold was determined empirically through ablation studies — s
 
 **Implementation** (`fasttext_classifier.py:317-363`): Uses Beam's `RunInference` for batched prediction (100–1000 docs per batch). A single-entry model cache (`_MODEL_CACHE`) prevents OOM when Dataflow assigns work items from multiple stages to the same worker — evicts previous models before loading new ones.
 
-After Gopher filters remove obvious junk, FastText catches subtler quality issues — this is the "ML Models' help" referenced in the [[data-processing/afm-training-pipeline|medallion architecture's Silver layer]].
+After Gopher filters remove obvious junk, FastText catches subtler quality issues — this is the model-based quality filtering stage described in [[data-processing/llm-training-data-pipeline]].
 
 ### Stage 5: Profanity Filter
 
@@ -162,15 +162,15 @@ records = records | "LSH Deduplication" >> BucketedLSHDeduplication(
 )
 ```
 
-Removes **near-duplicates** — documents >90% similar but not byte-identical. Full algorithm explained in [[data-processing/locality-sensitive-hashing#known-gap-subset-superset-blindness]].
+Removes **near-duplicates** — documents >90% similar but not byte-identical — because exact SHA256 dedup (Stage 6) misses paraphrased mirrors, lightly-edited scrapers, and syndicated content that differ by a few words. Without this stage, the model sees thousands of near-identical documents and over-indexes on their content. Full algorithm explained in [[data-processing/locality-sensitive-hashing#known-gap-subset-superset-blindness]].
 
-**Key parameters** (`near_dedupe.py:81-116`): 13-word shingles, 180 MinHash signatures, 15 bands of 12 rows, Jaccard threshold 0.9, sliding window size 10.
+**Key parameters** (`near_dedupe.py:81-116`): 13-word shingles (long enough to be distinctive, short enough to survive minor edits), 180 MinHash signatures, 15 bands of 12 rows, Jaccard threshold 0.9, sliding window size 10. The 15-band/12-row configuration sets the LSH collision probability — more bands increase recall at the cost of more false-positive candidate pairs.
 
 **Implementation** (`near_dedupe.py:121-207`):
 1. Assign unique doc IDs (MD5 of URL or text)
-2. Generate MinHash signatures + band bucket keys
-3. `GroupByKey` on bucket keys → find candidate pairs via sliding window comparison
-4. Two-round strategy: if >50% of a bucket are duplicates, round 2 runs with doubled window on survivors
+2. Generate MinHash signatures + band bucket keys — documents with identical band keys are candidate duplicates
+3. `GroupByKey` on bucket keys → find candidate pairs via sliding window comparison (window size 10 bounds per-bucket work to avoid O(n²) blowup on large buckets)
+4. Two-round strategy: if >50% of a bucket are duplicates, round 2 runs with doubled window on survivors — because a first pass that evicts most duplicates makes the second pass cheap enough to catch stragglers
 5. `CoGroupByKey` join to remove duplicate doc IDs from original dataset
 
 **Gap**: Jaccard LSH misses subset/superset relationships — a short excerpt inside a long article scores low Jaccard despite full containment. See [[data-processing/locality-sensitive-hashing#known-gap-subset-superset-blindness]].
@@ -216,7 +216,9 @@ After the Beam pipeline finishes: `tfds_writer.write_metadata()` (TFDS schema/st
 
 ## See Also
 
-- [[data-processing/afm-training-pipeline]] — the broader pipeline context this note operates within
+- [[data-processing/llm-training-data-pipeline]] — the broader pipeline context this note operates within
 - [[data-processing/locality-sensitive-hashing#known-gap-subset-superset-blindness]] — deep dive on the LSH algorithm used in Stage 7
 - [[data-processing/lance-vs-parquet]] — storage format tradeoffs relevant to input/output formats
 - [[data-processing/locality-sensitive-hashing]]
+- [[data-processing/checkpointing]] — checkpointing strategies (morsel-lease, Column Link, Identifier ACK) that apply directly to long-running multi-stage pretraining pipelines like this one
+- [[data-processing/grain-dataloader-architecture]] — downstream dataloader that reads the sharded, tokenized records this pipeline produces

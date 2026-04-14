@@ -210,13 +210,20 @@ HARD INVARIANTS (violating ANY of these causes automatic rejection):
    split sections >20 lines, rename generic headers to concept-questions.
    Do NOT reorder sections that are already well-structured.
 
-Target templates from the constitution:
+SECTION NAMING — use the EXACT template names from the constitution when renaming:
 
-Concept Notes should follow:
-  Core Intuition → How It Works → Trade-offs & Decisions → Common Confusions → Connections
+Concept Notes:
+  ## TL;DR → ## Core Intuition → ## How It Works → ## Key Trade-offs & Decisions → ## Interview Talking Points → ## See Also
 
-Implementation Walkthroughs should follow:
-  Role in System → Mental Model → Step-by-Step Walkthrough → Failure Modes → Related Concepts
+Implementation Walkthroughs:
+  ## TL;DR → ## What This Component Does → ## Step-by-Step Walkthrough → ## Edge Cases & Gotchas → ## Interview Talking Points → ## See Also
+
+When you rename a section, use the CLOSEST matching template name. Map:
+- Sections about "what/why this exists" → "What This Component Does" or "Core Intuition"
+- Sections about "how it works step by step" → "Step-by-Step Walkthrough" or "How It Works"
+- Sections about "what breaks / gotchas" → "Edge Cases & Gotchas" or "Key Trade-offs & Decisions"
+- Sections about "verification / testing" → fold into "Edge Cases & Gotchas"
+Do NOT invent custom section names when a template name fits.
 
 General structural rules:
 - Flow: high-level overview → building blocks → details → edge cases.
@@ -226,8 +233,6 @@ General structural rules:
 - Each section should be independently comprehensible if jumped to directly.
 - Split prose sections > 20 lines (25-35 acceptable for real progressive build-up).
 - Any section > 50 lines without a sub-header is too long — split it.
-- Headers should name the concept or question ("Why is KV cache memory-bound?")
-  not generic labels ("Overview", "Details", "Discussion").
 - Notes generally end when the facts end — no ceremonial conclusions. A short
   Connections section linking to related notes is encouraged.
 
@@ -668,34 +673,68 @@ the constitution's template structure (5-6 top-level sections).
 
 MERGE TARGET: Absorb '{section_b}' into '{section_a}'.
 
+CRITICAL — WHAT A GOOD MERGE LOOKS LIKE:
+A merge dissolves the subsection boundary. The subsection's content becomes part of
+the parent section's narrative flow. Do NOT just convert ### to bold — that is a
+formatting change, not a merge, and judges will reject it.
+
+EXAMPLE — BAD merge (header demotion, judges reject this):
+  Before:
+    ## How It Works
+    Overview text.
+    ### Caching Layer
+    The cache stores K/V pairs...
+  After:
+    ## How It Works
+    Overview text.
+    **Caching Layer**: The cache stores K/V pairs...
+  WHY BAD: You just replaced ### with bold. The structure is identical, you lost a
+  header for nothing. Judges see this as a downgrade.
+
+EXAMPLE — GOOD merge (content integration, judges accept this):
+  Before:
+    ## How It Works
+    Overview text.
+    ### Caching Layer
+    The cache stores K/V pairs in GPU HBM. On each decode step, the attention
+    kernel reads all cached keys and values.
+    ### Eviction Policy
+    When HBM fills, oldest entries are evicted by sequence age.
+  After:
+    ## How It Works
+    Overview text.
+
+    The cache stores K/V pairs in GPU HBM — on each decode step, the attention
+    kernel reads all cached keys and values. When HBM fills, oldest entries are
+    evicted by sequence age (eviction is by sequence age, not access recency,
+    because decode always reads ALL cached entries).
+  WHY GOOD: Both subsections dissolved into a single flowing narrative. No header
+  needed because the content reads naturally as one progression. Facts preserved,
+  structure simplified.
+
 RULES:
-1. Produce ONE edit_file op that replaces the region from '{section_a}' through
-   the end of '{section_b}' with a single merged section.
-2. The merged section keeps the header of '{section_a}'.
+1. Produce ONE edit_file op replacing the region from '{section_a}' through the
+   end of '{section_b}' with a single merged section.
+2. If a target_name is provided, rename the merged section header to '## {target_name}'.
+   Otherwise keep the header of '{section_a}'.
+   Target name: {target_name}
 3. ALL facts, code blocks, numbers, bold terms, and wikilinks from BOTH sections
    must appear in the merged result. Nothing is deleted — only reorganized.
-4. If '{section_b}' has content that doesn't fit under '{section_a}', weave it
-   into the flow — don't just concatenate.
+4. Dissolve the subsection boundary — its content should read as part of the
+   parent section's prose, not as a demoted header.
 5. Compress redundant transitions between the two sections.
-6. The merged section should be SHORTER than the two sections combined
-   (remove the header + any redundant bridging text).
 
 CRITICAL — INLINE DEFINITIONS (auto-rejected if violated):
 A gate checks that every **bold term** (parenthetical definition) from the original
 survives in the output. Before writing your edit, LIST every **term** (...) pattern
 in BOTH sections. Then verify each one appears VERBATIM in your merged output.
-Common mistake: dropping a **bold term** (explanation) during reflow. The gate will
-catch this and reject your edit. Copy-paste definitions exactly.
 
 WHAT NOT TO DO:
+- Do NOT just convert ### to **bold** — that is not a merge
 - Do NOT touch any section outside the merge target
 - Do NOT remove code blocks, numbers, or inline definitions
 - Do NOT add new content — only reorganize existing content
 - Do NOT rename '{section_a}' — keep its exact header
-
-The constitution target structure for this note type:
-  Implementation Walkthrough: Role in System → Mental Model → Step-by-Step Walkthrough → Failure Modes → Connections
-  Concept Note: Core Intuition → How It Works → Trade-offs & Decisions → Connections
 
 Constitution (quality goals):
 ---

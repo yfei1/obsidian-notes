@@ -17,7 +17,7 @@ Notes in recommended sequence. Each is self-contained but benefits from predeces
 
 ### 3. LLM Data Infrastructure
 
-5. [[data-processing/afm-training-pipeline]] — AFM training pipeline (6 stages), medallion architecture, data format consolidation, known infrastructure gaps
+5. [[data-processing/llm-training-data-pipeline]] — LLM data pipeline: crawl → filter → dedup → mix → tokenize, with cross-validated techniques from FineWeb, DCLM, RedPajama
 6. [[data-processing/cleantext-pretraining-pipeline]] — CleanText Beam pipeline: 9-stage data funnel from raw web crawl to training-ready TFDS
 7. [[data-processing/locality-sensitive-hashing]] — MinHash LSH for near-dedup, banding S-curve, Jaccard vs containment metrics, gap analysis
 

@@ -60,10 +60,11 @@ manifest.lance  ← central metadata file listing which fragments exist and thei
 
 Checkpointing — persisting intermediate outputs between pipeline stages so a failed stage can restart without re-running earlier ones — maps directly onto Column Link. Each stage appends a fragment; no prior data is read. A multi-stage ML pipeline (e.g., sequential feature extraction jobs) writes each stage's output as a new fragment rather than rewriting the whole table:
 
-```
-Stage 1 output:  | video_id | brightness |      → write fragment_0
-Stage 2 output:  | video_id | quality_score |   → write fragment_1 (Column Link)
-                              └── only new data, metadata points to both fragments
+```text
+# Lance: Stage 2 writes only the new column fragment
+# fragment_0: video_id + brightness  (rows 0–N, written at Stage 1)
+# fragment_1: video_id + quality_score (rows 0–N, written at Stage 2 — Column Link)
+# manifest updated to point at both fragments; fragment_0 never read or rewritten
 ```
 
 With Parquet:
@@ -72,8 +73,10 @@ Stage 1 output:  video_features.parquet  →  | video_id | brightness |
 Stage 2:         Must READ entire file, add column, WRITE new file
                  video_features_v2.parquet → | video_id | brightness | quality_score |
 ```
-
-At PB scale: Lance Column Link writes O(new_column_size). Parquet rewrite is O(entire_table).
+```text
+# Stage 2 I/O: read 1TB (stage 1 file) + write 1.05TB (merged file) = 2.05TB total
+# Lance equivalent: write 50GB fragment + update manifest pointer = 50GB total
+```
 
 1TB table, adding one 50GB embedding column (cloud object store, ~200MB/s sustained):
 - Parquet rewrite: read 1TB + write 1.05TB ≈ 45–90 minutes
@@ -96,12 +99,12 @@ At PB scale: Lance Column Link writes O(new_column_size). Parquet rewrite is O(e
 
 ## Could Iceberg/Delta Simulate Column Link on Parquet?
 
-Iceberg and Delta are **table-format metadata layers** — systems that add versioning and schema-evolution bookkeeping on top of Parquet files, without changing the underlying file format itself. They could approximate Column Link by storing each column as a separate Parquet file and managing joins in the **catalog** (the metadata index mapping file paths to table versions). Two strategies exist for handling updates without a native Column Link, both with costs:
+Iceberg and Delta are **table-format metadata layers** — systems that add versioning and schema-evolution bookkeeping on top of Parquet files, without changing the underlying file format itself. Because they sit above Parquet rather than replacing it, they cannot change how Parquet lays out columns inside a file — so adding a column still requires touching the underlying Parquet data. Two workarounds exist, each trading one cost for another:
 
-- **Merge-on-read**: store row-level change deltas (the diff, not the full row) in separate files; merge them into the base data at query time. Avoids rewriting on update, but every read pays a merge cost.
-- **Copy-on-write**: on every update, materialize a fully merged Parquet file. Eliminates per-read merge overhead, but restores the full-rewrite cost that Column Link was designed to avoid.
+- **Merge-on-read**: write row-level change deltas (the diff, not the full row) as separate files; merge them into the base data at query time. Avoids rewriting on update, but every read pays a merge cost proportional to accumulated deltas.
+- **Copy-on-write**: on every update, materialize a fully merged Parquet file. Eliminates per-read merge overhead, but restores the full O(table) rewrite cost that Column Link avoids.
 
-Either way: no engine does this natively (you build it yourself), and random row access remains slower than Lance's index-based O(1) lookup — because Parquet's row-group structure was never designed for point reads.
+Neither strategy is built into Spark, Trino, or DuckDB — you implement the bookkeeping yourself via the **catalog** (the metadata index mapping file paths to table versions). And regardless of strategy, random row access remains slower than Lance's index-based O(1) lookup — because Parquet's row-group structure (fixed-size horizontal slices) was designed for sequential column scans, not point reads.
 
 ---
 ## Interview Talking Points
@@ -115,7 +118,9 @@ Either way: no engine does this natively (you build it yourself), and random row
 
 ## See Also
 
-- [[data-processing/checkpointing]]
-- [[data-processing/grain-dataloader-architecture]] — Grain DataLoader reads from these storage formats
-- [[data-processing/afm-training-pipeline]]
-- [[data-processing/cleantext-pretraining-pipeline]]
+- [[data-processing/checkpointing]] — Lance Column Link is the natural storage primitive for multi-stage pipeline checkpointing
+- [[data-processing/grain-dataloader-architecture]] — Grain DataLoader reads from these storage formats; random-access cost differences matter for training throughput
+- [[data-processing/llm-training-data-pipeline]] — storage format choice affects every stage of the training data pipeline
+- [[data-processing/cleantext-pretraining-pipeline]] — pretraining pipelines produce feature tables where Lance's column-add efficiency is relevant
+- [[data-processing/locality-sensitive-hashing]] — deduplication output (hash buckets, near-duplicate sets) is stored in columnar formats; format choice affects downstream pipeline cost
+- [[data-processing/morsel-driven-parallelism]] — columnar row-group size in Parquet vs Lance directly affects per-morsel I/O cost; scan morsel size must be tuned against the storage format's read granularity

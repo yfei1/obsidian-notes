@@ -587,7 +587,11 @@ def check_all_gates(original_content: str, new_content: str,
     _gate_line_limit(new_content, result)
     _gate_kebab_case_name(note_path, result)
     _gate_broken_wikilinks(original_content, new_content, all_notes, result)
-    _gate_code_block_preservation(original_content, new_content, result)
+    # Dedup intentionally removes duplicate code blocks that live in the canonical note.
+    # The per-file code_block check would always veto this. The GRPO judges + cross-file
+    # extra_context verify the dedup is valid; code_block_preservation is redundant here.
+    if strategy != "dedup":
+        _gate_code_block_preservation(original_content, new_content, result)
     # Cross-file strategies (split, dedup) intentionally move content to sibling files —
     # definitions may land in the other file, not this one. Skip inline-def and wikilink-count
     # gates for these (links may consolidate across files).

@@ -4,15 +4,13 @@
 
 vLLM's `/v1/chat/completions` path produces echo or garbled output because it tokenizes chat prompts differently from training. The root cause: HuggingFace's `encode()` splits the prompt on `additional_special_tokens` (`<turn_start>`, `<turn_end>`) before calling SentencePiece, destroying word-boundary context at every split. Training feeds the full string to raw SP as one unit, strips the leading `▁` artifact, and prepends BOS (id 1) manually. The fix overrides **both** `__call__` and `encode` on the tokenizer — because vLLM's async API path calls `__call__` (via `AsyncMicrobatchTokenizer`) while the sync offline path calls `encode` — routing both through a shared `_encode_chat()` helper that replicates the training path exactly.
 
-## Problem
+## What This Component Does
 
-**The `/v1/chat/completions` endpoint produces echo/garbled output because vLLM tokenizes chat prompts differently from training.** vLLM's chat path calls `apply_chat_template(tokenize=False)` to render a string, then tokenizes it via `tokenizer.encode()` — but HuggingFace's `encode()` splits on `additional_special_tokens` (`<turn_start>`, `<turn_end>`) — a list of tokens that `PreTrainedTokenizer` scans for and splits out before passing remaining text chunks to the underlying tokenizer — before calling SentencePiece, destroying the word-boundary context SP (SentencePiece — a subword tokenizer that segments text into pieces based on a trained unigram or BPE model) needs at each split boundary. Training feeds the full string to raw SP as one unit, strips the leading `▁` artifact, and prepends BOS manually. The result: the same prompt produces different token IDs on the serving path vs. training, so the model sees input it was never trained on.
+**The `/v1/chat/completions` endpoint produces echo/garbled output because vLLM tokenizes chat prompts differently from training.**
 
-The fix requires overriding **both** `__call__` and `encode` on the tokenizer — because vLLM's async API path calls `__call__` (via `AsyncMicrobatchTokenizer` — a wrapper that makes the HF tokenizer async-safe by batching concurrent encode requests and offloading them to a thread), while the sync offline path calls `encode`. Overriding only `encode()`, as the initial attempt did, leaves the async path broken because `AsyncMicrobatchTokenizer` never calls `.encode()` — it calls `tokenizer(text)` to get a `BatchEncoding` (a dict containing `input_ids`, `attention_mask`, etc.) it can slice across batched requests.
+The chat path is two-phase — render then tokenize — and that separation is where the mismatch originates. `OpenAIServingChat` first renders the message list to a string via `apply_chat_template(tokenize=False)`, then tokenizes that string via `tokenizer.encode()`. But HuggingFace's `encode()` splits on `additional_special_tokens` (`<turn_start>`, `<turn_end>`) — a list of tokens that `PreTrainedTokenizer` scans for and splits out before passing remaining text chunks to the underlying tokenizer — before calling SP (SentencePiece — a subword tokenizer that segments text into pieces based on a trained unigram or BPE model), destroying the word-boundary context SP needs at each split boundary. Training feeds the full string to raw SP as one unit, strips the leading `▁` artifact, and prepends BOS manually. The result: the same prompt produces different token IDs on the serving path vs. training, so the model sees input it was never trained on.
 
-## How vLLM processes chat vs completion requests
-
-### Completion (`/v1/completions`) — single phase
+The `/v1/completions` path is single-phase and unaffected — raw text goes directly to `encode()` with no template rendering:
 
 ```
 api_router.py:47 → OpenAIServingCompletion.create_completion
@@ -23,9 +21,34 @@ api_router.py:47 → OpenAIServingCompletion.create_completion
           → base.py:343 tokenizer.encode(prompt, add_special_tokens=True)
 ```
 
-No template. Raw text → `encode()` → model. `add_special_tokens=True` (default for completions, set at `base.py:267-279` `default_cmpl_tok_params`). The tokenization mismatch described in this note does not affect this path.
+No template. Raw text → `encode()` → model. `add_special_tokens=True` (default for completions, set at `base.py:267-279` `default_cmpl_tok_params`). No `<turn_start>`/`<turn_end>` tokens appear, so HF never splits the input before calling SentencePiece.
 
-### Chat (`/v1/chat/completions`) — two-phase path
+## Why the Mismatch Happens: Two Independent Root Causes
+
+The serving/training mismatch has two independent root causes:
+
+- **`additional_special_tokens` split** — HF's `encode()` splits the input string at `<turn_start>`/`<turn_end>` boundaries before calling SP, destroying the word-boundary context SP needs. `▁` artifacts and `<n>` mismatches are downstream consequences of this split.
+- **BOS misconfiguration** — the HF tokenizer config points to the wrong BOS token ID; this is independent of the split and would be missing even if the split were fixed.
+
+### Root Cause 1: `additional_special_tokens` Split
+
+`<turn_start>` (id 150000) and `<turn_end>` (id 150001) were added AFTER the SP model was trained, via HuggingFace's `add_tokens()` — a method on `PreTrainedTokenizer` (HF's base tokenizer class) that registers new tokens into the wrapper's vocabulary without retraining SP. This is why they have high IDs (150000+): SP has no knowledge of them natively; only the HuggingFace wrapper recognizes them.
+
+Because they live in **`additional_special_tokens`** — a list that HF's `encode()` scans before calling SP — HF splits the input string at these token boundaries, maps each special token directly to its ID, then sends each remaining text chunk to SP *separately* as an isolated string. SP's word-boundary decisions depend on what precedes the current chunk; every split boundary destroys that context.
+
+Two wrong-ID consequences follow from the split:
+
+**`▁` artifact** (id 145022): SP uses U+2581 to mark the start of a new word. When a chunk begins without prior context — which happens at every split boundary — SP prepends a spurious `▁` before the first word because it has no preceding text to attach the boundary marker to. Training strips this artifact at `preprocess_utils_numpy.py:194-202`; the HF split path re-introduces it at every chunk boundary. Result: `A` → id `330` instead of training's `▁A` → id `145053`.
+
+**`<n>` mismatch** (id 4): Raw `\n` is ambiguous to SP — it can be merged with surrounding text, split inconsistently, or dropped. The SP model was trained with `<n>` as a **user-defined symbol** (`--user_defined_symbols=<n>`) — a SentencePiece flag that marks a string as one indivisible token, bypassing whitespace normalization. The training pipeline replaces all `\n` → `<n>` before feeding text to SP, so every newline maps to exactly id 4. The HF path never performs this substitution, so `\n` inside a split chunk reaches SP as a raw character — producing a different token ID.
+
+### Root Cause 2: BOS Misconfiguration
+
+Fixing the split alone still leaves BOS missing. The model was trained with BOS (id 1) as the first token in every sequence, using position 0 as a fixed anchor for positional embeddings — without it, the model has no signal that position 0 is a sequence start. The HF tokenizer config has `bos_token_id: 153600` (wrong — out of SP's vocabulary range) and `add_bos_token: False`, so neither SP nor HF adds the correct BOS automatically. Training overrides `bos_id=1` at `afm_150k_20241209.py:12`; the fix must replicate this manually.
+
+## Step-by-Step Walkthrough
+
+### The Chat Path's Two-Phase Split
 
 ```
 api_router.py:47 → OpenAIServingChat.create_chat_completion
@@ -50,54 +73,13 @@ api_router.py:47 → OpenAIServingChat.create_chat_completion
               ↑ THIS is where the actual token IDs are produced
 ```
 
-### Why vLLM separates rendering from tokenization
+Phase 2 is where the bug lives: `tokenizer.encode()` is standard HuggingFace `PreTrainedTokenizer.encode()`, which splits on `additional_special_tokens` before calling SentencePiece — destroying the word-boundary context that training preserved by feeding the full string as one unit.
 
-1. **Special-token control** — `apply_chat_template(tokenize=True)` internally calls HF's encode with `add_special_tokens=True`, which would double-encode BOS/EOS. By calling `tokenize=False` then `encode(add_special_tokens=False)`, vLLM avoids this.
+The two-phase design exists for four reasons. First, **special-token control**: `apply_chat_template(tokenize=True)` internally calls HF's encode with `add_special_tokens=True`, which would double-encode BOS/EOS — calling `tokenize=False` then `encode(add_special_tokens=False)` avoids this. Second, **multi-modal interleaving**: after rendering, image/audio placeholders are in the string, and tokenization must produce IDs that align with multi-modal processor placeholder ranges. Third, **truncation control**: `max_length` and `truncation` come from the request and are applied during `encode()`, not template rendering. Fourth, **tokenizer-agnostic**: `BaseRenderer.tokenize_prompts()` is shared across all HF-based renderers — only `render_messages()` is renderer-specific. The side effect of this clean separation is that Phase 2 always goes through standard HF `encode()`, which is exactly where the `additional_special_tokens` split destroys word-boundary context.
 
-2. **Multi-modal interleaving** — after rendering, image/audio placeholders are in the string. Tokenization must produce IDs that align with multi-modal processor placeholder ranges.
+### Training Tokenization Path (Ground Truth)
 
-3. **Truncation control** — `max_length` and `truncation` come from the request, applied during `encode()` not template rendering.
-
-4. **Tokenizer-agnostic** — `BaseRenderer.tokenize_prompts()` is shared across all HF-based renderers. Only `render_messages()` is renderer-specific.
-
-### Why Mistral is different
-
-Mistral's `apply_chat_template` (at `tokenizers/mistral.py:418`) delegates to `mistral-common`'s `InstructTokenizer` which does template rendering + tokenization as one atomic operation. No clean intermediate string exists. So `tokenize=True` is required. The check is `is_mistral_tokenizer()` at `utils/mistral.py:19`.
-
-### Where `tokenize=True` is blocked
-
-`resolve_chat_template_kwargs()` at `hf.py:421` treats `"tokenize"` as an `unexpected_var`. You can't override it via user kwargs. The only injection point is `serve/render/serving.py:512`.
-
-## Why our `apply_chat_template(tokenize=True)` override never runs
-
-vLLM always calls `apply_chat_template(tokenize=False)` for HF tokenizers. The returned string goes to `tokenizer.encode()` — standard HuggingFace `PreTrainedTokenizer.encode()`. That method splits on `additional_special_tokens` (`<turn_start>`, `<turn_end>`) BEFORE calling SentencePiece, producing wrong word boundaries.
-
-## Token vocabulary
-
-The serving/training mismatch has two independent root causes:
-
-- **`additional_special_tokens` split** — HF's `encode()` splits the input string at `<turn_start>`/`<turn_end>` boundaries before calling SP, destroying the word-boundary context SP needs. `▁` artifacts and `<n>` mismatches are downstream consequences of this split.
-- **BOS misconfiguration** — the HF tokenizer config points to the wrong BOS token ID; this is independent of the split and would be missing even if the split were fixed.
-
-### `<turn_start>` (id 150000) and `<turn_end>` (id 150001) — the root split
-
-`<turn_start>` and `<turn_end>` were added AFTER the SP model was trained, via HuggingFace's `add_tokens()` — a method on `PreTrainedTokenizer` (HF's base tokenizer class) that registers new tokens into the wrapper's vocabulary without retraining SP — which is why they have high IDs (150000+). SP has no knowledge of them natively; only the HuggingFace wrapper recognizes them.
-
-Because they live in **`additional_special_tokens`** — a list maintained by `PreTrainedTokenizer` that HF's `encode()` scans before calling SP — HF splits the input string at these token boundaries, maps each special token directly to its ID, then sends each remaining text chunk to SP *separately*, as an isolated string stripped of surrounding context. SP's word-boundary decisions depend on what precedes the current chunk; every split boundary destroys that context. The two token types below are direct consequences of this context loss.
-
-### `▁` (id 145022) — SentencePiece word boundary marker
-
-SP uses U+2581 to mark the start of a new word. When a chunk begins without prior context — which happens at every split boundary — SP prepends a spurious `▁` before the first real word, because it has no preceding text to attach the boundary marker to. Training strips this artifact at `preprocess_utils_numpy.py:194-202`. The HF split path re-introduces it at every chunk boundary, producing wrong IDs (e.g., `A` → id `330` instead of training's `▁A` → id `145053`).
-
-### `<n>` (id 4) — newline representation
-
-Raw `\n` is ambiguous to SP: depending on training corpus statistics, it can be merged with surrounding text, split inconsistently, or dropped. To get deterministic newline handling, the SP model was trained with `<n>` as a **user-defined symbol** (`--user_defined_symbols=<n>`) — a SentencePiece flag that marks a string as one indivisible token, bypassing all whitespace normalization. The training pipeline replaces all `\n` → `<n>` before feeding text to SP, so every newline maps to exactly token id 4. The HF path never performs this substitution, so `\n` inside a split chunk reaches SP as a raw character — producing a different token ID.
-
-### `<s>` / BOS (id 1) — independent misconfiguration
-
-The model was trained with BOS (id 1) as the first token in every sequence, so it uses position 0 as a fixed anchor for positional embeddings — without BOS, the model has no signal that position 0 is a sequence start. The HF tokenizer config has `bos_token_id: 153600` (wrong — out of SP's vocabulary range) and `add_bos_token: False`, so neither SP nor HF adds the correct BOS automatically. Because this misconfiguration is independent of the `additional_special_tokens` split, fixing the split alone still leaves BOS missing. Training overrides `bos_id=1` at `afm_150k_20241209.py:12`; the fix must replicate this manually.
-
-## Training tokenization path (ground truth)
+**The reference**: what the training pipeline produces for a given prompt. Every other path is correct only if it matches this output exactly.
 
 Prompt: `"Write a haiku about the ocean."`
 
@@ -120,7 +102,7 @@ Prompt: `"Write a haiku about the ocean."`
  BOS <turn> syst <n> ▁A     ▁conv  ▁bet  ▁a  ▁user ▁and ▁a  ▁help ▁assis .     <end> <turn> ▁user <n> Write  ▁a   ▁ha   iku   ▁about ▁the ▁ocean .     <end> <turn> ▁assis <n>
 ```
 
-## vLLM serving path (the bug — before fix)
+### vLLM Serving Path (The Bug — Before Fix)
 
 HuggingFace's `encode()` splits text on `additional_special_tokens` before calling SP:
 
@@ -140,22 +122,16 @@ Each text chunk loses word-boundary context. SP sees `" system<n>A..."` as isola
 ```
 Missing BOS at position 0; `A`→`330` not `145053`; ` `+`user`→`308`+`8103` not `3308` (`▁user`).
 
-### Why echo vs garble
-
-Two independent bugs produce the two symptoms — the tokenization mismatch causes echo; a separate CUDA graph capture bug causes garble.
+Two independent bugs produce the two observable symptoms — the tokenization mismatch causes echo; a separate CUDA graph capture bug causes garble.
 
 - **Wrong token IDs (shifted boundaries)** → **Echo**: model recognizes chat structure but can't parse content. Falls back to repeating input.
-- **Wrong hidden states (CUDA graph bug)** → **Garble**: A CUDA graph (a recorded sequence of GPU ops that replays without CPU re-dispatch) captures the all-reduce call `_PT.all_reduce()` at record time, but on replay the call never executes — leaving each tensor-parallel rank (tensor parallelism splits each weight matrix column-wise across N GPUs so each GPU holds 1/N of every layer; one of 8 GPUs, each holding 1/8 of every weight matrix in a tensor-parallel group) with only its local 1/8th of the hidden states instead of the full merged vector. (All-reduce: a collective op where N ranks each hold a partial tensor; after all-reduce every rank holds the element-wise sum across all N. Without it, each rank sees only its own shard.) Each rank's partial hidden state, fed into the output projection layer, produces near-zero activations — and softmax over near-zero logits collapses to a near-uniform distribution → newline tokens (the highest-frequency token under a flat distribution).
+- **Wrong hidden states (CUDA graph bug)** → **Garble**: A **CUDA graph** (a recorded sequence of GPU ops that replays without CPU re-dispatch) captures the all-reduce call `_PT.all_reduce()` at record time, but on replay the call never executes — leaving each **tensor-parallel rank** (tensor parallelism splits each weight matrix column-wise across N GPUs so each GPU holds 1/N of every layer; one of 8 GPUs, each holding 1/8 of every weight matrix in a tensor-parallel group) with only its local 1/8th of the hidden states instead of the full merged vector. (**All-reduce**: a collective op where N ranks each hold a partial tensor; after all-reduce every rank holds the element-wise sum across all N. Without it, each rank sees only its own shard.) Each rank's partial hidden state, fed into the output projection layer, produces near-zero activations — and softmax over near-zero logits collapses to a near-uniform distribution → newline tokens (the highest-frequency token under a flat distribution).
 
-## The fix
-
-### Why overriding `encode()` alone doesn't work
+### Fix: Override Both `__call__` and `encode` to Replicate the Training Path
 
 Our initial approach: override `encode()` on `TammSentencePieceTokenizer` to intercept `<turn_start>`-containing text and route it through raw SentencePiece. The comparison script confirmed all paths matched training. But the live server still echoed.
 
-**Root cause**: vLLM has two tokenizer call paths — sync and async — and they enter the HF tokenizer through different methods.
-
-### vLLM's sync vs async tokenizer architecture
+**Root cause**: vLLM has two tokenizer call paths — sync and async — and they enter the HF tokenizer through different methods. Overriding only `encode()` fixes the sync path (`_tokenize_prompt()` calls `tokenizer.encode()` directly) but leaves the async path broken — `AsyncMicrobatchTokenizer` calls `tokenizer(text)` → `__call__`, bypassing the override entirely.
 
 The renderer (`renderers/base.py`) provides sync and async variants of every method. Which one runs depends on who calls it:
 
@@ -165,7 +141,7 @@ The renderer (`renderers/base.py`) provides sync and async variants of every met
 | `LLM` class (offline batch) | `render_chat()` | `_tokenize_prompt()` | Regular Python, no event loop |
 | Pooling/embedding | `render_chat()` | `_tokenize_prompt()` | Simpler synchronous pipeline |
 
-`AsyncMicrobatchTokenizer` (`utils/async_utils.py:24`) is the wrapper used by the async path — it makes the HF tokenizer async-safe by offloading blocking calls to a thread and batching concurrent requests. Details below.
+`AsyncMicrobatchTokenizer` (`utils/async_utils.py:24`) is the wrapper used by the async path — it makes the HF tokenizer async-safe by offloading blocking calls to a thread and batching concurrent requests.
 
 **Why the API server MUST use async**: The OpenAI-compatible server runs on FastAPI/Starlette — an async web framework. Every request handler is `async def`. Calling SentencePiece `.encode()` synchronously on the event loop would block ALL concurrent request processing for the duration of tokenization (milliseconds per request, but fatal at high QPS). The async path offloads tokenization to a thread so the event loop stays responsive.
 
@@ -219,8 +195,6 @@ self.tokenizer(p, **kw)               # HF __call__, NOT .encode()
 
 The wrapper needs `__call__` because it returns a `BatchEncoding` dict (`{"input_ids": [...], "attention_mask": [...]}`). When processing N prompts at once, HF returns `{"input_ids": [[ids1], [ids2], ...]}` and the wrapper slices `results[key][i]` to distribute per-request results. HF's `.encode()` returns only `list[int]` — no dict, no batchable structure.
 
-### Why HF has two entry points that don't share code
-
 `PreTrainedTokenizerBase` exposes two public methods that both produce token IDs:
 - `__call__(text, ...)` → returns `BatchEncoding` (dict: `input_ids`, `attention_mask`, etc.)
 - `encode(text, ...)` → returns `list[int]` (IDs only)
@@ -229,9 +203,7 @@ Both ultimately delegate to `encode_plus()` — HF's internal method that handle
 
 `AsyncMicrobatchTokenizer` calls `__call__` rather than `encode` because it needs a `BatchEncoding` dict to distribute results across N batched prompts by slicing `results["input_ids"][i]`. `encode()` returns only `list[int]` — no dict, no per-request index. This is why overriding `encode()` alone fixed the sync path (`_tokenize_prompt()` calls `tokenizer.encode()` directly) but left the async path broken (`AsyncMicrobatchTokenizer` calls `tokenizer(text)` → `__call__`, bypassing the override entirely). The fix must override both entry points and route each to the same `_encode_chat()` helper.
 
-### The corrected fix: override both `__call__` and `encode`
-
-In `tamm_afm.py`, we now override three methods:
+In `tamm_afm.py`, we override three methods — `_encode_chat`, `__call__`, and `encode` — so both dispatch paths converge on the same training-replicating logic:
 
 ```python
 # _encode_chat(text): shared helper — both entry points route here for chat prompts
@@ -281,7 +253,7 @@ def encode(self, text, add_special_tokens=True, **kwargs):
 # encode("What is 2+2?")               → super().encode(...)  (standard HF path)
 ```
 
-Both override methods delegate to the same `_encode_chat()` helper.
+Both override methods delegate to the same `_encode_chat()` helper, so all four call paths now produce identical token IDs:
 
 ```text
 # _encode_chat("<turn_start> system\nA conversation...")
@@ -292,14 +264,22 @@ Both override methods delegate to the same `_encode_chat()` helper.
 # encode(non_chat)    → super().encode(...) — standard HF path unchanged
 ```
 
-### Why this works
-
 1. **Async chat path**: `AsyncMicrobatchTokenizer` → `tokenizer(text)` → our `__call__` → `_encode_chat()` → raw SP
 2. **Sync chat path**: `_tokenize_prompt()` → `tokenizer.encode(text)` → our `encode()` → `_encode_chat()` → raw SP
 3. **Completion path**: No `<turn_start>` in text → falls through to `super()` → standard HF behavior
 4. **`apply_chat_template(tokenize=True)`**: Renders template → delegates to `encode()` → `_encode_chat()` → raw SP
 
-## Verification
+## Edge Cases & Gotchas
+
+### Mistral Exception and HF Injection Constraints
+
+Mistral is the exception: `apply_chat_template` (at `tokenizers/mistral.py:418`) delegates to `mistral-common`'s `InstructTokenizer`, which does template rendering + tokenization as one atomic operation — no clean intermediate string exists. So `tokenize=True` is required and the two-phase split never occurs. The check is `is_mistral_tokenizer()` at `utils/mistral.py:19`.
+
+For HF tokenizers, `tokenize=True` cannot be forced via user kwargs — `resolve_chat_template_kwargs()` at `hf.py:421` treats `"tokenize"` as an `unexpected_var` and rejects it. The only injection point is `serve/render/serving.py:512`, which is where the Mistral check already lives.
+
+The fix requires overriding **both** `__call__` and `encode` on the tokenizer — because vLLM's async API path calls `__call__` (via `AsyncMicrobatchTokenizer` — a wrapper that makes the HF tokenizer async-safe by batching concurrent encode requests and offloading them to a thread), while the sync offline path calls `encode`. Overriding only `encode()`, as the initial attempt did, leaves the async path broken because `AsyncMicrobatchTokenizer` never calls `.encode()` — it calls `tokenizer(text)` to get a `BatchEncoding` (a dict containing `input_ids`, `attention_mask`, etc.) it can slice across batched requests.
+
+### Verification: All Four Paths Match Training
 
 1. Run `compare_tokenization.py` — confirm all four paths (`__call__`, `encode`, `apply_chat_template`, training SP) produce identical 30-token sequences.
 2. Restart server, test via `/v1/chat/completions`.
@@ -325,6 +305,6 @@ assert 3308 not in buggy_ids         # ▁user absent from buggy (split into 308
 #   buggy:    32 tokens, starts with <turn_start> (150000), contains bare A (330), no ▁user
 ```
 
-## Connections
+## See Also
 - [[ml-systems/vllm/pt-moe-cuda-graph-chat-template-bugs]] — related chat template bugs in CUDA graph path
 
