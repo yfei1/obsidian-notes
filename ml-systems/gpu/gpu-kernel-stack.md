@@ -11,10 +11,16 @@ Three complementary technologies optimize GPU inference. **Triton** is a Python-
 
 ### Triton
 
-A Python-like language for writing individual GPU kernels. Compiles to PTX (GPU assembly) at runtime. vLLM uses Triton for ops where PyTorch's built-in kernels are suboptimal:
+A Python-like language for writing individual GPU kernels. Compiles directly to PTX (GPU assembly) via MLIR and LLVM, bypassing CUDA C++ and `nvcc` entirely. vLLM uses Triton for ops where PyTorch's built-in kernels are suboptimal:
 - **FusedMoE**: routing + expert dispatch + matmul + combine in one kernel
 - **FlashAttention**: attention score computation with tiled **shared memory** (a small, fast scratchpad on each SM — Streaming Multiprocessor, the GPU's compute unit — shared across threads in a block) to avoid writing intermediate matrices to HBM (the GPU's main memory)
 - These run in **eager mode** (normal PyTorch execution, no compilation) — no torch.compile required
+
+#### Compilation Pipeline, Runtime Lifecycle & Debugging
+- **Compilation Path**: Python AST $\rightarrow$ Triton-IR (MLIR) $\rightarrow$ TritonGPU-IR $\rightarrow$ LLVM IR $\rightarrow$ PTX assembly $\rightarrow$ SASS (`.cubin`). Triton compiles directly to PTX, bypassing CUDA C++ and `nvcc` entirely.
+- **Inductor Runtime Lifecycle**: `torch.compile` (Inductor backend) applies loop-fusion heuristics to FX graphs, dumps generated Triton Python files under `tempfile.gettempdir()/torchinductor_<user>` (honoring `TORCHINDUCTOR_CACHE_DIR`), and compiles them into PTX and `.cubin` binaries cached in `<inductor_cache_dir>/triton/<device>` (honoring `TRITON_CACHE_DIR`; standalone Triton defaults to `~/.triton/cache`).
+- **Inductor Code Scaffolding**: Running `TORCH_LOGS="output_code" python script.py` prints the auto-generated Triton kernels directly to stdout, providing templates for custom kernel authoring.
+- **Interpreter Debugging**: Setting `TRITON_INTERPRET=1` before kernel decoration (in modern Triton 3.x; legacy Triton 2.1 supported `@triton.jit(interpret=True)`) runs the kernel on the CPU as pure Python on Linux hosts. This enables standard `breakpoint()` / `pdb` stepping through block arithmetic and indexing masks.
 
 ### torch.compile (Inductor)
 
@@ -206,3 +212,6 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 - [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]]
 - [[ml-systems/gpu/pt-moe-decode-kernel-launch-analysis]]
 - [[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]]
+- [[ml-systems/gpu/gpu-kernel-timing-and-benchmarking]] — micro-benchmarking Triton and CUDA Graph kernels with torch.cuda.Event
+- [[ml-systems/gpu/arithmetic-intensity-and-roofline]] — why Triton kernel fusion increases arithmetic intensity by keeping intermediates in SRAM
+- [[ml-systems/gpu/pytorch-cuda-profiling]] — profiling PyTorch operator dispatches and tracing kernel execution

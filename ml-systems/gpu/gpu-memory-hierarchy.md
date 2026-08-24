@@ -182,3 +182,8 @@ Similarly, `context_lens` tells the GPU exactly how many tokens to read per sequ
 - [[ml-systems/hardware/linux-numa-memory-policy]]
 - [[ml-systems/hardware/numa-memory-architecture]]
 - [[ml-systems/hardware/pcie-dma-mechanics]]
+- [[ml-systems/training/floating-point-formats]] — reduced-precision formats (BF16, FP8) that halve HBM memory bandwidth pressure
+- [[ml-systems/training/microscaling-and-block-formats]] — memory bandwidth reduction from 4-bit block-scaled weight loading
+- [[ml-systems/foundations/einops-tensor-manipulation]] — striding and memory layout trade-offs between einops and native ATen views
+- [[ml-systems/gpu/gpu-kernel-timing-and-benchmarking]] — L2 cache flushing and HBM memory bandwidth measurement techniques
+- [[ml-systems/gpu/arithmetic-intensity-and-roofline]] — Roofline model, Machine Balance derivations, and FLOP/Byte intensity across operations

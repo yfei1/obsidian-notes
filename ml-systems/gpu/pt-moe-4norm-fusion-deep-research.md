@@ -131,3 +131,4 @@ Deep research session (2026-03-27) investigating kernel fusion opportunities for
 - [[ml-systems/vllm/vllm-model-integration]] — vLLM CustomOp, weight loading, @support_torch_compile
 - [[ml-systems/vllm/fused-moe-vllm-implementation]] — FusedMoE as CustomOp reference pattern
 - [[ml-systems/vllm/vllm-torch-compile-decorator]] — Inductor compilation and custom op interaction
+- [[ml-systems/foundations/transformer-normalization-architectures]] — mathematical formulations of 4-norm sandwich and Pre-Norm architectures

@@ -202,3 +202,6 @@ A transformer forward pass launches 5-10 kernels per layer (attention QKV projec
 - [[ml-systems/gpu/gpu-memory-hierarchy]] — GPU memory subsystem that determines transfer overhead
 - [[ml-systems/gpu/torch-compile-cuda-graphs-hook-interaction]] — How PyTorch's torch.compile interacts with CUDA Graphs
 - [[ml-systems/inference/cuda-graph-inference-optimization]] — CUDA Graph capture/replay for inference serving
+- [[ml-systems/gpu/gpu-kernel-timing-and-benchmarking]] — programmatic PyTorch timing via CUDA Events vs timeline trace profiling
+
+- [[ml-systems/gpu/pytorch-cuda-profiling]] — PyTorch operator profiling, trace scheduling, and Self CUDA time attribution

@@ -208,3 +208,4 @@ Fusion eliminates 2 intermediate writes. **Kernel launches drop from 6 to 4 per 
 - [[ml-systems/gpu/pt-moe-decode-kernel-launch-analysis]]
 - [[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]]
 - [[ml-systems/gpu/pt-moe-ar-norm-fusion-implementation]]
+- [[ml-systems/foundations/transformer-normalization-architectures]] — concept-level taxonomy of Double Norm and Non-Residual Post-Norm architectures
