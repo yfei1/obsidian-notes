@@ -4,6 +4,9 @@
 
 ```
 obsidian-notes/
+├── assets/
+│   ├── {name}.png
+│   └── generate_{name}.py
 ├── {topic}/
 │   ├── {subtopic}.md
 │   └── {cluster}/
@@ -18,6 +21,7 @@ obsidian-notes/
 - **Cluster subdirectories** (optional) group notes within a topic: `ml-systems/foundations/`, `ml-systems/inference/`, etc.
 - **Subtopic files** are individual notes: `checkpointing.md`, `attention-mechanics.md`
 - Convention is `{topic}/{subtopic}.md` or `{topic}/{cluster}/{subtopic}.md` — three levels max, no deeper nesting.
+- **Assets directory (`assets/`)**: Stores image rasters and their executable generator scripts (`generate_{name}.py`). Referenced in notes using relative paths `../../assets/{name}.png`. `assets/` is out-of-scope for the automated text improvement loop.
 
 ## Naming Rules
 

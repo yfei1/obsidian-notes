@@ -180,3 +180,4 @@ The problem: web crawl dominates by raw token count (60–80% of most corpora), 
 - [[data-processing/grain-dataloader-architecture]] — data loader that consumes tokenized training datasets
 - [[data-processing/checkpointing]] — checkpoint management for multi-stage training pipelines
 - [[data-processing/morsel-driven-parallelism]] — parallel execution model for large-scale data processing stages like filtering and dedup
+- [[ml-systems/training/scaling-laws]] — sets the token target this pipeline must deliver: `D ≈ 20N` per parameter, and far more when the model is overtrained for cheaper serving

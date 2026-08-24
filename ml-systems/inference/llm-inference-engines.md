@@ -362,3 +362,4 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 - [[ml-systems/gpu/torch-compile-cuda-graphs-hook-interaction]]
 - [[ml-systems/vllm/vllm-model-integration]]
 - [[ml-systems/vllm/vllm-weight-loading]] — `load_weights()` name remapping and `weight_loader` convention; runs during engine initialization before serving begins
+- [[ml-systems/foundations/gqa-mqa-attention-variants]] — GQA, MQA, and MLA attention head variants and KV cache bandwidth bottlenecks

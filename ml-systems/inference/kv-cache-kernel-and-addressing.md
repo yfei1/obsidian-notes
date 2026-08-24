@@ -176,3 +176,4 @@ o = flash_attn_with_kvcache(
 - [[ml-systems/inference/cuda-graph-inference-optimization]] — block tables and slot mappings are copied into static CUDA graph buffers each decode step; addressing layout determines copy granularity
 - [[ml-systems/foundations/transformer-model-internals]] — transformer architecture context for where KV cache writes fit in the forward pass (prefill and decode phases)
 - [[ml-systems/distributed/tensor-parallelism]] — KV heads are sharded across TP ranks, so slot addressing must account for the local head partition each GPU owns
+- [[ml-systems/foundations/einops-tensor-manipulation]] — why serving engines bypass multi-axis einops in favor of 1D physical slot addressing
