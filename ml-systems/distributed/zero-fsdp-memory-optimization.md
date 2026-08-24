@@ -112,3 +112,8 @@ vLLM and SGLang don't support ZeRO/FSDP for this reason: there's nothing to shar
 - [[ml-systems/distributed/tensor-parallelism]] — the inference-time alternative for parameter distribution
 - [[ml-systems/foundations/transformer-model-internals]] — model structure that determines parameter/gradient sizes
 - [[ml-systems/distributed/parallelism-strategies]] — ZeRO/FSDP placed in the full parallelism taxonomy; composition with DP, TP, PP
+- [[ml-systems/training/scaling-laws]] — where the parameter count `N` that ZeRO must shard comes from: the compute-optimal split of a training budget between `N` and tokens `D`
+- [[ml-systems/training/floating-point-formats]] — byte breakdown of FP32 master weights, BF16 parameters, and FP32 optimizer states sharded across ranks
+- [[ml-systems/distributed/communication-computation-overlap]] — prefetching layer l+1 weights during layer l forward compute in FSDP
+- [[ml-systems/training/first-order-optimizers]] — state buffer memory accounting across SGD (0 B), AdaGrad (4 B), and Adam (8 B)
+- [[ml-systems/training/training-memory-management]] — activation memory scaling (2BDL) and micro-batch memory reduction

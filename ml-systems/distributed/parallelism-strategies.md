@@ -340,3 +340,6 @@ The bubble shrinks to near-zero because the blocking condition — "wait for the
 - [[ml-systems/foundations/swiglu-mlp]]
 - [[ml-systems/vllm/vllm-ray-compiled-graph]]
 - [[ml-systems/vllm/vllm-cuda-graph-collective-streams]]
+- [[ml-systems/distributed/communication-computation-overlap]] — overlapping NCCL collectives with GEMM compute across TP, PP, and FSDP
+- [[ml-systems/foundations/sequential-vs-parallel-blocks]] — halving Tensor Parallelism all-reduce calls via parallel block execution
+- [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — how Pipeline Parallelism bubble overhead forces wider, shallower models

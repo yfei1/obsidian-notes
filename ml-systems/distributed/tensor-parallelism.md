@@ -296,3 +296,4 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/vllm/vllm-ray-compiled-graph]]
 - [[ml-systems/gpu/pt-moe-ar-norm-fusion-implementation]]
 - [[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]]
+- [[ml-systems/distributed/communication-computation-overlap]] — overlapping intra-layer all-reduce with chunked GEMM execution
