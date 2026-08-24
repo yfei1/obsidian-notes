@@ -1,137 +1,143 @@
-# SwiGLU MLP
+# SwiGLU MLP (and the GLU Activation Family)
 
-#ml-systems #inference #transformers
+#ml-systems #foundations #interview-prep
+
+**Scope**: Evolution of Feed-Forward Network activations from ReLU to GELU and Gated Linear Units (ReGLU, GEGLU, SwiGLU), bilinear expressivity, iso-parameter intermediate dimension scaling ($\frac{8}{3}d_{\text{model}}$), and Tensor Parallelism sharding.
+
+**Prerequisites**: [[ml-systems/foundations/transformer-model-internals]] for decoder layer building blocks.
+
+## TL;DR
+
+The MLP in each Transformer decoder layer performs per-token non-linear feature transformation. Classical Transformers used 2-layer FFNs with scalar activations ($\text{ReLU}$ in Vaswani 2017, $\text{GELU}$ in BERT/GPT-2). Gated Linear Units (Dauphin 2017, Shazeer 2020) augment the layer with a parallel linear content branch multiplied element-wise by a non-linear gate ($\text{GLU}(x) = (xW_{\text{up}}) \odot \sigma(xW_{\text{gate}})$). SwiGLU uses $\text{SiLU}(z) = z \cdot \text{sigmoid}(z)$, eliminating dying neurons and providing second-order polynomial expressivity. To match the $8d^2$ parameter budget of a 2-layer FFN, SwiGLU scales its intermediate dimension to $d_{\text{ffn}} = \frac{8}{3}d_{\text{model}}$.
+
+---
 
 ## Core Intuition
 
-The MLP in each decoder layer handles per-token feature transformation — Attention decides *which* tokens interact, MLP decides *how* each token's features transform. SwiGLU replaces the original ReLU FFN with a gated activation: `W_down(SiLU(W_gate(x)) × W_up(x))`. Gate and content are decoupled into independent learnable projections, and SiLU's non-zero gradient everywhere eliminates dying neurons at scale. Used by LLaMA, Qwen, Mistral.
+In a standard MLP ($y = \sigma(xW_1)W_2$), the activation function $\sigma$ applies a fixed mathematical curve to every feature. 
 
-Concrete shapes (Qwen3-0.6B): `hidden_size=1024, intermediate_size=3072`.
+Gated Linear Units decouple the layer into two parallel linear projections:
+1. **Gate Path ($xW_{\text{gate}}$)**: Determines *which* feature channels to activate or suppress.
+2. **Content Path ($xW_{\text{up}}$)**: Determines *what* feature representations to transmit.
 
----
-
-## Evolution and Motivation
-
-ReLU FFN (2017) → GELU FFN (GPT/BERT) → GLU+sigmoid (Dauphin 2017) → **SwiGLU** = `SiLU(x @ W_gate) * (x @ W_up) @ W_down` (Shazeer 2020).
-
-**Why intermediate_size ≈ 3× instead of 4×**: SwiGLU has 3 weight matrices (gate, up, down) vs 2 (up, down) in vanilla FFN. Iso-param constraint: `3 × d × intermediate = 2 × d × 4d` → `intermediate = 8d/3 ≈ 2.67d`. Qwen3 rounds to 3× (3072/1024). BF16 weight memory per MLP layer: gate_up `6144×1024×2` + down `1024×3072×2` = **18,874,368 bytes (18 MB)**. MLP FLOPs (seq=512 tokens): gate_up `2×512×1024×6144 ≈ 6.44 GFLOPs` + down `2×512×3072×1024 ≈ 3.22 GFLOPs` = **9.66 GFLOPs** per layer.
+Because $(xW_{\text{up}}) \odot \sigma(xW_{\text{gate}})$ is a product of two linear transformations of $x$, it computes a **bilinear (second-order) interaction**, allowing a single layer to model complex multiplicative feature correlations without stacking extra layers.
 
 ---
 
-## SwiGLU = SiLU with Decoupled Gate and Content
+## How It Works
+
+### 1. The Activation Evolution: ReLU $\rightarrow$ GELU $\rightarrow$ GLU $\rightarrow$ SwiGLU
 
 ```
-SiLU(x)    =  x        × sigmoid(x)         ← same x for gate and content
-SwiGLU(x)  =  W_up(x)  × SiLU(W_gate(x))   ← separate linear transforms
-                ↑              ↑
-            content path   gate path (decoupled)
+1. Vanilla ReLU FFN (2017):     FFN(x) = max(0, xW_1) W_2
+2. Vanilla GELU FFN (GPT-2):    FFN(x) = GELU(xW_1) W_2
+3. ReGLU (Shazeer 2020):        FFN(x) = ( (xW_up) ⊙ max(0, xW_gate) ) W_down
+4. GEGLU (T5 v1.1):             FFN(x) = ( (xW_up) ⊙ GELU(xW_gate) ) W_down
+5. SwiGLU (PaLM, LLaMA, Qwen):  FFN(x) = ( (xW_up) ⊙ SiLU(xW_gate) ) W_down
 ```
 
-SwiGLU decouples gate and content into independent learnable projections: gate learns *whether* a feature matters, up learns *what* the feature is. Conceptually analogous to LSTM forget gates, but computed afresh per token.
+### 2. Toy Numerical Example
 
----
-
-## SiLU vs ReLU
-
-```
-ReLU(x) = max(0, x)              ← hard cutoff, dying neurons (gradient=0 for x<0)
-SiLU(x) = x × sigmoid(x)        ← smooth everywhere, dips slightly negative (~-0.28)
-         = x × 1/(1 + e^{-x})
-```
-
-Breaking down SiLU: `sigmoid(x) = 1/(1 + e^{-x})` maps any input to (0, 1). Then:
-- Large positive x: sigmoid → 1, so SiLU(x) → x (pass through)
-- Large negative x: sigmoid → 0, so SiLU(x) → 0 (suppress, but smoothly)
-- At x ≈ -1.28: SiLU reaches its minimum of ≈ -0.28 — unlike ReLU which is exactly 0 for all negatives
-
-The crucial difference: ReLU has **zero gradient** for all x < 0. Once a neuron "dies" (consistently receives negative inputs), it can never recover — the gradient is permanently zero, wasting that parameter forever. SiLU has **non-zero gradient everywhere**, so all neurons stay trainable. At LLM scale with billions of parameters, dying neurons compound catastrophically.
-
----
-
-## Why Expand Then Contract?
-
-```
-[N, 1024] → expand → [N, 3072] → contract → [N, 1024]
-```
-
-Attention handles "which tokens interact." MLP handles "how each token's features transform." The expanded intermediate dimension (3072 vs 1024) gives the MLP 3× more non-linear capacity per token before contracting back — because each of the 3072 SiLU-gated features can independently suppress or amplify signal, and the down_proj recombines them into the 1024-dim residual stream.
-
----
-
-## Shapes Through the MLP
-
-```
-[N, 1024]                         hidden_states
-    │
-    │  gate_up_proj (MergedColumnParallelLinear)
-    │  weight: [6144, 1024]  (gate:3072 + up:3072 stacked)
-    ↓
-[N, 6144]                         split → gate [N, 3072], up [N, 3072]
-    │
-    │  SiluAndMul: output = SiLU(gate) × up
-    ↓
-[N, 3072]
-    │
-    │  down_proj (RowParallelLinear)
-    │  weight: [1024, 3072]
-    ↓
-[N, 1024]                         back to hidden_size
-```
-
----
-
-## MergedColumnParallelLinear — Why gate and up Are One Matmul
-
-Conceptually gate_proj and up_proj are two separate `[3072, 1024]` matrices. In practice, they're stacked vertically into one `[6144, 1024]` matrix:
-
-```
-W_merged [6144, 1024] =  ┌─────────────┐
-                          │   W_gate    │  rows 0–3071
-                          ├─────────────┤
-                          │    W_up     │  rows 3072–6143
-                          └─────────────┘
-
-F.linear(x, W_merged)  →  [N, 6144]     ← one kernel launch instead of two
-```
-
-`SiluAndMul` then splits and activates:
+Let input $x$ produce intermediate gate projections $z = [-2.0, -0.5, 1.0, 3.0]$ and content projections $u = [1.5, 2.0, 0.5, -1.0]$:
 
 ```python
-# activation.py — the entire implementation
-@torch.compile
-def forward(self, x):
-    x, y = x.chunk(2, -1)    # gate [N,3072], up [N,3072]
-    return F.silu(x) * y     # silu(gate) * up → [N, 3072]
+# EXECUTED: Numerical comparison of GLU variants on identical inputs
+import numpy as np
+
+z = np.array([-2.0, -0.5, 1.0, 3.0])   # x @ W_gate
+u = np.array([ 1.5,  2.0, 0.5, -1.0])   # x @ W_up
+
+reglu_out  = np.maximum(0, z) * u
+geglu_out  = (0.5 * z * (1.0 + np.tanh(np.sqrt(2.0/np.pi) * (z + 0.044715 * z**3)))) * u
+swiglu_out = (z / (1.0 + np.exp(-z))) * u
+
+print("ReGLU: ", np.round(reglu_out,  4).tolist())
+print("GEGLU: ", np.round(geglu_out,  4).tolist())
+print("SwiGLU:", np.round(swiglu_out, 4).tolist())
 ```
 
-`@torch.compile` fuses the SiLU + multiply into a single GPU kernel. Weight loading (`weight_loader`) fills gate weights at offset 0 and up weights at offset `intermediate_size // tp_size` in the merged matrix.
+```
+ReGLU:  [0.0, 0.0, 0.5, -3.0]
+GEGLU:  [-0.0681, -0.3086, 0.4206, -2.9964]
+SwiGLU: [-0.3576, -0.3775, 0.3655, -2.8577]
+```
+
+- For negative gate inputs ($z = -2.0$), $\text{ReGLU}$ outputs exact zero (zero gradient), while $\text{GEGLU}$ and $\text{SwiGLU}$ output smooth negative values with non-zero gradients, preventing dead neurons.
 
 ---
 
-## Why SwiGLU Is TP-Friendly
+### 3. The Iso-Parameter Derivation ($\frac{8}{3} \times d_{\text{model}}$)
 
-SiLU and element-wise multiply are both **per-element operations**: `output[i] = silu(gate[i]) * up[i]`. The i-th output depends only on the i-th gate and i-th up value. This means tensor-parallel sharding (each GPU computing a slice) produces identical results to computing the full tensor — unlike softmax, which requires a global denominator across all dimensions.
+Standard 2-layer FFN uses 2 matrices ($W_1 \in \mathbb{R}^{d \times 4d}, W_2 \in \mathbb{R}^{4d \times d}$):
+$$\text{Parameters}_{\text{standard}} = 2 \times d_{\text{model}} \times (4d_{\text{model}}) = \mathbf{8d_{\text{model}}^2}$$
 
-In the full TP pattern (Qwen3-0.6B, tp_size=2):
+SwiGLU uses 3 matrices ($W_{\text{gate}}, W_{\text{up}} \in \mathbb{R}^{d \times d_{\text{ffn}}}$ and $W_{\text{down}} \in \mathbb{R}^{d_{\text{ffn}} \times d}$):
+$$\text{Parameters}_{\text{SwiGLU}} = 3 \times d_{\text{model}} \times d_{\text{ffn}}$$
 
-```
-MLP (1 all_reduce):
-  gate_up_proj (ColumnParallel, no sync):
-    GPU-0: [N, 1024] → [N, 3072]  (half of gate + half of up)
-    GPU-1: [N, 1024] → [N, 3072]
-  SiluAndMul: local on each GPU → [N, 1536]
-  down_proj (RowParallel + all_reduce):
-    GPU-0: [N, 1536] → partial → all_reduce → [N, 1024]
-    GPU-1: [N, 1536] → partial → all_reduce → [N, 1024]
-```
+To maintain equal parameter count and FLOP budgets (**Iso-parameter constraint**):
+$$3d_{\text{model}} \cdot d_{\text{ffn}} = 8d_{\text{model}}^2 \implies d_{\text{ffn}} = \frac{8}{3}d_{\text{model}} \approx \mathbf{2.67 \times d_{\text{model}}}$$
 
-ColumnParallel requires zero communication. Only the RowParallel down_proj needs one all_reduce. See [[ml-systems/distributed/parallelism-strategies]] for the general Column→Row TP pattern.
+*(LLaMA-2 7B/13B implements this via $\lceil \frac{8}{3}d / 256 \rceil \times 256 \approx 2.69d$; larger architectures like LLaMA-2-70B and Mistral-7B ($3.5d$), or Qwen2.5-7B ($5.29d$), deliberately widen $d_{\text{ffn}}$ beyond iso-parameter parity for added capacity).*
 
 ---
 
-## Connections
+### 4. Merged Kernel Fusion (`MergedColumnParallelLinear`)
 
-- [[ml-systems/foundations/transformer-model-internals]] — parent note; SwiGLU sits inside each Qwen3DecoderLayer after the attention sub-block
-- [[ml-systems/distributed/parallelism-strategies]] — Column→Row TP pattern that makes gate_up + down_proj communication-efficient
-- [[ml-systems/gpu/torch-compile-graph-breaks]] — `@torch.compile` on `SiluAndMul`; patterns that break fusion
-- [[ml-systems/foundations/mixture-of-experts]] — MoE replaces the dense SwiGLU FFN with a router + expert FFNs
+In PyTorch execution, $W_{\text{gate}}$ and $W_{\text{up}}$ are concatenated vertically into a single matrix $W_{\text{merged}} \in \mathbb{R}^{2d_{\text{ffn}} \times d_{\text{model}}}$:
+
+```
+W_merged [2d_ffn, d_model] = ┌─────────────┐
+                             │   W_gate    │  rows 0 to d_ffn-1
+                             ├─────────────┤
+                             │    W_up     │  rows d_ffn to 2d_ffn-1
+                             └─────────────┘
+```
+
+A single GEMM produces concatenated `[gate, up]`, which `SiluAndMul` splits and activates in a fused Triton kernel:
+
+```python
+# SCRIPT: PyTorch fused activation implementation
+import torch
+import torch.nn.functional as F
+
+def silu_and_mul(x):
+    gate, up = x.chunk(2, dim=-1)
+    return F.silu(gate) * up
+```
+
+---
+
+## Key Trade-offs & Decisions
+
+| Activation | Parameter Matrices | Gate Function $\sigma(z)$ | Dead Neurons? | Representative Models |
+|---|---|---|---|---|
+| **ReLU** | 2 ($W_1, W_2$) | $\max(0, z)$ | **Yes** ($\nabla = 0$ for $z < 0$) | Vaswani 2017, GPT-1, original T5 |
+| **GELU** | 2 ($W_1, W_2$) | $z \cdot \Phi(z)$ | No (smooth negative tail) | BERT, GPT-2, GPT-3 |
+| **ReGLU** | 3 ($W_g, W_u, W_d$) | $\max(0, z)$ | Yes (hard cutoff on gate) | Shazeer (2020) baseline |
+| **GEGLU** | 3 ($W_g, W_u, W_d$) | $\text{GELU}(z)$ (tanh approx) | No | T5 v1.1 |
+| **SwiGLU** | 3 ($W_g, W_u, W_d$) | $z \cdot \text{sigmoid}(z)$ | No (min $\approx -0.28$ at $z \approx -1.28$) | PaLM, LLaMA 1/2/3, Qwen 2.5, Mistral, DeepSeek |
+
+---
+
+## Interview Talking Points
+
+1. **Why does SwiGLU outperform standard ReLU and GELU FFNs?**
+   SwiGLU introduces a bilinear multiplicative gate ($xW_{\text{up}} \odot \text{SiLU}(xW_{\text{gate}})$) that allows a single layer to model second-order feature interactions, while $\text{SiLU}$ maintains non-zero gradients across all inputs to eliminate neuron death.
+
+2. **Why is the intermediate hidden dimension in SwiGLU $\frac{8}{3}d_{\text{model}}$ instead of $4d_{\text{model}}$?**
+   SwiGLU uses 3 weight matrices ($W_{\text{gate}}, W_{\text{up}}, W_{\text{down}}$) instead of 2. Setting $d_{\text{ffn}} = \frac{8}{3}d$ ensures the total parameter count ($3 \times d \times \frac{8}{3}d = 8d^2$) matches the $8d^2$ budget of a standard 2-layer FFN with $4d$ expansion.
+
+3. **Why is SwiGLU friendly to Tensor Parallelism?**
+   Both $\text{SiLU}$ and elementwise multiplication are purely local, per-element operations: $\text{out}[i] = \text{silu}(\text{gate}[i]) \cdot \text{up}[i]$. Sharding $W_{\text{gate}}$ and $W_{\text{up}}$ with ColumnParallelLinear requires zero inter-GPU communication before the activation.
+
+---
+
+## See Also
+
+- [[ml-systems/foundations/transformer-model-internals]] — full Transformer decoder topology and Qwen3 MLP layer dimensions
+- [[ml-systems/foundations/transformer-normalization-architectures]] — Pre-Norm vs Post-Norm placements wrapping the SwiGLU MLP block
+- [[ml-systems/distributed/parallelism-strategies]] — ColumnParallel $\rightarrow$ RowParallel Tensor Parallelism pattern for SwiGLU
+- [[ml-systems/gpu/torch-compile-graph-breaks]] — fusing `SiluAndMul` elementwise ops under `torch.compile`
+- [[ml-systems/foundations/mixture-of-experts]] — replacing dense SwiGLU with sparse routed expert MLPs
+- [[ml-systems/foundations/sequential-vs-parallel-blocks]] — fusing SwiGLU gate/up projections with Attention QKV in parallel blocks
+- [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — body parameter budgeting and intermediate FFN dimension scaling

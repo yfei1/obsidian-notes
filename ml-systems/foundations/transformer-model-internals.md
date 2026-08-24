@@ -111,15 +111,13 @@ RMSNorm(x)  = (x / RMS(x)) * γ          # γ is learned weight [hidden_dim]
 
 Re-centering (mean subtraction) in LayerNorm is empirically unnecessary for Transformers — ablations show no quality loss.
 
-**Pre-Norm placement** (modern standard): RMSNorm is applied *before* each sub-block (Attention, MLP), not after. This is called Pre-Norm:
+**Pre-Norm placement** (modern standard): Normalization is applied *before* each sub-block, keeping the residual stream an unnormalized identity highway ($x_L = x_0 + \sum_{l=0}^{L-1} \mathcal{F}_l(\text{RMSNorm}(x_l)) \implies \frac{\partial x_L}{\partial x_0} = \mathbf{I} + \dots$). For mathematical taxonomy across Pre-Norm, Post-Norm, Non-Residual Post-Norm (OLMo 2), and Double Norm (Gemma 2, Grok 1), see [[ml-systems/foundations/transformer-normalization-architectures]].
 
 ```
 hidden → RMSNorm → Attention → + residual → RMSNorm → MLP → + residual → output
 ```
 
-Post-Norm (original Transformer) placed norm *after* residual add, which caused gradient instability in deep networks. Pre-Norm fixes this by ensuring the residual stream is never normalized — it accumulates cleanly. Backed by gradient flow analysis at initialization (Xiong et al. 2020), but not a formal proof of global optimality.
-
-**Why Q/K norm but not V norm?** Q and K participate in the dot-product `score = QKᵀ / √d_k`. Large Q or K magnitudes cause attention scores to explode → softmax saturates → gradients vanish. V is only weighted-summed by attention weights, so its magnitude doesn't affect score sharpness. Normalizing V would erase useful semantic magnitude information for free.
+**Why Q/K norm but not V norm?** Q and K participate in the dot product $\text{score} = \frac{q_i k_j^T}{\sqrt{d_k}} = \frac{\|q\| \|k\| \cos\theta}{\sqrt{d_k}}$. Over long training runs, unconstrained $W_Q, W_K$ norm growth inflates logits beyond $\pm 20$, saturating Softmax ($\frac{\partial P}{\partial s} = P(1-P) \to 0$) and triggering loss spikes. Applying RMSNorm fixes $\|\tilde{q}\|_2 = \|\tilde{k}\|_2 = \sqrt{d_k}$, strictly bounding attention logits to $[-\sqrt{d_k}, +\sqrt{d_k}]$ (Dehghani et al. 2023, Gemma, Qwen 2.5). V is only linearly weighted by attention probabilities, so its magnitude does not affect score sharpness; normalizing V would erase useful semantic magnitude information for free.
 
 **Fused add+norm** (`add_rms_forward`): Combines residual addition and normalization into one `@torch.compile` kernel. Returns `(normalized, un-normalized_sum)`.
 
@@ -137,9 +135,9 @@ Output: Q [N, 16, 64]  K [N, 8, 64]  V [N, 8, 64]
 
 **Qwen3-specific**: Per-head RMSNorm on Q and K after projection, before RoPE. Rationale: QKV projection can produce heads with very different L2 norms. Without normalization, a single high-magnitude head dominates softmax scores — attention collapse (i.e., one head's scores swamp all others in softmax). Normalizing each head to unit scale prevents one head from monopolizing attention across the sequence.
 
-### Attention — Focus Mechanism
+### Attention — Focus Mechanism (Softmax Location 1)
 
-Each token: "Of all previous tokens, which should I focus on?" via `softmax(Q·K^T / sqrt(64)) · V`.
+Computes sequence attention weights via Softmax Location 1: $A = \text{Softmax}(QK^T / \sqrt{d_k}) \in \mathbb{R}^{S \times S}$ (normalizes over sequence length $S$; stabilized against logit drift by QK-Norm). Output: $A \cdot V$.
 
 ```
 Input:  Q [N, 16, 64]  K [N, 8, 64]  V [N, 8, 64]
@@ -322,3 +320,8 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/inference/cuda-graph-inference-optimization]] — transformer layer kernels (linear, MLP, attention) are recorded into CUDA graphs during decode to eliminate Python dispatch overhead
 - [[ml-systems/gpu/pytorch-module-hooks]] — hooks attach to the `nn.Module` hierarchy that transformer layers are built from; the `__call__` dispatch pattern applies at every layer
 - [[ml-systems/inference/kv-cache-kernel-and-addressing]] — kernel-level implementation of the KV cache write that occurs at each transformer layer during prefill and decode
+- [[ml-systems/training/scaling-laws]] — how many of these parameters to build, and how many tokens to train them on: `C ≈ 6ND` and the `D ≈ 20N` compute-optimal rule
+- [[ml-systems/training/cross-entropy-and-bpb]] — what the training loss over this model's output softmax actually measures, in bits
+- [[ml-systems/foundations/einops-tensor-manipulation]] — declarative tensor reshaping vs standard PyTorch view/transpose in attention heads
+- [[ml-systems/foundations/sequential-vs-parallel-blocks]] — serialized vs parallel Attention+MLP execution topology and TP communication scaling
+- [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — architectural aspect ratio conventions (d_model/L ~ 100-130) and MHA head dimension scaling

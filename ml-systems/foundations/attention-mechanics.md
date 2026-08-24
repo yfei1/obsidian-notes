@@ -241,55 +241,11 @@ K and V are decoupled because a token needs two independent degrees of freedom: 
 
 ---
 
-## Multi-Head: Why Not Just One Head?
+## Multi-Head & Grouped-Query Attention
 
-One head learns one relationship pattern (e.g., "attend to the subject noun"). Multiple heads learn **parallel** patterns:
+Multi-Head Attention (MHA) splits the $d_{\text{model}}$ space into $h$ independent heads, allowing the model to attend to $h$ distinct semantic relationships in parallel with zero extra compute ($2 \cdot h \cdot d_k = 2 \cdot d_{\text{model}}$). 
 
-```
-Head  0: "where is the verb?"
-Head  1: "where is the coreference?"
-Head  2: "where is the closest adjective?"
-...
-Head 15: "where is the opening bracket?"
-```
-
-Each head finds different relevant tokens because each has its own learned Q, K, V projection weights. The concatenated `[N, 16×64]` output passes through `o_proj` ([1024, 1024]) to mix perspectives across heads — without `o_proj`, each head's output adds independently to the residual stream with no cross-head coordination, discarding the diversity multiple heads provide.
-
----
-
-## GQA: Why 8 KV Heads Instead of 16?
-
-**Q heads need diversity** — each encodes a different search strategy. Reducing Q heads directly cuts multi-perspective capacity.
-
-**KV heads can be shared** — they are passive information providers. Two Q heads querying the same KV head still produce different attention distributions, because each Q head has independent Q projection weights that select different positions from the same key set.
-
-**Memory math**: KV cache per token per layer = `num_kv_heads × head_dim × 2 (K+V) × dtype_size`.
-- MHA (16/16): `16 × 64 × 2 × 2 bytes = 4,096 bytes/token/layer`
-- GQA (16/8):  `8 × 64 × 2 × 2 bytes = 2,048 bytes/token/layer` — **halved**
-- MQA (Multi-Query Attention, 16/1):  `1 × 64 × 2 × 2 bytes = 256 bytes/token/layer` — 16× smaller, but all 16 Q heads share a single K/V set, so each head's attention distribution is constrained to the same key space; empirically this reduces model quality compared to GQA
-
-Over 28 layers and 4,096 tokens (fp16, 2 bytes/element):
-- MHA: `4,096 bytes × 4,096 tokens × 28 layers = 469,762,048 bytes ≈ 448 MB`
-- GQA: `2,048 bytes × 4,096 tokens × 28 layers = 234,881,024 bytes ≈ 224 MB`
-
-<!-- verify:
-import math
-mha_bytes = 16 * 64 * 2 * 2 * 4096 * 28
-gqa_bytes =  8 * 64 * 2 * 2 * 4096 * 28
-mqa_bytes =  1 * 64 * 2 * 2 * 4096 * 28
-assert mha_bytes == 469_762_048
-assert gqa_bytes == 234_881_024
-assert mqa_bytes ==  29_360_128
-assert gqa_bytes == mha_bytes // 2
-assert mha_bytes // 1024**2 == 448   # 448 MB
-assert gqa_bytes // 1024**2 == 224   # 224 MB
--->
-
-GQA halves KV cache versus MHA without the quality regression MQA introduces by collapsing all Q heads to one shared key set.
-
----
-
-## Prefill vs Decode: Two Attention Kernels
+Grouped-Query Attention (GQA) groups query heads into shared KV heads (e.g. 16 Q heads share 8 KV heads in Qwen3-0.6B), delivering an $8\times$ reduction in KV cache memory and memory traffic during decoding while recovering $99\%+$ of MHA's representation quality. For full mathematical taxonomy and ablations across MHA, MQA, GQA, and DeepSeek MLA, see [[ml-systems/foundations/gqa-mqa-attention-variants]].
 
 ### Prefill — Process Full Prompt at Once (Compute-Bound)
 
@@ -340,54 +296,10 @@ The GPU waits on HBM bandwidth, not arithmetic. **Memory-bandwidth-bound**. See 
 
 ## KV Cache Write: Triton Kernel
 
-```python
-# attention.py:10-30 — one CUDA thread per token
-@triton.jit
-def store_kvcache_kernel(key_ptr, ..., slot_mapping_ptr, D):
-    idx  = tl.program_id(0)                     # which token am I?
-    slot = tl.load(slot_mapping_ptr + idx)       # where should I write?
-    if slot == -1: return                        # prefix cache hit — KV for this token was reused from a prior request sharing the same prefix, so it's already stored
-
-    tl.store(k_cache_ptr + slot * D, key)        # blind write to pre-computed address
-    tl.store(v_cache_ptr + slot * D, value)
-```
-
-`slot_mapping` is pre-computed by the CPU scheduler before the kernel launches, so the GPU does zero address arithmetic — just `cache[slot] = kv`. CPU-side precomputation avoids GPU threads racing a shared allocator: lock contention would serialize writes to memory-allocator throughput (~single-digit GB/s) instead of HBM bandwidth (~2 TB/s on H100). See [[ml-systems/inference/llm-inference-engines]] for paged allocation and [[ml-systems/gpu/gpu-memory-hierarchy]] for the memory hierarchy that makes this tradeoff necessary.
-
----
-
+In vLLM, `store_kvcache_kernel` uses pre-computed `slot_mapping` addresses to write new Key and Value vectors directly to the paged KV cache in HBM without GPU memory allocation lock contention. For full flat 1D addressing mechanics and Triton kernel code, see [[ml-systems/inference/kv-cache-kernel-and-addressing]].
 ## Tensor Parallelism for Attention
 
-**Why attention is TP-friendly**: each head's score matrix depends only on that head's own Q and K — head 3 never reads head 12's projections. Cross-head interaction happens only at o_proj, where outputs are concatenated and mixed. Heads therefore split across GPUs with zero communication during attention itself, requiring only 1 all_reduce (at o_proj) per attention block.
-
-This follows the Column→Row sharding pattern: ColumnParallel (each GPU takes a column slice of the weight matrix, no communication needed) for QKV projection, RowParallel + all_reduce (a collective that sums partial results across GPUs) for o_proj. With `tp_size=2`:
-
-**QKVParallelLinear** (ColumnParallel — each GPU computes a disjoint head slice, no inter-GPU communication):
-
-```
-GPU 0: Q heads 0-7  [N, 512]   K heads 0-3  [N, 256]   V heads 0-3  [N, 256]
-GPU 1: Q heads 8-15 [N, 512]   K heads 4-7  [N, 256]   V heads 4-7  [N, 256]
-```
-
-**Attention computation** (each GPU independently, no communication):
-
-```
-GPU 0: 8 Q heads attend to 4 KV heads → O [N, 8, 64] → flatten → [N, 512]
-GPU 1: 8 Q heads attend to 4 KV heads → O [N, 8, 64] → flatten → [N, 512]
-```
-
-**o_proj** (RowParallel — each GPU holds a row slice of W_O, producing a partial sum; all_reduce combines them):
-
-```
-GPU 0: [N, 512] @ W_0^T → [N, 1024] (partial)
-GPU 1: [N, 512] @ W_1^T → [N, 1024] (partial)
-all_reduce(sum) → [N, 1024] correct output on both GPUs
-```
-
-**KV cache is also sharded** — because each GPU owns a disjoint head slice, it only needs to cache K and V for those heads. GPU 0 caches heads 0–3; GPU 1 caches heads 4–7. No duplication: each GPU's cache = `(num_kv_heads / tp_size) × head_dim` per token. See [[ml-systems/distributed/parallelism-strategies]] for the full Column→Row analysis and why this pattern minimizes communication.
-
----
-
+Attention is embarrassingly parallel across heads: each head computes its score matrix independently without cross-head communication. ColumnParallelLinear shards $Q, K, V$ heads across GPUs with zero communication during attention itself, requiring only 1 All-Reduce at $W_O$ (RowParallelLinear). For full Column→Row Tensor Parallelism patterns, see [[ml-systems/distributed/parallelism-strategies]].
 ## Interview Talking Points
 
 1. **"Explain attention end-to-end."** — Project hidden states into Q, K, V. Compute scores = Q·K^T / √d_k (scaling prevents softmax saturation from high-variance dot products). Apply causal mask: set upper-triangle to -∞ so e^(-∞)=0 gives future tokens exactly zero weight. Softmax normalizes each row to a probability distribution. Output = weighted sum of V vectors. Concat all heads, project through o_proj.
@@ -430,3 +342,4 @@ all_reduce(sum) → [N, 1024] correct output on both GPUs
 - [[ml-systems/vllm/vllm-torch-compile-decorator]] — torch.compile and CUDA graph integration affecting the decode attention path
 - [[ml-systems/inference/kv-cache-kernel-and-addressing]] — concrete kernel implementation showing how prefill and decode phases write to and read from the KV cache
 - [[ml-systems/vllm/vllm-torch-compile-decorator]]
+- [[ml-systems/foundations/einops-tensor-manipulation]] — declarative multi-head tensor reshaping vs native PyTorch view operations

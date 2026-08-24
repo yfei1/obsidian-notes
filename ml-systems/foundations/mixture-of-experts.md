@@ -260,3 +260,4 @@ Full implementation details — buffer shapes, shard_id mapping, per-expert load
 - [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]] — kernel fusion research for the PT-MoE sandwich-norm residual pattern that wraps each MoE block
 - [[ml-systems/distributed/vllm-distributed-groups]]
 - [[ml-systems/foundations/swiglu-mlp]]
+- [[ml-systems/training/scaling-laws]] — MoE splits total from active parameters, which changes what `N` means in both the `6ND` training cost and the `2N` per-token serving cost

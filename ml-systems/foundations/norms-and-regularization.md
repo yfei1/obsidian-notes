@@ -198,3 +198,8 @@ The optimizer plays whack-a-mole: suppress the current maximum, a new one emerge
 - [[ml-systems/foundations/attention-mechanics]] — per-head RMSNorm on Q/K before RoPE rotation
 - [[ml-systems/gpu/pt-moe-4norm-postnorm-semantic-mismatch]] — detailed analysis of `fused_add_rms_norm` semantic mismatch for Post-LN residual patterns, and design of a custom `fused_add_rmsnorm_postln` Triton kernel
 - [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]]
+- [[ml-systems/training/cross-entropy-and-bpb]] — the prediction loss these regularization penalties are added to, and what its units mean
+- [[ml-systems/training/floating-point-formats]] — why normalization variance calculations require FP32 accumulation to prevent overflow
+- [[ml-systems/training/loss-landscape-and-flat-minima]] — how normalization layers smooth loss surfaces and create scale-invariant flat basins
+- [[ml-systems/training/microscaling-and-block-formats]] — why QK-Norm and RMSNorm are critical for suppressing activation outliers before microscaling
+- [[ml-systems/foundations/transformer-normalization-architectures]] — Transformer normalization placement architectures (Pre-Norm vs Post-Norm vs Non-Residual Post-Norm)

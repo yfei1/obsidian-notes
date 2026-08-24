@@ -346,3 +346,4 @@ All assertions passed.
 - [[ml-systems/foundations/attention-mechanics]] — multi-head attention; PT reduces heads-per-track, trading per-track capacity for fewer syncs
 - [[ml-systems/inference/kv-cache-internals]]
 - [[ml-systems/inference/cuda-graph-inference-optimization]] — CUDA graphs apply only to the decode track; prefill's variable sequence lengths make static graph capture impractical
+- [[ml-systems/foundations/sequential-vs-parallel-blocks]] — intra-layer parallel Attention+MLP blocks (distinct from multi-track model partitioning)

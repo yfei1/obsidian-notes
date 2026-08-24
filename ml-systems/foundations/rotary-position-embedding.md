@@ -27,31 +27,19 @@ Added directly to token embeddings before the first layer. Simple and parameter-
 
 ### 2. Relative Positional Encoding (RPE) — Shaw 2018
 
-Modifies attention scores to include a learned relative bias:
+Modifies attention scores with learned per-pair distance vectors: `score(i, j) = (q_i · k_j + q_i · r_{i-j}) / √d`. Captures relative positions directly, but requires an extra vector dot-product per pair that breaks FlashAttention SRAM tiling loops.
 
-```
-score(i, j) = (q_i · k_j + q_i · r_{i-j}) / √d
-```
+### 3. T5 Relative Bias — Raffel 2020
 
-Where `r_{i-j}` is a learned embedding for relative distance. Captures relative positions directly, but introduces extra parameters and complicates the attention kernel.
-
-### 3. T5 Bias — Raffel 2020
-
-Adds a learned scalar bias per relative distance bucket to the attention logits. Simple and effective, but still requires storing learned parameters for all distance bins.
+Adds learned scalar bucket biases to attention logits: `score(i, j) = q_i · k_j / √d + b(i-j)`. Requires per-step bucket table lookups and extra memory accesses inside the attention loop, which RoPE avoids entirely.
 
 ### 4. ALiBi — Press 2021
 
-No learned parameters. Subtracts a linear penalty proportional to distance:
+Subtracts a fixed head-specific linear slope: `score(i, j) = q_i · k_j / √d - m · |i - j|`. Parameter-free and supported natively in FlashAttention (`alibi_slopes`), but imposes a hard monotonic penalty that degrades distant context retrieval.
 
-```
-score(i, j) = q_i · k_j - m × |i - j|
-```
+### 5. RoPE — Su 2021 (Modern Standard)
 
-Where `m` is a fixed head-specific slope. Strongly penalises attending to distant tokens — good for extrapolation, but imposes a hard inductive bias that may hurt tasks requiring long-range dependencies.
-
-### 5. RoPE — Su 2021
-
-Encodes absolute position via rotation, but the rotation is designed so that dot products automatically reflect relative positions. Zero extra parameters. No hard distance penalty. The Q/K weight matrices learn how much to weight near vs. far tokens based on semantic content.
+Encodes position by rotating $Q$ and $K$ in-place before attention. Inner products reflect relative positions naturally ($\langle R_m q, R_n k \rangle = q^T R_{n-m} k$). Zero learned parameters, natively compatible with standard FlashAttention kernels, and keys are rotated once upon insertion into the KV cache with zero decode lookup overhead.
 
 ---
 
@@ -266,7 +254,7 @@ Increasing `base` slows down all frequencies, expanding the range over which pos
 
 ## Interview Talking Points
 
-1. **Why use RoPE over alternatives?** Zero extra parameters (unlike Shaw RPE / T5 bias which store learned embeddings per distance), zero extra memory, and no hard inductive bias (unlike ALiBi's fixed linear penalty). The Q/K matrices learn relative attention patterns from data; RoPE only provides the positional coordinate system.
+1. **Why use RoPE over classical relative encodings (Shaw / T5)?** RoPE rotates $Q$ and $K$ in-place before attention, allowing the attention kernel to execute standard scaled dot-product attention with zero extra lookups and native KV cache integration. In contrast, Shaw requires per-pair vector projections ($q_i \cdot r_{i-j}$), and T5 requires learned bucket table lookups inside the attention loop.
 
 2. **Rotation intuition**: multiplying a vector by `e^(imθ)` rotates it by angle `mθ` in the complex plane. Rotation preserves vector length and composes cleanly — `e^(imθ)·e^(inθ) = e^(i(m+n)θ)` — making it a natural, parameter-free way to tag each token with its position.
 
