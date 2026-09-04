@@ -166,6 +166,14 @@ For square matrices ($M=N=K$):
 
 ### 2D Linearized Memory Indexing & Fused Implementation
 
+#### Global Bounds vs On-Chip Tile Shapes
+
+Kernel arguments distinguish between full HBM matrix boundaries and on-chip SRAM tile buffers:
+- **Global HBM Bounds ($M, K, N$)**: Passed to guard memory access (`< M`, `< N`, `< K`).
+- **On-Chip Slice $a$**: Shape `[BLOCK_M, BLOCK_K]` loaded into SRAM/registers.
+- **On-Chip Slice $b$**: Shape `[BLOCK_K, BLOCK_N]` loaded into SRAM/registers.
+- **Register Accumulator `acc`**: Shape `[BLOCK_M, BLOCK_N]`, accumulating $[BLOCK\_M, BLOCK\_K] \times [BLOCK\_K, BLOCK\_N]$ via `tl.dot(a, b)`.
+
 #### 2D Memory Stride Invariant
 
 In PyTorch, a 2D tensor is stored linearly in 1D physical memory. Locating an element at `(row, col)` requires its stride decomposition:
