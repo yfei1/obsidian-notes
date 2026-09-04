@@ -172,3 +172,4 @@ for expert_id in range(num_experts):
 - [[ml-systems/gpu/pt-moe-4norm-fused-kernel-integration]] — uses `FusedMoE`'s `CustomOp` registration pattern as the reference for integrating a custom Post-LN norm fusion kernel
 - [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]]
 - [[ml-systems/vllm/pt-moe-inductor-pad-mm-bug]]
+- [[ml-systems/foundations/moe-architectural-variants]] — routing paradigms, shared experts, and load balancing dynamics

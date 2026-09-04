@@ -76,7 +76,10 @@ Normal exponents in FP16 span 14 negative exponents ($1 \dots 14$), 1 zero expon
 | **FP8 (E4M3)** | 8 | 4 | 3 | 7 | $0.015625$ ($2^{-6}$) | $448$ | $1.2$ ($\log_{10} 2^{4}$) | $8$ ($2^3$) | Per-tensor scale |
 | **FP8 (E5M2)** | 8 | 5 | 2 | 15 | $6.1035 \times 10^{-5}$ ($2^{-14}$) | $57,344$ | $0.9$ ($\log_{10} 2^{3}$) | $4$ ($2^2$) | Per-tensor scale |
 
-*(Note: BF16 max finite is $(2 - 2^{-7}) \times 2^{127} \approx 3.3895 \times 10^{38}$, which is $0.4\%$ below FP32's max $(2 - 2^{-23}) \times 2^{127} \approx 3.4028 \times 10^{38}$ due to mantissa truncation).*
+*(Deriving Maximum Finite Values: Formula is $(2 - 2^{-m}) \times 2^{E_{\max} - \text{Bias}}$ with all $m$ mantissa bits set to 1 and maximum normal exponent code $E_{\max} = 2^k - 2$):*
+- **FP16 Max Finite ($65{,}504$)**: $(2 - 2^{-10}) \times 2^{30 - 15} = 2^{15} \times (2 - 2^{-10}) = 2^{16} - 2^5 = 65536 - 32 = \mathbf{65504}$ (bit layout `0 11110 1111111111` = `0x7BFF`, as $E=31$ is reserved for $\pm\infty$ and $\text{NaN}$). Sets the format logit ceiling at $z \ge \ln(65504) \approx 11.0899$, beyond which $e^z$ overflows to $+\infty$; see [[ml-systems/training/output-softmax-z-loss]].
+- **BF16 Max Finite ($3.3895 \times 10^{38}$)**: $(2 - 2^{-7}) \times 2^{254 - 127} \approx 3.3895 \times 10^{38}$ ($0.39\%$ below FP32 due to 7-bit mantissa truncation).
+- **FP32 Max Finite ($3.4028 \times 10^{38}$)**: $(2 - 2^{-23}) \times 2^{254 - 127} \approx 3.4028 \times 10^{38}$.
 
 ### Subnormal Degradation and Underflow Boundaries in FP16
 
@@ -238,3 +241,4 @@ Without an FP32 master weight, every single update of $0.001$ vanishes and the w
 - [[ml-systems/gpu/gpu-kernel-timing-and-benchmarking]] — measuring TFLOPS across FP32, BF16, and FP8 precision modes
 - [[ml-systems/gpu/arithmetic-intensity-and-roofline]] — how reduced precision (FP8, NVFP4) cuts memory traffic and doubles arithmetic intensity
 - [[ml-systems/training/first-order-optimizers]] — progressive evolution from SGD to Adam, state memory, and per-step FLOPs
+- [[ml-systems/training/output-softmax-z-loss]] — vocabulary partition function overflow in FP16 (Z > 65504) and Z-loss stability

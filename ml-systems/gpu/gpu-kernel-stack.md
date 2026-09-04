@@ -22,6 +22,12 @@ A Python-like language for writing individual GPU kernels. Compiles directly to 
 - **Inductor Code Scaffolding**: Running `TORCH_LOGS="output_code" python script.py` prints the auto-generated Triton kernels directly to stdout, providing templates for custom kernel authoring.
 - **Interpreter Debugging**: Setting `TRITON_INTERPRET=1` before kernel decoration (in modern Triton 3.x; legacy Triton 2.1 supported `@triton.jit(interpret=True)`) runs the kernel on the CPU as pure Python on Linux hosts. This enables standard `breakpoint()` / `pdb` stepping through block arithmetic and indexing masks.
 
+#### Block-Level Programming: Thinking in Thread Blocks
+Unlike CUDA C++ where programmers write scalar code for a single **Thread** (`threadIdx.x`), Triton code is written natively from the perspective of a **Thread Block (CTA)**:
+- **Program ID as Block ID**: Each execution instance represents one thread block (`pid = tl.program_id(0)` corresponds to CUDA `blockIdx.x`).
+- **Block-Level Vector Operations**: Instructions operate directly on 1D/2D block tiles (`tl.arange(0, BLOCK_SIZE)`), eliminating scalar thread indexing and explicit thread barriers (`__syncthreads()`).
+- **Compiler Automation (Triton vs CUDA C++)**: In Triton-emitted code, the compiler automatically assigns physical threads, generates 32-thread warps, emits coalesced memory transactions, and manages on-chip Shared Memory double-buffering and bank layout scheduling (freeing programmers from manual CUDA `s_tile[32][33]` padding; see [[ml-systems/gpu/gpu-architecture-fundamentals]]).
+
 ### torch.compile (Inductor)
 
 Traces a model's forward pass into an FX graph (a DAG of tensor ops). The Inductor backend fuses sequences of element-wise ops into single kernels, eliminating intermediate tensor allocations. Does NOT touch matmuls (already handled by **cuBLAS** — NVIDIA's optimized matrix-multiply library) or custom Triton kernels (registered as opaque custom ops).
@@ -175,7 +181,7 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 
 ## Key Trade-offs & Decisions
 
-**Fusion boundaries are a real tradeoff**: FusedMoE being opaque means Inductor can't fuse RMSNorm *into* the MoE kernel. The boundary costs 2 memory round-trips: write normalized hidden states `[32, 4096]` to HBM (512 KB), read them back in FusedMoE; write MoE output, read for post-norm. At float32 that is **2 × 512 KB = 1 MB of unavoidable boundary traffic** per layer. A single mega-kernel could eliminate these, but **register pressure** (the demand for fast on-chip register storage — each SM has a fixed register file, 256 KB on H100 — exceeding capacity) would force **register spilling**: values overflow from registers into slower local memory (L1/L2 cache or HBM), stalling execution. H100 SMs have 256 KB of register file per SM <!-- source: H100 datasheet -->, and FlashAttention + MoE routing together would exhaust it, dropping **occupancy** (the fraction of active warps — groups of 32 threads — relative to the SM's maximum) and stalling execution. Separate kernels let each stage fit its register budget and keep occupancy high.
+**Fusion boundaries are a real tradeoff**: FusedMoE being opaque means Inductor can't fuse RMSNorm *into* the MoE kernel. The boundary costs 2 memory round-trips: write normalized hidden states `[32, 4096]` to HBM (512 KB), read them back in FusedMoE; write MoE output, read for post-norm. At float32 that is **2 × 512 KB = 1 MB of unavoidable boundary traffic** per layer. A single mega-kernel could eliminate these, but **register pressure** (the demand for fast on-chip register storage — each SM has a fixed register file, 256 KB on H100 — exceeding capacity) would force **register spilling**: values overflow from registers into slower local memory (L1/L2 cache or HBM), stalling execution. H100 SMs have 256 KB of register file per SM <!-- source: H100 datasheet -->, and FlashAttention + MoE routing together would exhaust it, dropping **occupancy** (the fraction of active [[ml-systems/gpu/gpu-architecture-fundamentals|warps]] relative to the SM's maximum) and stalling execution. Separate kernels let each stage fit its register budget and keep occupancy high.
 
 **torch.compile vs Triton**: Not a choice — they coexist. Triton handles complex ops where the algorithm matters (attention, MoE). torch.compile handles the element-wise glue where fusion matters. Writing a Triton kernel for RMSNorm alone is pointless — Inductor generates one automatically.
 
@@ -196,6 +202,8 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 ---
 
 ## See Also
+
+- [[ml-systems/gpu/gpu-architecture-fundamentals]] — SM hardware hierarchy, SIMT execution, and abstraction vs silicon mapping.
 
 - [[ml-systems/gpu/torch-compile-graph-breaks]] — what patterns cause graph breaks and how to fix them
 - [[ml-systems/gpu/torch-compile-cuda-graphs-hook-interaction]] — hook paths, `@torch.compile` vs `module.compile()`, CUDA graph capture mechanics

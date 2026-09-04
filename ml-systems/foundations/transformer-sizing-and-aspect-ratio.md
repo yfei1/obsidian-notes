@@ -141,3 +141,4 @@ A 32-layer model requires 32 sequential memory reads per token, whereas a 256-la
 - [[ml-systems/foundations/swiglu-mlp]] — intermediate dimension expansion ($d_{\text{ffn}} = \frac{8}{3}d_{\text{model}}$)
 - [[ml-systems/distributed/parallelism-strategies]] — Tensor Parallelism and Pipeline Parallelism bubble dynamics
 - [[ml-systems/foundations/gqa-mqa-attention-variants]] — MHA, MQA, GQA, and MLA head architectures and KV cache memory scaling
+- [[ml-systems/foundations/linear-and-efficient-attention]] — factorized linear attention, kernel feature maps, and state-space duality

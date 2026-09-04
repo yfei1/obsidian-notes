@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-Seven parallelism strategies exist for distributing LLM workloads across GPUs. Most compose freely; ZeRO/FSDP are mutually exclusive (competing implementations of the same idea) and training-only — the rest apply to both training and inference. "Model Parallelism" is not a separate strategy; it's an umbrella term for TP + PP + EP.
+Seven parallelism strategies distribute LLM workloads across GPUs. ZeRO/FSDP are training-only; the rest apply to training and inference. "Model Parallelism" is an umbrella term for TP + PP + EP.
 
 ---
 
@@ -12,10 +12,10 @@ Seven parallelism strategies exist for distributing LLM workloads across GPUs. M
 
 | Strategy | What It Shards | Scope | Training | Inference |
 |---|---|---|---|---|
-| **Data Parallelism (DP)** | Input data (replicate entire model) | Across GPU groups | + | + (trivially) |
+| **Data Parallelism (DP)** | Input data (replicate entire model) | Across GPU groups | + | + |
 | **ZeRO / FSDP** | Optimizer states, gradients, and/or parameters across DP replicas | Across DP replicas | + | - |
 | **Tensor Parallelism (TP)** | Individual weight matrices (column/row split) | Within a node | + | + |
-| **Sequence Parallelism (SP)** | LayerNorm/Dropout activations along sequence dim | Within a node (with TP) | + | + |
+| **Sequence Parallelism (SP)** | Activations along sequence dimension | Within a node (with TP) | + | + |
 | **Pipeline Parallelism (PP)** | Model layers across GPUs | Across nodes | + | + |
 | **Expert Parallelism (EP)** | MoE experts assigned to specific GPUs | Across GPUs | + | + |
 | **Context Parallelism (CP)** | Sequence length across GPUs | Within/across nodes | + | + |
@@ -29,11 +29,7 @@ Seven parallelism strategies exist for distributing LLM workloads across GPUs. M
 ```
 Setup: 4 GPUs, each holds a FULL copy of the model
 
-1. Global batch (e.g., 64 samples) is split into micro-batches:
-   GPU-0: samples 0-15
-   GPU-1: samples 16-31
-   GPU-2: samples 32-47
-   GPU-3: samples 48-63
+1. Global batch (64 samples) splits into micro-batches: GPU 0 (0-15), GPU 1 (16-31), GPU 2 (32-47), GPU 3 (48-63)
 
 2. Each GPU runs forward + backward pass independently
 
@@ -315,6 +311,7 @@ The bubble shrinks to near-zero because the blocking condition — "wait for the
 
 ## See Also
 
+- [[ml-systems/foundations/moe-architectural-variants]] — routing paradigms, shared experts, and load balancing dynamics
 - [[ml-systems/foundations/transformer-model-internals]]
 - [[ml-systems/gpu/gpu-memory-hierarchy]]
 - [[distributed-systems/chandy-lamport]]

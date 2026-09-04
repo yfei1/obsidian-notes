@@ -78,10 +78,31 @@ $$\text{KV Cache Bytes} = 2 \times L \times H_{\text{KV}} \times d_k \times 2\te
 
 ### 5. Multi-Head Latent Attention (MLA - DeepSeek V2/V3)
 
-DeepSeek MLA compresses Key and Value projections into a shared low-rank latent vector $c_t^{\text{KV}} \in \mathbb{R}^{d_c}$ (where $d_c = 512$, with $d_{\text{model}} = 7168$):
-$$\mathbf{c_t^{\text{KV}} = W_{\text{DKV}} x_t} \quad \in \mathbb{R}^{512}$$
-During inference, the KV cache stores **only the 512-dim latent vector $c_t^{\text{KV}}$** (plus a 64-dim decoupled RoPE key $k_t^R$). The full multi-head keys and values are decompressed dynamically on-the-fly inside GPU SRAM during attention, reducing KV cache memory by $93.3\%$ while preserving full Multi-Head expressiveness. (See [[ml-systems/inference/flashinfer-vllm-integration]]).
+Instead of dropping head count, DeepSeek MLA compresses Keys and Values into a shared low-rank latent vector $c_t^{\text{KV}} \in \mathbb{R}^{d_c}$ ($d_c = 512$, $d_{\text{model}} = 5120$ for V2, $7168$ for V3; total head dimension $n_h d_h = 16384$ is decoupled from $d_{\text{model}}$ via low-rank projections):
+$$c_t^{\text{KV}} = W_{\text{DKV}} x_t, \quad W_{\text{DKV}} \in \mathbb{R}^{d_c \times d_{\text{model}}}$$
 
+#### A. Decoupled RoPE (Preserving Matrix Associativity)
+If RoPE $\mathcal{R}_{\Theta, j}$ were applied to uncompressed keys $W_{\text{UK}} c_j^{\text{KV}}$, the dot product $q_t^T \mathcal{R}_{\Theta, j} W_{\text{UK}} c_j^{\text{KV}} = (\mathcal{R}_{-\Theta, j} q_t)^T W_{\text{UK}} c_j^{\text{KV}}$ would depend on position $j$, preventing $W_{\text{UK}}$ from being pre-absorbed into Query. MLA decouples representations into un-rotated content vectors and shared position vectors ($d_R = 64$):
+$$\text{Query: } q_{t,i}^C = W_{\text{UQ}}^i c_t^Q, \quad q_{t,i}^R = \mathcal{R}_{\Theta, t}(W_{\text{QR}}^i c_t^Q)$$
+$$\text{Key: } k_{j,i}^C = W_{\text{UK}}^i c_j^{\text{KV}}, \quad k_j^R = \mathcal{R}_{\Theta, j}(W_{\text{KR}} x_j)$$
+$$\text{Score}_{t,j,i} = \frac{(q_{t,i}^C)^T k_{j,i}^C + (q_{t,i}^R)^T k_j^R}{\sqrt{d_h + d_R}}$$
+
+#### B. Inference Matrix Absorption
+During decoding, matrix associativity eliminates the need to ever decompress multi-head $K$ and $V$ in VRAM:
+1. **Key Absorption**: $(q_{t,i}^C)^T k_{j,i}^C = (q_{t,i}^C)^T (W_{\text{UK}}^i c_j^{\text{KV}}) = \mathbf{\big((W_{\text{UK}}^i)^T q_{t,i}^C\big)^T c_j^{\text{KV}} = (\tilde{q}_{t,i}^C)^T c_j^{\text{KV}}}$. $W_{\text{UK}}^i$ is pre-multiplied into Query once in SRAM.
+2. **Value Absorption**: $O_t = \sum_i W_O^i (W_{\text{UV}}^i \tilde{v}_{t,i}) = \sum_i \mathbf{(W_O^i W_{\text{UV}}^i) \tilde{v}_{t,i} = \sum_i W_{\text{OV}}^i \tilde{v}_{t,i}}$, where $W_{\text{OV}}^i = W_O^i W_{\text{UV}}^i \in \mathbb{R}^{d \times d_c}$ and $\tilde{v}_{t,i} = \sum_j \alpha_{t,j,i} c_j^{\text{KV}}$.
+
+#### C. Memory Sizing Comparison (DeepSeek-V2 Scale: $L=60, n_h=128, d_h=128$, $B=16, S=32768$, FP16)
+$$\text{Single-Layer Token Cache} = (n_{\text{kv}} d_h + n_{\text{kv}} d_h) \times 2\text{ Bytes} = 4 n_{\text{kv}} d_h\text{ Bytes} \quad (\text{or } (d_c + d_R) \times 2\text{ Bytes for MLA})$$
+
+| Architecture | Elements / Token / Layer | Total Cache ($S=32768, B=16$) | Compression Ratio |
+|---|---|---|---|
+| **MHA** ($n_h = 128$) | $2 \times 128 \times 128 = 32{,}768$ | **$2{,}061.6\text{ GB}$** | $1.0\times$ (Baseline) |
+| **GQA** ($G = 8$) | $2 \times 8 \times 128 = 2{,}048$ | **$128.8\text{ GB}$** | **$16.0\times$ (93.7% cut)** |
+| **MQA** ($G = 1$) | $2 \times 1 \times 128 = 256$ | **$16.1\text{ GB}$** | **$128.0\times$ (99.2% cut)** |
+| **MLA** ($d_c=512, d_R=64$) | $512 + 64 = \mathbf{576}$ | **$\mathbf{36.2\text{ GB}}$** | **$\mathbf{56.9\times}$ (98.2% cut)** |
+
+*(Note: DeepSeek-V2 paper reports a 93.3% KV cache reduction and 5.76x generation throughput boost relative to DeepSeek 67B, arXiv:2405.04434; the 98.2% in this table reflects the theoretical reduction against an iso-configuration 128-head MHA baseline. DeepSeek-V3 has $L=61$ layers; see [[ml-systems/inference/flashinfer-vllm-integration]] for FlashInfer MLA decode kernels).*
 ---
 
 ### 6. Interleaved Sliding Window Attention (SWA) Patterns
@@ -124,8 +145,11 @@ Modern architectures interleave local Sliding Window Attention ($W=4096$) with g
 
 ## See Also
 
+- [[ml-systems/foundations/dynamic-sparse-attention]] — two-stage Lightning Indexer and fine-grained top-k Softmax attention
 - [[ml-systems/foundations/attention-mechanics]] — core single-head attention math, causal masking, and tensor shape walkthroughs
 - [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — head dimension rules ($n_{\text{heads}} \times d_{\text{head}} = d_{\text{model}}$)
 - [[ml-systems/gpu/arithmetic-intensity-and-roofline]] — Roofline model and memory bandwidth ceilings in prefill vs decode
 - [[ml-systems/inference/flashinfer-vllm-integration]] — C++/CUDA kernel implementation of FlashInfer MLA decode
 - [[ml-systems/inference/llm-inference-engines]] — PagedAttention and KV cache memory management
+- [[ml-systems/foundations/attention-as-soft-addressing]] — mathematical foundations of differentiable soft memory addressing and 4L^2d FLOP counting
+- [[ml-systems/foundations/linear-and-efficient-attention]] — factorized kernel attention and parallel-recurrent state-space duality

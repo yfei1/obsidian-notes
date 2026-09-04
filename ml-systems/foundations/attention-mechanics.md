@@ -25,13 +25,13 @@ score(i, j) = dot(Q_i, K_j) / √d_k
 ```
 
 - `Q_i`: "what am I looking for?"; `K_j`: "what do I contain?"; `d_k=64` for Qwen3-0.6B
-- **Why √d_k?** If each element of Q and K is drawn from a distribution with unit variance, their dot product (a sum of 64 products) has variance ≈ d_k = 64 — so raw scores reach ±64. Large scores push softmax toward one-hot outputs (one weight ≈ 1, rest ≈ 0), which drives gradients toward zero and stalls training. Dividing by `√64 = 8` rescales variance back to ~1, keeping softmax in a trainable regime.
+- **Why √d_k?** Dot products of unit-variance vectors scale variance to $\approx d_k = 64$. Large scores push softmax toward one-hot distributions, driving gradients to zero. Dividing by $\sqrt{64} = 8$ restores unit variance, keeping softmax trainable.
 
 ### Step 3: Causal Mask
 
-For autoregressive generation (predicting each token from only prior tokens), token `i` must not see tokens `i+1, i+2, ...`. During training, the full sequence is available; without masking, each token could simply copy the next token from its attention output, making the prediction trivial, driving loss to zero, and producing a model that fails at inference when future tokens don't exist.
+For autoregressive generation, token `i` must not see future tokens `i+1, i+2, ...`.
 
-**Mechanism**: set future scores to `-∞` before softmax. Since `e^(-∞) = 0`, future tokens get exactly zero weight.
+**Mechanism**: Set future scores to `-∞` before softmax. Because $e^{-\infty} = 0$, future tokens receive zero weight.
 
 **Concrete example** — sentence `"我 爱 吃 火锅"` (4 tokens):
 
@@ -116,17 +116,13 @@ Setting: `N=5` tokens, `d_model=1024`, `H_q=16`, `H_kv=8`, `d_k=64`.
 
 ```
 hidden_states                          [5, 1024]
-W_qkv (merged: Q+K+V)                 [1024, 2048]    ← 1024 + 512 + 512
-
+W_qkv (merged Q+K+V)                  [1024, 2048]    ← 1024 + 512 + 512
 qkv = hidden @ W_qkv                  [5, 2048]
-
-Split + reshape:
-  q = qkv[:, 0:1024]     → reshape →  [5, 16, 64]     ← 16 Q heads
-  k = qkv[:, 1024:1536]  → reshape →  [5,  8, 64]     ← 8 KV heads
-  v = qkv[:, 1536:2048]  → reshape →  [5,  8, 64]     ← 8 KV heads
+q, k, v = qkv[:, 0:1024], qkv[:, 1024:1536], qkv[:, 1536:2048]
+# Reshape: q=[5, 16, 64] (16 Q heads), k=[5, 8, 64] (8 KV heads), v=[5, 8, 64] (8 KV heads)
 ```
 
-Q is 2× the size of K or V because GQA (Grouped-Query Attention — 16 Q heads share 8 KV heads; see below) halves the KV projection width.
+Q is 2× the size of K or V because GQA (16 Q heads share 8 KV heads) halves KV width.
 
 ### ② Per-Head RMSNorm + RoPE
 
@@ -141,7 +137,7 @@ RoPE(q, k, positions)                  shapes unchanged; rotates each dim pair b
   k                                    [5,  8, 64] → [5,  8, 64]
 ```
 
-V is not normalized because its magnitude carries semantic signal, not routing decisions. V is not rotated because position only affects which tokens attend to which, not what content is transmitted. See [[ml-systems/foundations/rotary-position-embedding]] for the full derivation.
+V is not normalized (its magnitude carries semantic signal) and not rotated by RoPE (position affects which tokens attend to which, not what content is transmitted; see [[ml-systems/foundations/rotary-position-embedding]]).
 
 ### ③ GQA Expansion + Dot Product
 
@@ -154,7 +150,7 @@ Q heads [4, 5]  → KV head 2        Q heads [12, 13] → KV head 6
 Q heads [6, 7]  → KV head 3        Q heads [14, 15] → KV head 7
 ```
 
-Flash Attention (a fused kernel that tiles Q/K/V through SRAM to avoid materializing the full [N,N] score matrix in HBM; see [[ml-systems/gpu/gpu-memory-hierarchy]]) handles GQA grouping internally. K is repeated so each Q head has a matching K:
+FlashAttention (see [[ml-systems/foundations/flashattention-mechanics]]) handles GQA grouping internally by tiling Q/K/V through SRAM:
 
 ```
 Q  (as batch of heads)                 [16, 5, 64]
@@ -237,15 +233,13 @@ output            [5, 1024]
 - **Q (Query)**: a token's search signal — "I need the subject noun"
 - **V (Value)**: a token's information payload — the actual content transmitted when selected
 
-K and V are decoupled because a token needs two independent degrees of freedom: *why it gets selected* (K) and *what it contributes when selected* (V). A verb's syntactic role ("I am past tense") determines which tokens attend to it; the semantic content it transmits is separate. K=V collapses these — the same vector must serve as both selection criterion and information payload, so the model cannot independently optimize findability versus content.
+K and V are decoupled to provide two independent degrees of freedom: selection criterion (K) and transmitted information payload (V). Collapsing K=V forces the same vector to serve both roles, preventing independent optimization of findability versus content.
 
 ---
 
 ## Multi-Head & Grouped-Query Attention
 
-Multi-Head Attention (MHA) splits the $d_{\text{model}}$ space into $h$ independent heads, allowing the model to attend to $h$ distinct semantic relationships in parallel with zero extra compute ($2 \cdot h \cdot d_k = 2 \cdot d_{\text{model}}$). 
-
-Grouped-Query Attention (GQA) groups query heads into shared KV heads (e.g. 16 Q heads share 8 KV heads in Qwen3-0.6B), delivering an $8\times$ reduction in KV cache memory and memory traffic during decoding while recovering $99\%+$ of MHA's representation quality. For full mathematical taxonomy and ablations across MHA, MQA, GQA, and DeepSeek MLA, see [[ml-systems/foundations/gqa-mqa-attention-variants]].
+Multi-Head Attention (MHA) splits $d_{\text{model}}$ across $h$ heads with zero extra compute ($2 \cdot h \cdot d_k = 2 \cdot d_{\text{model}}$). Grouped-Query Attention (GQA) groups query heads into shared KV heads (16 Q heads share 8 KV heads in Qwen3-0.6B), halving KV cache memory (2,048 vs 4,096 B/token/layer) while recovering 99%+ of MHA quality (see [[ml-systems/foundations/gqa-mqa-attention-variants]]).
 
 ### Prefill — Process Full Prompt at Once (Compute-Bound)
 
@@ -302,9 +296,9 @@ In vLLM, `store_kvcache_kernel` uses pre-computed `slot_mapping` addresses to wr
 Attention is embarrassingly parallel across heads: each head computes its score matrix independently without cross-head communication. ColumnParallelLinear shards $Q, K, V$ heads across GPUs with zero communication during attention itself, requiring only 1 All-Reduce at $W_O$ (RowParallelLinear). For full Column→Row Tensor Parallelism patterns, see [[ml-systems/distributed/parallelism-strategies]].
 ## Interview Talking Points
 
-1. **"Explain attention end-to-end."** — Project hidden states into Q, K, V. Compute scores = Q·K^T / √d_k (scaling prevents softmax saturation from high-variance dot products). Apply causal mask: set upper-triangle to -∞ so e^(-∞)=0 gives future tokens exactly zero weight. Softmax normalizes each row to a probability distribution. Output = weighted sum of V vectors. Concat all heads, project through o_proj.
+1. **"Explain attention end-to-end."** — Project hidden states into Q, K, V. Compute scores $Q K^T / \sqrt{d_k}$, apply causal mask (upper-triangle to $-\infty$), compute softmax probabilities, and return weighted sum of V vectors projected through $W_O$.
 
-2. **"Why scale by √d_k?"** — d_k-dim dot products have variance ≈ d_k; raw ±64 scores push softmax to near-one-hot, killing gradients. Dividing by √d_k restores variance to ~1, keeping softmax in a trainable regime.
+2. **"Why scale by √d_k?"** — Dot products of unit-variance vectors scale variance to $\approx d_k$; raw scores push softmax toward one-hot distributions, killing gradients. Dividing by $\sqrt{d_k}$ restores unit variance.
 
 3. **"Why GQA over MHA?"** — KV cache is the memory bottleneck at decode time. GQA (16Q/8KV for Qwen3-0.6B) halves KV cache vs MHA (16Q/16KV): 2,048 vs 4,096 bytes/token/layer. Q heads need diversity (each is a different search strategy); KV heads can be shared because different Q heads querying the same KV head still produce different attention distributions. MQA (1 KV head) saves 16× but degrades quality — GQA is the empirical sweet spot.
 
@@ -320,10 +314,12 @@ Attention is embarrassingly parallel across heads: each head computes its score 
 
 ## See Also
 
+- [[ml-systems/foundations/dynamic-sparse-attention]] — two-stage Lightning Indexer and fine-grained top-k Softmax attention
 - [[ml-systems/foundations/transformer-model-internals]] — full decoder layer architecture, SwiGLU MLP
 - [[ml-systems/foundations/rotary-position-embedding]] — full RoPE derivation and evolution history
 - [[ml-systems/inference/llm-inference-engines]] — prefill/decode engine lifecycle, PagedAttention, continuous batching
 - [[ml-systems/distributed/parallelism-strategies]] — Column→Row TP pattern, why 1 all_reduce suffices
+- [[ml-systems/foundations/flashattention-mechanics]] — FlashAttention tiling and Online Softmax mechanics
 - [[ml-systems/gpu/gpu-memory-hierarchy]] — why decode is memory-bound, tiling strategies
 - [[ml-systems/foundations/norms-and-regularization]] — L2 norm theory behind RMSNorm
 - [[ml-systems/foundations/pt-moe-architecture]] — sliding window + global NoPE attention patterns in 150B model
@@ -340,6 +336,6 @@ Attention is embarrassingly parallel across heads: each head computes its score 
 - [[ml-systems/inference/cuda-graph-inference-optimization]] — CUDA graph capture for decode-step latency
 - [[ml-systems/gpu/gpu-kernel-stack]] — Triton and Flash Attention kernel dispatch underlying the prefill/decode kernels used here
 - [[ml-systems/vllm/vllm-torch-compile-decorator]] — torch.compile and CUDA graph integration affecting the decode attention path
-- [[ml-systems/inference/kv-cache-kernel-and-addressing]] — concrete kernel implementation showing how prefill and decode phases write to and read from the KV cache
-- [[ml-systems/vllm/vllm-torch-compile-decorator]]
 - [[ml-systems/foundations/einops-tensor-manipulation]] — declarative multi-head tensor reshaping vs native PyTorch view operations
+- [[ml-systems/foundations/attention-as-soft-addressing]] — self-attention as differentiable Soft RAM, 4L^2d FLOP derivations, and naive cubic blowup vs KV cache
+- [[ml-systems/foundations/linear-and-efficient-attention]] — factorized kernel attention and parallel-recurrent state-space duality

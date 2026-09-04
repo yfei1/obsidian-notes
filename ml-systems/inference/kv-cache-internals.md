@@ -64,7 +64,7 @@ self.kv_cache = torch.empty(
 
 The `block_size=256` is the BlockManager's allocation granularity: a new block is assigned every 256 tokens. **Prefix-caching** (reusing cached K/V blocks for repeated prompt prefixes across requests) hashes and commits a block only when full, so a partial block is never reused.
 
-**FlashAttention** (a fused attention kernel that avoids materializing the full N×N score matrix in VRAM) uses a **block-table** (per-sequence array mapping logical block index → physical block number) to locate each token's cached K/V vectors. Block-table lookups require `block_size % 256 == 0` because misaligned block boundaries break **coalesced memory access** — where threads in a **warp** (32 threads executing in lockstep) read consecutive addresses in a single transaction — forcing each warp to issue multiple transactions instead of one.
+**FlashAttention** (a fused attention kernel that avoids materializing the full N×N score matrix in VRAM) uses a **block-table** (per-sequence array mapping logical block index → physical block number) to locate each token's cached K/V vectors. Block-table lookups require `block_size % 256 == 0` because misaligned block boundaries break **coalesced memory access** — where threads in a [[ml-systems/gpu/gpu-architecture-fundamentals|warp]] read consecutive addresses in a single transaction — forcing each warp to issue multiple transactions instead of one.
 
 ---
 
@@ -184,7 +184,7 @@ if k_cache.numel() and v_cache.numel():
 
 ### Why flat 1D addressing
 
-The GPU kernel must write each new K/V vector to the correct slot in the cache tensor. The naive approach — computing `block_number = slot // block_size` and `intra_block_offset = slot % block_size` on the GPU — requires integer division and modulo per thread. Because all threads in a **warp** (32 threads executing in lockstep) must execute the same instruction, a branch or division that varies per-thread serializes the warp, stalling the other 31 threads until the slowest finishes.
+The GPU kernel must write each new K/V vector to the correct slot in the cache tensor. The naive approach — computing `block_number = slot // block_size` and `intra_block_offset = slot % block_size` on the GPU — requires integer division and modulo per thread. Because all threads in a [[ml-systems/gpu/gpu-architecture-fundamentals|warp]] must execute the same instruction, a branch or division that varies per-thread serializes the warp, stalling the other 31 threads until the slowest finishes.
 
 Flat 1D addressing eliminates this: the **BlockManager** (CPU-side) pre-computes **`slot_mapping`** — a per-token integer giving each token's physical slot index in the flat cache array — before the kernel launches. The GPU then executes a single multiply-and-store: `offset = slot * D`. One instruction, no branching, no division.
 
@@ -279,6 +279,8 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/distributed/vllm-di
 ---
 
 ## See Also
+
+- [[ml-systems/gpu/gpu-architecture-fundamentals]] — SM hardware hierarchy, SIMT warp execution model, and memory coalesce rules.
 
 - [[ml-systems/inference/llm-inference-engines]] — PagedAttention, BlockManager, scheduler, the 5 core tensors
 - [[ml-systems/foundations/attention-mechanics]] — attention math, flash_attn API, prefill vs decode kernels

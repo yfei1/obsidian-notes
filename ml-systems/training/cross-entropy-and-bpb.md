@@ -241,3 +241,4 @@ All three are the same measurement wearing different denominators. Papers switch
 - [[ml-systems/training/loss-landscape-and-flat-minima]] — how cross-entropy is computed through deep transformer stacks and visualized as a 2D/3D loss landscape
 - [[ml-systems/training/floating-point-formats]] — precision formats (FP32, BF16, FP8) and why log-space cross-entropy calculations require FP32 accumulation
 - [[ml-systems/training/microscaling-and-block-formats]] — block-scaled 4-bit and 6-bit microscaling formats for low-bitwidth training and inference
+- [[ml-systems/training/output-softmax-z-loss]] — output vocabulary logit drift, shift invariance, and Z-loss auxiliary regularization

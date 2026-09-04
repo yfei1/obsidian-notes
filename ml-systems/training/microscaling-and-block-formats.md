@@ -59,8 +59,9 @@ Two major microscaling specifications exist:
 | **OCP MXFP6** | Open Compute Project v1.0 | 32 elements | **E8M0** (power-of-two) | $6 + 8/32 = \mathbf{6.25\text{ b}}$ | $+4.17\%$ |
 | **OCP MXFP8** | Open Compute Project v1.0 | 32 elements | **E8M0** (power-of-two) | $8 + 8/32 = \mathbf{8.25\text{ b}}$ | $+3.125\%$ |
 
-- **OCP MXFP4 (OCP Spec v1.0)**: Uses an **E8M0 scale factor** (8 exponent bits, 0 mantissa bits, bias 127). The scale is strictly a power of two ($2^E$), requiring zero hardware multiplier logic (scaling is a bit-shift).
-- **NVIDIA NVFP4 (Blackwell Architecture)**: Uses smaller **16-element blocks** paired with an **E4M3 scale factor** (4 exponent, 3 mantissa bits), with an optional second tensor-level FP32 scale factor. The smaller block size cuts outlier contamination in half, and E4M3 provides 8 discrete mantissa levels for finer scale adjustment.
+- **OCP MXFP8 (OCP Spec v1.0)**: Uses **FP8 E4M3 data payloads** (3 mantissa bits) paired with an **E8M0 scale factor** per 32 elements ($8 + 8/32 = \mathbf{8.25\text{ bits/element}}$). It cuts memory traffic by **$48.44\%$** relative to 16-bit BF16 while expanding dynamic range.
+- **OCP MXFP4 (OCP Spec v1.0)**: Uses an **E8M0 scale factor** (8 exponent bits, 0 mantissa bits, bias 127) for 32 4-bit elements ($4.25\text{ bits/element}$), cutting memory traffic by **$73.4\%$**. The scale is strictly a power of two ($2^E$), requiring zero hardware multiplier logic (scaling is a hardware bit-shift).
+- **NVIDIA NVFP4 (Blackwell Architecture)**: Uses smaller **16-element blocks** paired with an **E4M3 scale factor** (4 exponent, 3 mantissa bits), totaling $4.50\text{ bits/element}$. The smaller block size cuts outlier contamination in half, and E4M3 provides 8 discrete mantissa levels for finer scale adjustment.
 
 ### The Dual Quantization Process
 
@@ -147,12 +148,28 @@ Practitioners interact with microscaling through framework abstractions:
 - **16-element blocks (NVFP4)**: Better numerical fidelity. Outliers contaminate only 15 neighboring elements. Higher storage overhead ($4.5$ bits/element).
 - **32-element blocks (MXFP4)**: Higher compression ($4.25$ bits/element). Simpler power-of-two E8M0 arithmetic, but higher susceptibility to intra-block outlier zeroing.
 
+### The Transpose Challenge in Backpropagation
+
+In deep learning backward passes, gradient computation requires transposing weight matrices ($W^T$):
+- **Row-wise Block Layout**: Forward-pass weights are packed into contiguous $1 \times 32$ horizontal blocks, each sharing an E8M0 scale factor.
+- **Transpose Incompatibility**: Transposing scatters horizontal row elements into vertical column elements. The original row-wise scale factors cannot scale column elements.
+- **Dual Pre-Quantized Storage ($W_{\text{row}} + W_{\text{col}}$)**: Pre-stores both row-scaled and column-scaled layouts in memory ($8.25 \times 2 = 16.5\text{ bits/element} = 103.1\%$ of BF16). This trades weight storage to achieve peak Tensor Core throughput without runtime transpose overhead.
+- **On-the-Fly Column Re-Quantization**: Preserves single-copy storage ($8.25\text{ bits/element}$, $48.44\%$ memory reduction vs BF16) by dynamically re-quantizing columns in software/libraries (e.g., TransformerEngine / cuBLASLt) during backward passes.
+
 ### Intra-Block Outlier Limitation
 
 The primary limitation of all microscaling formats is **intra-block dynamic range**:
 - If a single outlier in a block has magnitude $100\times$ larger than other elements, the block scale $S_{\text{block}}$ expands to accommodate the outlier.
 - All smaller elements in that block fall below $0.25 \times S_{\text{block}}$ and round to `0.0`.
 - Architectures that use per-head RMSNorm (such as QK-Norm) help suppress activation outliers before microscaling quantization.
+
+### Selective Quantization Pipeline in Practice (arXiv:2506.08027)
+
+In Transformer training, operations are selectively partitioned between MXFP8 and BF16/FP32:
+- **MXFP8 GEMMs ($QKV$, Projections, MLP FC1/FC2)**: Account for $>95\%$ of total FLOPs. With inner dimension $K = d_{\text{model}} = 4096$, a row spans $4096 / 32 = 128$ independent MX blocks, so an outlier corrupts only $\approx 0.78\%$ of the dot-product sum, which accumulates in FP32 Tensor Core registers.
+- **BF16 Normalization (LayerNorm / RMSNorm)**: Computing $\hat{x} = (x - \mu) / \sqrt{\sigma^2 + \epsilon}$ divides by small variance $\sigma$. Low-precision denominator errors are amplified multiplicatively across the layer.
+- **BF16 Attention Score ($Q K^T$ / BMM1 & Softmax)**: Inner dimension is small ($d_{\text{head}} = 128 = 4$ MX blocks), so one outlier corrupts $25\%$ of the dot-product sum. Furthermore, an additive score perturbation $\Delta x = 0.1$ exponentially distorts unnormalized Softmax weights by $e^{0.1} - 1 = 10.52\%$.
+- **BF16 Residual Additions & FP32 Master Weights**: Residual streams accumulate across 30+ layers without non-linear damping. Optimizer updates accumulate in FP32 to prevent small gradient updates ($-\eta \nabla L$) from vanishing below the weight ULP threshold.
 
 ---
 
@@ -176,6 +193,8 @@ The primary limitation of all microscaling formats is **intra-block dynamic rang
 ---
 
 ## See Also
+
+- [[ml-systems/gpu/thread-block-clusters-dsmem-and-tmem]] — Blackwell Tensor Memory (TMEM) and Hopper DSMEM interconnect.
 
 - [[ml-systems/training/floating-point-formats]] — IEEE 754 baseline formats (FP32, FP16, BF16, FP8) and per-element exponent mechanics
 - [[ml-systems/training/scaling-laws]] — compute scaling and FLOP accounting across precision modes

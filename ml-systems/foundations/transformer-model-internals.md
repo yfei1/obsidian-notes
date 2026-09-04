@@ -97,7 +97,7 @@ RMS(x)      = sqrt( mean(x²) )          # scalar per token
 RMSNorm(x)  = (x / RMS(x)) * γ          # γ is learned weight [hidden_dim]
 ```
 
-**Why sqrt(mean(x²)) and not mean(x)?** Mean can be zero when positives and negatives cancel out (`[3, -3, 3, -3]` → mean=0, division by zero). `mean(x²)` is always non-negative and measures the vector's *energy* regardless of sign direction.
+**Why sqrt(mean(x²))?** Mean can cancel out (`[3, -3]` → mean=0, division by zero). `mean(x²)` measures vector energy regardless of sign.
 
 **RMSNorm vs LayerNorm — where it appears in Qwen3**:
 
@@ -203,20 +203,11 @@ For the full derivation (SiLU vs ReLU, expand-contract rationale, fused matmul m
 
 ## Residual Connection Pattern
 
-Deep networks suffer from vanishing gradients — each layer's backward pass multiplies by its Jacobian, and many such multiplications shrink the signal to near-zero. Residual connections fix this by providing a shortcut that carries gradients directly from later layers back to earlier ones. nano-vLLM uses a fused add+norm pattern where `residual` always holds the **un-normalized accumulated sum**:
-
+Deep networks suffer from vanishing gradients because repeated Jacobian multiplications shrink backward signals to near-zero; residual connections provide an unobstructed gradient highway. In nano-vLLM, `residual` holds the un-normalized accumulated sum (1 copy of residual in memory):
 ```python
-# Layer 0: residual=None → just save a copy
-hidden_states, residual = input_layernorm(embedding), embedding
-
-# Layers 1-27: fuse add + norm via add_rms_forward()
-#   sum = x + residual       ← accumulate
-#   residual = sum            ← save un-normalized
-#   x = RMSNorm(sum)         ← normalize
-#   return x, residual
+# Layer 0: residual is None -> residual = embedding (save first copy)
+# Layers 1-27: fuse add + norm -> sum = x + residual; residual = sum; x = RMSNorm(sum)
 ```
-
-Benefits: (1) one copy of residual, not two; (2) add+norm compiles into single GPU kernel; (3) raw un-normalized residual gives gradients a clean path back to the embedding.
 
 ---
 
@@ -296,6 +287,7 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 
 ## See Also
 
+- [[ml-systems/foundations/moe-architectural-variants]] — routing paradigms, shared experts, and load balancing dynamics
 - [[ml-systems/foundations/attention-mechanics]] — full attention math, causal mask, shape tracking, GQA, prefill vs decode, KV cache Triton kernel, TP sharding
 - [[ml-systems/inference/llm-inference-engines]]
 - [[ml-systems/distributed/parallelism-strategies]]
@@ -325,3 +317,5 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/foundations/einops-tensor-manipulation]] — declarative tensor reshaping vs standard PyTorch view/transpose in attention heads
 - [[ml-systems/foundations/sequential-vs-parallel-blocks]] — serialized vs parallel Attention+MLP execution topology and TP communication scaling
 - [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — architectural aspect ratio conventions (d_model/L ~ 100-130) and MHA head dimension scaling
+- [[ml-systems/training/output-softmax-z-loss]] — output vocabulary Softmax numerical stability and Z-loss regularization (contrast with QK-Norm)
+- [[ml-systems/foundations/attention-as-soft-addressing]] — first-principles Soft RAM memory model, Q/K/V decoupling, and 4L^2d attention FLOP counting

@@ -8,7 +8,7 @@
 
 ## TL;DR
 
-A GPU forward pass can process many tokens in parallel, but requests arrive at different times, run for different lengths, and share scarce HBM (High Bandwidth Memory — the on-package DRAM on modern GPUs, faster but smaller than system RAM). Naive approaches — one request at a time, static batching, contiguous KV allocation — leave the GPU mostly idle. An LLM inference engine solves this with three layers: a **scheduler** (CPU, manages memory + request queues), a **model runner** (GPU, executes forward passes), and optionally an **async server frontend** (HTTP, routes user requests). The key mechanisms are **continuous batching** (eject finished sequences mid-batch, insert new ones immediately), **PagedAttention** (virtual memory for KV cache — eliminates fragmentation, enables sharing), and **chunked prefill** (mix prefill + decode tokens in one step to prevent decode starvation). Studied via `nano-vLLM` (educational, ~400 LOC) with comparisons to production `vLLM`.
+A GPU processes many tokens in parallel, but requests arrive asynchronously with dynamic sequence lengths. An LLM inference engine coordinates execution via three layers: a **scheduler** (CPU, manages memory and request queues), a **model runner** (GPU, executes forward passes), and an **async frontend** (HTTP routing). Core mechanisms include **continuous batching** (dynamically inserting new sequences into running batches), **PagedAttention** (virtual memory management for non-contiguous KV blocks), and **chunked prefill** (interleaving prompt prefill and token decoding to avoid compute starvation).
 
 ---
 
@@ -16,7 +16,9 @@ A GPU forward pass can process many tokens in parallel, but requests arrive at d
 
 **A GPU forward pass is cheap to run but expensive to waste.** Without an inference engine, each request occupies the GPU exclusively — prefilling its prompt, then decoding token-by-token — while every other user waits. The GPU sits idle between requests and idles again during decode (memory-bound: one token of compute, entire KV cache of memory reads). The engine's job is to eliminate both idle periods by batching requests together and keeping the GPU fed continuously.
 
-The architecture follows directly from two constraints: **(1) KV cache memory is finite and non-contiguous** — because sequences grow unpredictably, you can't pre-allocate a contiguous block per request without wasting most of GPU HBM. PagedAttention solves this by treating KV cache like virtual memory: fixed-size blocks assigned on demand, tracked by a CPU block manager. **(2) Requests finish at different times** — static batching holds the GPU hostage to the slowest sequence. Continuous batching solves this by ejecting finished sequences and inserting new ones every step, so the GPU processes a full batch of useful work at each forward pass rather than padding to the longest sequence.
+The architecture resolves two fundamental constraints:
+1. **Dynamic Memory Allocation**: Sequences grow unpredictably, making contiguous pre-allocation wasteful. PagedAttention manages KV caches as on-demand, fixed-size virtual memory blocks via a CPU block manager.
+2. **Asynchronous Request Lifecycles**: Static batching idles execution waiting for the slowest sequence. Continuous batching dynamically adds and removes sequences per step, maintaining GPU throughput.
 
 ---
 
@@ -263,24 +265,12 @@ Rank 0 writes the command to SharedMemory, then calls `event.set()` to wake the 
 nano-vLLM exposes `generate()` — a **blocking batch API**. For a MaaS (Model-as-a-Service) server, you need to decouple request intake from the engine loop:
 
 ```python
-# WRONG — generate() blocks, serializes all users:
+# Blocking pattern: generate() blocks on full sequence completion
+# Non-blocking async pattern: add_request() enqueues, background loop yields step() tokens via SSE streams
+engine = LLMEngine("llama-3")
 @app.post("/generate")
 async def handle(prompt):
-    return engine.generate([prompt])  # blocks until ALL tokens generated
-
-# RIGHT — use add_request() + background step loop:
-engine = LLMEngine("llama-3")  # ONE engine, ONE scheduler, globally
-
-@app.post("/generate")
-async def handle(prompt):
-    engine.add_request(prompt, SamplingParams())  # enqueue, return immediately
-    # ... stream results back via SSE keyed by seq_id
-
-# Background thread:
-while True:
-    outputs, _ = engine.step()       # shared scheduler batches ALL users
-    for seq_id, tokens in outputs:
-        stream_to_client(seq_id, tokens)
+    engine.add_request(prompt, SamplingParams())
 ```
 
 vLLM builds this full stack: `AsyncLLM` (FastAPI) → ZMQ → `EngineCore` (separate process with the scheduler) → `ModelRunner` workers.
@@ -350,6 +340,7 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 
 ## See Also
 
+- [[ml-systems/foundations/dynamic-sparse-attention]] — two-stage Lightning Indexer and fine-grained top-k Softmax attention
 - [[ml-systems/foundations/transformer-model-internals]]
 - [[ml-systems/foundations/attention-mechanics]] — attention math, causal mask, prefill vs decode kernels, KV cache Triton writes
 - [[ml-systems/foundations/parallel-track-architecture]]
@@ -363,3 +354,5 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 - [[ml-systems/vllm/vllm-model-integration]]
 - [[ml-systems/vllm/vllm-weight-loading]] — `load_weights()` name remapping and `weight_loader` convention; runs during engine initialization before serving begins
 - [[ml-systems/foundations/gqa-mqa-attention-variants]] — GQA, MQA, and MLA attention head variants and KV cache bandwidth bottlenecks
+- [[ml-systems/foundations/attention-as-soft-addressing]] — autoregressive decoding matrix slicing, transient Q vs persistent K/V lifecycle
+- [[ml-systems/foundations/linear-and-efficient-attention]] — factorized linear attention, kernel feature maps, and state-space duality

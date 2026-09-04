@@ -245,6 +245,7 @@ Full implementation details — buffer shapes, shard_id mapping, per-expert load
 
 ## See Also
 
+- [[ml-systems/foundations/moe-architectural-variants]] — routing paradigms, shared experts, and load balancing dynamics
 - [[ml-systems/foundations/transformer-model-internals]] — dense FFN (SwiGLU) that MoE replaces
 - [[ml-systems/foundations/pt-moe-architecture]] — PT-MoE combining parallel tracks with MoE
 - [[ml-systems/distributed/parallelism-strategies]] — expert parallelism vs tensor parallelism

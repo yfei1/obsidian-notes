@@ -121,6 +121,7 @@ $$\text{Realistic Step Time} = \max(T_{\text{computation}}, T_{\text{communicati
 
 ## See Also
 
+- [[ml-systems/foundations/moe-architectural-variants]] — routing paradigms, shared experts, and load balancing dynamics
 - [[ml-systems/distributed/parallelism-strategies]] — full parallelism taxonomy and batch size scaling dynamics
 - [[ml-systems/distributed/zero-fsdp-memory-optimization]] — layer-by-layer weight prefetching and sharding in FSDP
 - [[ml-systems/distributed/tensor-parallelism]] — intra-layer communication patterns in tensor parallelism

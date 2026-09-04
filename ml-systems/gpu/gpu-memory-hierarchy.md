@@ -94,7 +94,7 @@ Decode generates one token at a time (Q is 1 x 128). The math is trivial; the bo
 
 SRAM strategy: **use SRAM as an intake buffer for K/V, not for Q.**
 - Q is so small it barely occupies SRAM. The kernel reconfigures SRAM to maximize K/V streaming bandwidth.
-- At low batch sizes (e.g., 4 users), most of the GPU's 108 SMs sit idle because there are only 4 Q vectors. **Flash-Decoding** fixes this with Split-K: if User A has 10,000 history tokens, the kernel duplicates the single Q vector across 100 SMs, each computing attention over a 100-token slice of the KV cache in parallel. A reduction kernel then merges the partial softmax results.
+- At low batch sizes (e.g., 4 users), most of the GPU's 132 SMs (on H100, or 108 on A100) sit idle because there are only 4 Q vectors. **Flash-Decoding** fixes this with Split-K: if User A has 10,000 history tokens, the kernel duplicates the single Q vector across 100 SMs, each computing attention over a 100-token slice of the KV cache in parallel. A reduction kernel then merges the partial softmax results.
 
 *(See [[ml-systems/inference/llm-inference-engines]] for how decode starvation impacts scheduling.)*
 
@@ -157,6 +157,12 @@ Similarly, `context_lens` tells the GPU exactly how many tokens to read per sequ
 ---
 
 ## See Also
+
+- [[ml-systems/gpu/thread-block-clusters-dsmem-and-tmem]] — Thread Block Clusters, Distributed Shared Memory (DSMEM), and Blackwell TMEM.
+
+- [[ml-systems/foundations/flashattention-mechanics]] — SRAM tiling and Online Softmax mechanics eliminating HBM intermediate traffic.
+
+- [[ml-systems/gpu/gpu-architecture-fundamentals]] — SM hardware hierarchy, SIMT execution model, and warp scheduling fundamentals.
 
 - [[ml-systems/inference/llm-inference-engines]]
 - [[ml-systems/foundations/transformer-model-internals]]

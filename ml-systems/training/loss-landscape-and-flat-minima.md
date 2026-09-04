@@ -138,3 +138,4 @@ The geometry of filter-normalized basins explains why deep learning models toler
 - [[ml-systems/training/scaling-laws]] — empirical scaling of loss against compute budget, parameters, and tokens
 - [[ml-systems/foundations/norms-and-regularization]] — how LayerNorm and RMSNorm smooth loss surfaces and create scale invariance
 - [[ml-systems/training/first-order-optimizers]] — AdamW decoupled weight decay and relative step size dynamics guiding convergence to flat basins
+- [[ml-systems/training/output-softmax-z-loss]] — output Softmax logit drift and quadratic Z-loss regularization

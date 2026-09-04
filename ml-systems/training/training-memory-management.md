@@ -171,6 +171,10 @@ If an $L$-layer network is divided into segments of $K$ layers:
 
 ## See Also
 
+- [[ml-systems/foundations/flashattention-mechanics]] — Fused attention tiling and backward recomputation without intermediate matrix storage.
+
+- [[ml-systems/gpu/gpu-architecture-fundamentals]] — SM hardware hierarchy, SIMT execution, and recomputation memory-tradeoff mechanics.
+
 - [[ml-systems/training/first-order-optimizers]] — memory accounting for parameters ($2N$), gradients ($2N$), and optimizer states ($8N$)
 - [[ml-systems/training/scaling-laws]] — the $C \approx 6ND$ compute identity and $6ND \to 8ND$ recomputation math
 - [[ml-systems/distributed/zero-fsdp-memory-optimization]] — sharding model states across GPUs in ZeRO/FSDP

@@ -75,7 +75,11 @@ avg_time_sec = total_time / num_trials
 
 ### 3. Method B: Hardware Timing with `torch.cuda.Event` (Standard)
 
-`torch.cuda.Event` records hardware timestamps directly inside the CUDA execution stream, eliminating host CPU OS scheduling noise:
+Even with explicit synchronization, host CPU timers (`time.perf_counter()`) measure a contaminated composite duration:
+
+$$\text{Measured Host Time} = t_{\text{CPU launch (\approx 5 \mu s)}} + t_{\text{PCIe latency}} + t_{\text{GPU kernel}} + t_{\text{OS thread jitter}} + t_{\text{driver return latency}}$$
+
+For short kernels (e.g. LayerNorm taking $10\,\mu\text{s}$), host noise can distort measurements by $>50\%$. In contrast, `torch.cuda.Event` records hardware timestamps directly in the CUDA execution stream on the GPU physical clock, isolating pure $t_{\text{GPU kernel}}$ with sub-microsecond precision (~0.5 $\mu\text{s}$ resolution):
 
 ```python
 start_event = torch.cuda.Event(enable_timing=True)

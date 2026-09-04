@@ -276,6 +276,9 @@ When fused into a single Triton kernel:
 
 ## See Also
 
+- [[ml-systems/gpu/gpu-architecture-fundamentals]] — SM hardware hierarchy, SIMT execution, and abstraction vs silicon mapping.
+
+- [[ml-systems/foundations/dynamic-sparse-attention]] — two-stage Lightning Indexer and fine-grained top-k Softmax attention
 - [[ml-systems/gpu/gpu-memory-hierarchy]] — HBM, SRAM, and Register memory hierarchy architecture
 - [[ml-systems/gpu/gpu-kernel-timing-and-benchmarking]] — Roofline model execution, MFU calculations, and CUDA Event profiling
 - [[ml-systems/gpu/gpu-kernel-stack]] — Triton kernel compilation and Inductor fusion mechanics
@@ -285,3 +288,5 @@ When fused into a single Triton kernel:
 
 - [[ml-systems/gpu/pytorch-cuda-profiling]] — PyTorch operator attribution and Self CUDA Time measurement
 - [[ml-systems/foundations/gqa-mqa-attention-variants]] — arithmetic intensity derivations in attention prefill vs decode and GQA memory savings
+- [[ml-systems/foundations/attention-as-soft-addressing]] — Roofline model execution regimes and A100 memory wall in prefill vs decode
+- [[ml-systems/foundations/linear-and-efficient-attention]] — factorized linear attention, kernel feature maps, and state-space duality

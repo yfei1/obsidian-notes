@@ -199,6 +199,8 @@ A transformer forward pass launches 5-10 kernels per layer (attention QKV projec
 
 ## See Also
 
+- [[ml-systems/gpu/gpu-architecture-fundamentals]] — SM hardware hierarchy, SIMT execution, and abstraction vs silicon mapping.
+
 - [[ml-systems/gpu/gpu-memory-hierarchy]] — GPU memory subsystem that determines transfer overhead
 - [[ml-systems/gpu/torch-compile-cuda-graphs-hook-interaction]] — How PyTorch's torch.compile interacts with CUDA Graphs
 - [[ml-systems/inference/cuda-graph-inference-optimization]] — CUDA Graph capture/replay for inference serving
