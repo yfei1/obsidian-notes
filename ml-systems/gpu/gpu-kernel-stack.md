@@ -44,14 +44,14 @@ def gelu_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     tl.store(y_ptr + offsets, output, mask=mask)               # 5. Coalesced store
 
 def triton_gelu(x: torch.Tensor) -> torch.Tensor:
-    assert x.is_cuda, "Input must reside on CUDA device"
-    assert x.is_contiguous(), "Input must be contiguous in memory"
-    y = torch.empty_like(x)
-    n_elements = x.numel()
+    assert x.is_cuda
+    assert x.is_contiguous()
+    y = torch.empty_like(x)  # allocate output tensor
+    num_elements = x.numel()
     BLOCK_SIZE = 1024
-    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)           # ceil(N / 1024)
-    kernel = gelu_kernel[(num_blocks,)](x, y, n_elements, BLOCK_SIZE=BLOCK_SIZE)
-    # kernel.asm['ptx'] can be inspected to verify vectorization (ld.global.v4)
+    num_blocks = triton.cdiv(num_elements, BLOCK_SIZE)
+    kernel = gelu_kernel[(num_blocks,)](x, y, num_elements, BLOCK_SIZE=BLOCK_SIZE)
+    output_ptx("triton_gelu", kernel)  # dump compiled PTX assembly to inspect vectorization (ld.global.v4)
     return y
 ```
 
