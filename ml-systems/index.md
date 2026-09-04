@@ -50,21 +50,22 @@ Read after Foundations.
 2. [[ml-systems/gpu/gpu-memory-hierarchy]] — HBM → SRAM → Registers, memory wall
 3. [[ml-systems/gpu/arithmetic-intensity-and-roofline]] — FLOPs/Byte derivations for ReLU, GELU, Dot Product, GEMV, GEMM; Roofline model
 4. [[ml-systems/gpu/gpu-kernel-stack]] — Triton + torch.compile + CUDA graphs
-5. [[ml-systems/gpu/gpu-kernel-timing-and-benchmarking]] — asynchronous CUDA timing, warmup, L2 cache flushing, MFU calculations
-6. [[ml-systems/gpu/pytorch-cuda-profiling]] — PyTorch operator profiling, trace scheduling, and Self CUDA time attribution
-7. [[ml-systems/gpu/nsight-systems-profiling]] — reading the GPU timeline, launch latency, CPU-GPU producer-consumer model
-8. [[ml-systems/gpu/pytorch-module-hooks]] — nn.Module hooks, __call__ vs forward
-9. [[ml-systems/gpu/torch-compile-graph-breaks]] — graph break causes, empirical reference
-10. [[ml-systems/gpu/torch-compile-cuda-graphs-hook-interaction]] — compile + CUDA graphs + hooks
-11. [[ml-systems/gpu/python-import-binding]] — from-import binding, monkey-patching patterns
-12. [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]] — hub: 4-norm fusion research
-13. [[ml-systems/gpu/pt-moe-4norm-postnorm-semantic-mismatch]] — Post-LN vs Pre-LN kernel mismatch
-14. [[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]] — HBM/SRAM cost model, kernel reduction
-15. [[ml-systems/gpu/pt-moe-decode-kernel-launch-analysis]] — kernel launch overhead during decode
-16. [[ml-systems/gpu/pt-moe-4norm-fused-kernel-integration]] — fused kernel vLLM integration
-17. [[ml-systems/gpu/pt-moe-4norm-tp-fusion-opportunity]] — AR+norm fusion under TP
-18. [[ml-systems/gpu/pt-moe-ar-norm-fusion-implementation]] — AR+norm fusion design, TP sync boundary
-19. [[ml-systems/gpu/thread-block-clusters-dsmem-and-tmem]] — Thread Block Clusters, Distributed Shared Memory (DSMEM), and Blackwell TMEM
+5. [[ml-systems/gpu/triton-kernel-patterns]] — CS336 operator progression (GELU, Softmax, Row Sum, Matmul+ReLU), memory traffic accounting, and O(T) arithmetic intensity derivation
+6. [[ml-systems/gpu/gpu-kernel-timing-and-benchmarking]] — asynchronous CUDA timing, warmup, L2 cache flushing, MFU calculations
+7. [[ml-systems/gpu/pytorch-cuda-profiling]] — PyTorch operator profiling, trace scheduling, and Self CUDA time attribution
+8. [[ml-systems/gpu/nsight-systems-profiling]] — reading the GPU timeline, launch latency, CPU-GPU producer-consumer model
+9. [[ml-systems/gpu/pytorch-module-hooks]] — nn.Module hooks, __call__ vs forward
+10. [[ml-systems/gpu/torch-compile-graph-breaks]] — graph break causes, empirical reference
+11. [[ml-systems/gpu/torch-compile-cuda-graphs-hook-interaction]] — compile + CUDA graphs + hooks
+12. [[ml-systems/gpu/python-import-binding]] — from-import binding, monkey-patching patterns
+13. [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]] — hub: 4-norm fusion research
+14. [[ml-systems/gpu/pt-moe-4norm-postnorm-semantic-mismatch]] — Post-LN vs Pre-LN kernel mismatch
+15. [[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]] — HBM/SRAM cost model, kernel reduction
+16. [[ml-systems/gpu/pt-moe-decode-kernel-launch-analysis]] — kernel launch overhead during decode
+17. [[ml-systems/gpu/pt-moe-4norm-fused-kernel-integration]] — fused kernel vLLM integration
+18. [[ml-systems/gpu/pt-moe-4norm-tp-fusion-opportunity]] — AR+norm fusion under TP
+19. [[ml-systems/gpu/pt-moe-ar-norm-fusion-implementation]] — AR+norm fusion design, TP sync boundary
+20. [[ml-systems/gpu/thread-block-clusters-dsmem-and-tmem]] — Thread Block Clusters, Distributed Shared Memory (DSMEM), and Blackwell TMEM
 
 ### 4. Distributed — Parallelism & Distribution
 
