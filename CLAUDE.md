@@ -224,6 +224,7 @@ If >100 lines of reference material, split into `concept.md` (understanding) and
 ## Zero Knowledge Loss on Rewrites
 
 - When rewriting or restructuring a note, **never delete factual content**. Restructure, don't remove.
+- **Faithful User Content & Code Preservation**: All conversation insights, architectural discussions, mathematical derivations, analogies, and concrete code examples provided by the user must be faithfully written and preserved in the relevant canonical notes. Never discard user-provided code examples or replace them with abstract summaries.
 - If content is moved to another file, ensure the destination file actually contains the full explanation before trimming the source.
 - **No blind expansion**: When closing a 3-second gap between concepts A and C, it's OK to add a bridging sentence about B. It is NOT OK to write paragraphs about B if B was not part of the original study. Keep additions minimal and focused.
 
