@@ -31,7 +31,7 @@ High Bandwidth Memory (HBM)   ─── Transferred Bytes ───►   SRAM / 
 ```
 
 - **Memory-Bound ($I_{\text{op}} < I_{\text{acc}}$)**: The algorithm does not supply enough arithmetic work per byte. The memory bus is saturated and ALUs sit idle.
-- **Compute-Bound ($I_{\text{op}} > I_{\text{acc}}$)**: The algorithm supplies more arithmetic work per byte than the accelerator consumes. Memory transfers complete ahead of computation, keeping ALUs fully utilized.
+- **Compute-Bound ($I_{\text{op}} > I_{\text{acc}}$)**: The algorithm supplies more arithmetic work per byte than the accelerator consumes. Memory transfers complete ahead of computation, keeping ALUs fully used.
 
 ---
 
@@ -275,6 +275,8 @@ When fused into a single Triton kernel:
 ---
 
 ## See Also
+
+- [[ml-systems/gpu/triton-kernel-patterns]] — Mathematical derivation of O(T) arithmetic intensity for tiled GEMM.
 
 - [[ml-systems/gpu/gpu-architecture-fundamentals]] — SM hardware hierarchy, SIMT execution, and abstraction vs silicon mapping.
 

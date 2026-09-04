@@ -152,6 +152,10 @@ Recomputing $S_{\text{tile}}$ and $P_{\text{tile}}$ in fast on-chip SRAM (~19–
 
 ## See Also
 
+- [[ml-systems/gpu/gpu-kernel-stack]] — Triton compiler pipeline, block-level programming model, and PTX assembly lowering.
+
+- [[ml-systems/gpu/triton-kernel-patterns]] — CS336 reduction and GEMM patterns, memory traffic accounting, and online softmax connection.
+
 - [[ml-systems/gpu/gpu-architecture-fundamentals]] — SM hardware hierarchy, SRAM latency, and warp execution fundamentals.
 - [[ml-systems/gpu/thread-block-clusters-dsmem-and-tmem]] — Thread Block Clusters, Distributed Shared Memory (DSMEM), and Blackwell TMEM.
 - [[ml-systems/gpu/gpu-memory-hierarchy]] — HBM vs SRAM bandwidth limits and memory-bound roofline behavior.

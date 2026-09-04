@@ -82,6 +82,54 @@ $$\text{BLOCK\_SIZE} = \text{sizePerThread} \times \text{threadsPerWarp (32)} \t
   - Registers: `%f*` (32-bit floats), `%r*` (32-bit integers/bits), `%rd*` (64-bit addresses), `%p*` (1-bit predicates for `@%p1` masked loads), `%ctaid.x` (Block ID), `%tid.x` (Thread ID).
   - Hexadecimal Float Constants: `0f3F000000` encodes $0.5$, `0f3F800000` encodes $1.0$, `0f3D372713` encodes $0.044715$.
 
+#### Fused Softmax & Memory Traffic Accounting (Row-Fits-in-Block)
+Unfused PyTorch Softmax on an $M \times N$ matrix dispatches 5 separate kernels with intermediate global memory writes:
+1. `x_max = x.max(dim=1)[0]` ($MN$ reads, $M$ writes)
+2. `x = x - x_max[:, None]` ($MN + M$ reads, $MN$ writes)
+3. `numerator = torch.exp(x)` ($MN$ reads, $MN$ writes)
+4. `denominator = numerator.sum(dim=1)` ($MN$ reads, $M$ writes)
+5. `y = numerator / denominator[:, None]` ($MN + M$ reads, $MN$ writes)
+- **Unfused Total**: $(5MN + M)\text{ reads} + (3MN + 2M)\text{ writes} \approx \mathbf{8 MN\text{ memory operations}}$.
+- **Fused Triton Total**: Loads row once, computes $\max \to \text{shift} \to \exp \to \sum \to \text{div}$ purely in registers/SRAM, writes row once $\implies \mathbf{2 MN\text{ operations} \ (4\times\text{ speedup})}$.
+
+```python
+@triton.jit
+def triton_softmax_kernel(x_ptr, y_ptr, x_row_stride, y_row_stride, num_cols, BLOCK_SIZE: tl.constexpr):
+    # Process each row independently
+    row_idx = tl.program_id(0)                         # Block 0 -> Row 0, Block 1 -> Row 1
+    col_offsets = tl.arange(0, BLOCK_SIZE)             # [0, 1, ..., BLOCK_SIZE - 1]
+
+    # Read from global memory
+    x_start_ptr = x_ptr + row_idx * x_row_stride       # Stride offset to handle strided/sliced views
+    x_ptrs = x_start_ptr + col_offsets                 # Physical addresses for this row's elements
+    # Pad out-of-bounds with -inf: max(x, -inf) = x, exp(-inf) = 0 (zero pollution to sum)
+    x_row = tl.load(x_ptrs, mask=col_offsets < num_cols, other=float("-inf"))
+
+    # Compute (All operations execute purely on-chip in registers & Shared Memory)
+    x_row = x_row - tl.max(x_row, axis=0)              # Intra-block reduction for numerical stability
+    numerator = tl.exp(x_row)                          # Elementwise exponentiation in registers
+    denominator = tl.sum(numerator, axis=0)            # Intra-block reduction via warp shuffles
+    y_row = numerator / denominator                    # Local elementwise normalization
+
+    # Write back to global memory
+    y_start_ptr = y_ptr + row_idx * y_row_stride       # Target row pointer in HBM
+    y_ptrs = y_start_ptr + col_offsets
+    tl.store(y_ptrs, y_row, mask=col_offsets < num_cols) # Masked store prevents memory corruption
+
+def triton_softmax(x: torch.Tensor) -> torch.Tensor:
+    y = torch.empty_like(x)
+    M, N = x.shape                                     # Number of rows x number of columns
+    block_size = triton.next_power_of_2(N)             # Smallest power-of-2 >= N (Triton compiler requirement)
+    triton_softmax_kernel[(M,)](
+        x_ptr=x, y_ptr=y,
+        x_row_stride=x.stride(0), y_row_stride=y.stride(0),
+        num_cols=N, BLOCK_SIZE=block_size
+    )
+    return y
+```
+
+- **Power-of-2 Constraint & Boundary**: Triton requires `BLOCK_SIZE` to be a power of 2 ($2^k$). When $N \le 4096$, the entire row fits into single-block registers/SRAM. When $N$ exceeds single-SM capacity ($N \ge 65536$), allocation fails, requiring tiled reduction loops or Online Softmax MapReduce (see [[ml-systems/foundations/flashattention-mechanics]]).
+
 ### torch.compile (Inductor)
 
 Traces a model's forward pass into an FX graph (a DAG of tensor ops). The Inductor backend fuses sequences of element-wise ops into single kernels, eliminating intermediate tensor allocations. Does NOT touch matmuls (already handled by **cuBLAS** — NVIDIA's optimized matrix-multiply library) or custom Triton kernels (registered as opaque custom ops).
@@ -257,6 +305,7 @@ The difference with torch.compile active: fewer, fused kernels are recorded — 
 
 ## See Also
 
+- [[ml-systems/gpu/triton-kernel-patterns]] — CS336 4-level operator progression (GELU, Softmax, Row Sum, Matmul+ReLU), memory traffic accounting, and O(T) arithmetic intensity derivation.
 - [[ml-systems/gpu/gpu-architecture-fundamentals]] — SM hardware hierarchy, SIMT execution, and abstraction vs silicon mapping.
 
 - [[ml-systems/gpu/torch-compile-graph-breaks]] — what patterns cause graph breaks and how to fix them

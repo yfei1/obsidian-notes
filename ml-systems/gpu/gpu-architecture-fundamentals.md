@@ -287,6 +287,8 @@ While coalescing maximizes single-instruction bus efficiency, it does not provid
 
 ## See Also
 
+- [[ml-systems/gpu/triton-kernel-patterns]] — CS336 4-level operator progression (GELU, Softmax, Row Sum, Matmul+ReLU), memory traffic accounting, and O(T) arithmetic intensity derivation.
+
 - [[ml-systems/gpu/gpu-memory-hierarchy]] — HBM, SRAM, and L2 bandwidth and memory-bound roofline behavior.
 - [[ml-systems/gpu/arithmetic-intensity-and-roofline]] — Mathematical derivations of compute vs memory bottlenecks.
 - [[ml-systems/gpu/gpu-kernel-stack]] — Software abstraction layers from PyTorch to PTX and SASS machine code.
