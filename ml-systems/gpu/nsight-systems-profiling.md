@@ -1,5 +1,6 @@
 # Nsight Systems Profiling: Reading the GPU Timeline
-#gpu #interview-prep #profiling
+
+#ml-systems #gpu #interview-prep #profiling
 
 ## TL;DR
 
@@ -194,6 +195,35 @@ A transformer forward pass launches 5-10 kernels per layer (attention QKV projec
 5. **Explain**: Why can memory transfers be "hidden" in GPU programming? (The GPU has physically separate copy engines and compute engines. HtoD on one stream can execute simultaneously with a kernel on another stream. Nsight Systems shows this as overlapping green and blue bars on different stream rows. If they're sequential instead of overlapping, restructure to use async memcpy on a dedicated stream.)
 
 6. **Decide**: When would you use CUDA Graphs vs individual kernel launches? (CUDA Graphs when: launching hundreds of small kernels with the same shapes every iteration (e.g., transformer forward pass), and CPU launch overhead dominates. Individual launches when: control flow varies per iteration, shapes are dynamic, or debugging requires per-kernel error checking.)
+
+---
+
+## Decoding Kernel Names in Profiling Traces (CUTLASS / cuBLAS)
+
+When inspecting GPU timeline traces in Nsight Systems (`nsys`) or PyTorch Profiler (`torch.profiler`), kernels appear with structured naming conventions that reveal their exact compilation parameters.
+
+### Example: CUTLASS GEMM Kernel Breakdown
+
+```text
+cutlass3x_sm100_simt_sgemm_f32_f32_f32_f32_f32_64x64x16_1x1x1_3_nnn_align1_bi...
+```
+
+| Segment | Meaning | Architectural Significance |
+|---|---|---|
+| **`cutlass3x`** | Generating Library | Generated via NVIDIA CUTLASS 3.x C++ template library. |
+| **`sm100`** | Target Architecture | Compiled for **NVIDIA Blackwell (B200 / CC 10.0)** (`sm90` for Hopper, `sm80` for Ampere). |
+| **`simt`** | Compute Engine | Executes on scalar **CUDA Core ALUs** (versus `tensorop` / `wgmma` for Tensor Cores). |
+| **`sgemm`** | Mathematical Op | **Single-Precision GEMM** ($C = \alpha A B + \beta C$). |
+| **`f32_f32_f32...`** | Precision Signatures | Data types for $A$, $B$, $C$, accumulator, and compute (all `float32`). |
+| **`64x64x16`** | Block Tile Shape | Thread block tile dimensions: $B_M = 64, B_N = 64, B_K = 16$. |
+| **`1x1x1`** | Cluster / Warp Layout | 3D warp arrangement or Thread Block Cluster dimension. |
+| **`3`** | Pipeline Stages | **3-stage software pipeline** in Shared Memory (double/multi-buffering). |
+| **`nnn`** | Transpose Modes | Non-transposed $A$, non-transposed $B$, non-transposed $C$. |
+| **`align1`** | Pointer Alignment | Pointers aligned to 1 element (4 bytes). |
+
+### Performance Diagnostics from Kernel Names
+1. **Architecture Fallback**: If running on H100 but the trace shows `sm80` or `simt`, the binary fell back to legacy Ampere scalar paths, missing Hopper Tensor Core acceleration.
+2. **Precision Leaks**: If expecting FP16/BF16 but the trace shows `f32_f32_f32` or `sgemm`, an unintended dtype promotion occurred before kernel launch.
 
 ---
 

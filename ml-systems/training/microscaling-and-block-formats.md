@@ -173,6 +173,13 @@ In Transformer training, operations are selectively partitioned between MXFP8 an
 
 ---
 
+### Selective Precision by Depth: First and Last Layer Sensitivity
+
+Beyond operator-level partitioning, quantization error sensitivity varies across network depth (Xiao et al., 2023; Lin et al., 2024):
+- **Last Layer (LM Head & Layer $L-1$)**: The final transformer block compresses broad semantic features into exact next-token predictions, producing severe activation outlier channels ($>50\times$ magnitude). In micro-blocked quantization, large outliers expand the block scale $S_{\text{block}}$, zeroing out subtle neighbor features. Furthermore, small logit perturbations cause **Top-1 Rank Flips** across the $128\text{K}$ vocabulary, distorting generated tokens.
+- **First Layer (Token Embedding & Layer 0)**: Converts discrete token IDs into continuous semantic coordinates. Quantization errors at Layer 0 propagate and compound through all 30+ downstream transformer blocks.
+- **Protected Boundary Strategy**: Standard serving frameworks keep the Token Embedding and LM Head in 16-bit precision (preserving $99.9\%$ model accuracy with $<5\%$ memory overhead), while aggressively quantizing intermediate layers (Layers $1$ to $L-2$) to sub-byte formats.
+
 ## Interview Talking Points
 
 1. **What is microscaling, and why is it needed for 4-bit formats?**

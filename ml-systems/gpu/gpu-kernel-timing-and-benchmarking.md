@@ -82,18 +82,32 @@ $$\text{Measured Host Time} = t_{\text{CPU launch (\approx 5 \mu s)}} + t_{\text
 For short kernels (e.g. LayerNorm taking $10\,\mu\text{s}$), host noise can distort measurements by $>50\%$. In contrast, `torch.cuda.Event` records hardware timestamps directly in the CUDA execution stream on the GPU physical clock, isolating pure $t_{\text{GPU kernel}}$ with sub-microsecond precision (~0.5 $\mu\text{s}$ resolution):
 
 ```python
-start_event = torch.cuda.Event(enable_timing=True)
-end_event = torch.cuda.Event(enable_timing=True)
+import torch
+from typing import Callable
 
-# Record hardware timestamps around kernel execution
-start_event.record()
-c = a @ b
-end_event.record()
+def run_operation2(dim: int, operation: Callable) -> Callable:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    x = torch.randn(dim, dim, device=device)
+    y = torch.randn(dim, dim, device=device)
+    return lambda: operation(x, y)
 
-# Wait for GPU to reach end_event before reading elapsed time
-torch.cuda.synchronize()
-elapsed_ms = start_event.elapsed_time(end_event)
-elapsed_sec = elapsed_ms / 1000.0
+def benchmark(run: Callable, num_warmups: int = 10, num_trials: int = 100) -> list[float]:
+    # 1. Warmup loop to ramp GPU clock frequencies and initialize CUDA contexts
+    for _ in range(num_warmups):
+        run()
+    torch.cuda.synchronize()
+
+    # 2. Per-trial timing using hardware CUDA Events
+    times: list[float] = []
+    for _ in range(num_trials):
+        start_event = torch.cuda.Event(enable_timing=True)
+        end_event = torch.cuda.Event(enable_timing=True)
+        start_event.record()
+        run()
+        end_event.record()
+        torch.cuda.synchronize()
+        times.append(start_event.elapsed_time(end_event))
+    return times
 ```
 
 ### 4. Computing Attained TFLOPS, MFU, and HFU

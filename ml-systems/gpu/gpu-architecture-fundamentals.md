@@ -4,17 +4,18 @@
 
 ## TL;DR
 
-A GPU is an array of independent Streaming Multiprocessors (SMs) connected to off-chip Global Memory (HBM/DRAM) through an on-die L2 cache. The CUDA execution hierarchy consists of Threads, 32-thread Warps, and Thread Blocks (CTAs). Memory access speed follows physical distance: on-chip SM Registers (~1-4 cycles) and Shared Memory (19-23 cycles) are orders of magnitude faster than on-die L2 (~200 cycles) and off-chip Global Memory (~290 cycles). Understanding the distinction between software visibility abstractions and physical silicon prevents common performance pitfalls like register spilling and warp divergence.
+A GPU is an array of independent Streaming Multiprocessors (SMs) connected to off-chip Global Memory (HBM, 3.35 TB/s) via an on-die L2 cache. The CUDA hierarchy maps Threads to ALUs, 32-thread Warps to SIMT schedulers, and Thread Blocks (CTAs) to SMs. Memory access latency follows physical distance: on-chip Registers (~1–4 cycles) and Shared Memory (19–23 cycles) vs on-die L2 (~200 cycles) and off-chip HBM (~290 cycles). Distinguishing software visibility abstractions from physical silicon prevents register spilling and warp divergence.
 
 ---
 
-## Core Intuition
+## Core Intuition: The Super-Factory Analogy
 
-A CPU dedicates die area to branch predictors and deep caches to minimize single-thread latency. When a CPU switches threads, saving state and flushing pipelines costs thousands of cycles.
-
-A GPU dedicates die area to thousands of ALUs. GPU threads are lightweight because their registers remain in-place in physical register files:
-- Threads execute in 32-thread Warps in SIMT lockstep.
-- When Warp 0 stalls on a 290-cycle HBM load, the SM Warp Scheduler switches to an eligible Warp 1 in 1 cycle with zero state-saving overhead to hide memory latency.
+A GPU operates as an industrial mega-factory structured hierarchically:
+- **GPU Chip $\leftrightarrow$ Mega-Factory**: Houses independent manufacturing workshops (SMs).
+- **SM $\leftrightarrow$ Physical Workshop**: Contains machine tools (CUDA Cores), a shared material bench (Shared Memory SRAM), and a scheduler.
+- **Thread Block $\leftrightarrow$ Project Crew (e.g. 256 Workers)**: Dispatched to exactly one workshop, sharing the workbench.
+- **Warp $\leftrightarrow$ 32-Worker Squad**: The scheduler broadcasts one instruction to 32 workers simultaneously (SIMT).
+- **Thread $\leftrightarrow$ Single Worker**: Holds private tools (Registers). When Squad 0 stalls waiting for materials from the remote warehouse (HBM, ~290 cycles), the scheduler switches to Squad 1 in 1 cycle with zero state-saving overhead.
 
 ---
 
@@ -68,15 +69,11 @@ Task scheduling operates across two distinct hardware tiers:
 Grid (Kernel Launch) ──> Block (CTA, up to 1024 thds) ──> Warp (32 thds) ──> Thread (Scalar)
 ```
 
-1. **Thread (Scalar Logic Unit)**:
-   - Executes the kernel code with its own private registers and program counter.
-   - **Access Capabilities**:
-     - **Device Code (GPU)** can: R/W per-thread Registers, R/W per-thread Local Memory, R/W per-block Shared Memory, R/W per-grid Global Memory, and Read-only per-grid Constant Memory.
-     - **Host Code (CPU)** can: Transfer data to/from per-grid Global Memory (`cudaMemcpy`) and Constant Memory (`cudaMemcpyToSymbol`).
+1. **Thread (Scalar Logic Unit)**: Executes kernel code with private registers and PC. **Device Code** can R/W per-thread Registers/Local Memory, R/W per-block Shared Memory, R/W per-grid Global Memory, and Read-only Constant Memory; **Host Code** transfers Global/Constant memory (`cudaMemcpy`).
 2. **Warp (Hardware Execution Unit — 32 Threads)**:
    - Hardware always groups 32 consecutive threads (`threadIdx 0..31`, `32..63`) into a Warp.
    - Executes in **SIMT lockstep**: all 32 threads execute the same instruction on different data inputs.
-   - **Warp Divergence**: Because all 32 lanes share one instruction issuer, an $N$-way divergent branch serializes into $N$ sequential execution passes over the warp while inactive lanes idle.
+   - **Warp Divergence & Branchless Idiom**: Because all 32 lanes share one instruction issuer, divergent branches serialize into $N$ sequential execution passes over the warp while inactive lanes idle (not a memory issue). To avoid divergence, GPU code replaces `if-else` with arithmetic masking (e.g. `y = x * 0.5f * (float)(cond)` or `fmaxf(x, 0.0f)`), executing in a single cycle.
    - **Warp Shuffles (`__shfl_sync`)**: Threads in the same warp can exchange registers directly in **1 clock cycle** without using Shared Memory.
 3. **Block / CTA (Cooperative Unit)**:
    - A group of threads (typically 128, 256, or 512; maximum 1,024).
@@ -87,9 +84,7 @@ Grid (Kernel Launch) ──> Block (CTA, up to 1024 thds) ──> Warp (32 thds)
 
 ### 3. The Two Iron Laws of Block-to-SM Mapping
 
-1. **Law 1: Block-to-SM is Strictly Many-to-One (Non-Divisible)**:
-   - A Thread Block must fit entirely within the resource limits of ONE SM.
-   - A block is never split across SMs. Its entire lifecycle executes on that assigned SM until all threads finish.
+1. **Law 1: Block-to-SM is Strictly Many-to-One (Non-Divisible)**: A block must fit within the resource limits of ONE SM and is never split across SMs; its entire lifecycle executes on that assigned SM.
 2. **Law 2: SM-to-Block is One-to-Many (Concurrent Residency)**:
    - An SM can concurrently host multiple resident blocks as long as registers and Shared Memory allow.
    - **Memory-Bound Workloads (Small Blocks)**: Hosting 4–16 resident blocks per SM saturates the 64-warp capacity, enabling the warp scheduler to execute ready warps from Block 1 when Block 0 stalls on 290-cycle HBM loads.
@@ -214,10 +209,10 @@ Theoretical occupancy measures the ratio of resident active warps on an SM to th
 
 ### 2. Why Not Allocate 100% of SRAM to Shared Memory?
 
-1. **Safety Net for Register Spills**: Local Memory resides in off-chip DRAM (~290 cycles) but is buffered by the SM's L1 cache. Without L1, every register spill penetrates directly to HBM, collapsing throughput.
-2. **Excessive Allocation Destroys Occupancy**: Requesting maximum Shared Memory limits the SM to 1 resident block. If that block stalls on memory, the SM has no ready warps from other blocks to hide latency.
-3. **Manual Staging Overhead on Streaming Data**: Read-once data (e.g., vector add) incurs redundant `STS`/`LDS` instructions and `__syncthreads()` barrier stalls when routed through Shared Memory instead of L1.
-4. **Irregular Access Patterns Require Automatic Caching**: Pointer-chasing and sparse workloads (GNNs, hash maps) cannot pre-stage predictable tiles and rely on automatic 128-byte L1 cache-line fetches.
+1. **Local Memory Spill Buffer**: Local Memory in DRAM (~290 cycles) is buffered by L1; without L1, register spills penetrate to HBM, collapsing throughput.
+2. **Occupancy Destruction**: Requesting maximum Shared Memory limits the SM to 1 block, leaving no ready warps to hide memory latency during stalls.
+3. **Staging Overhead on Streaming Data**: Read-once data incurs redundant `STS`/`LDS` instructions and `__syncthreads()` stalls when routed through Shared Memory.
+4. **Irregular Access Patterns**: Pointer-chasing and sparse workloads (GNNs, hash maps) cannot pre-stage tiles and rely on automatic 128-byte L1 fetches.
 
 ### 3. Decision Matrix: Shared Memory vs L1 Cache
 
