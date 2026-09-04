@@ -30,18 +30,24 @@ import torch, triton
 import triton.language as tl
 
 @triton.jit
-def gelu_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
-    pid = tl.program_id(axis=0)                                # 1. Block ID
-    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)     # 2. Block-level pointer offsets
-    mask = offsets < n_elements                                # 3. Boundary guard
-    x = tl.load(x_ptr + offsets, mask=mask)                    # 4. Coalesced vector load
+def triton_gelu_kernel(x_ptr, y_ptr, num_elements, BLOCK_SIZE: tl.constexpr):
+    # Input starts at `x_ptr`
+    # Output starts at `y_ptr`
+    # | T T T T T T T T | T T T T T T T T | T T T T T T T T | T T T T T T T T |
+    # |     Block 0     |     Block 1     |     Block 2     |     Block 3     |
+    pid = tl.program_id(axis=0)                                # Identifies the block
+    start = pid * BLOCK_SIZE                                  # Starting index of this block
+    # Indices where this thread block should operate
+    offsets = start + tl.arange(0, BLOCK_SIZE)
+    # Don't read/write past the end of tensor
+    mask = offsets < num_elements
+    x = tl.load(x_ptr + offsets, mask=mask)                    # Coalesced vector load
 
     # Fused Tanh GELU: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
     c1, c2 = 0.044715, 0.7978845608
     inner = c2 * (x + c1 * x * x * x)
     output = 0.5 * x * (1.0 + tl.math.tanh(inner))
-
-    tl.store(y_ptr + offsets, output, mask=mask)               # 5. Coalesced store
+    tl.store(y_ptr + offsets, output, mask=mask)               # Coalesced store
 
 def triton_gelu(x: torch.Tensor) -> torch.Tensor:
     assert x.is_cuda
@@ -50,7 +56,7 @@ def triton_gelu(x: torch.Tensor) -> torch.Tensor:
     num_elements = x.numel()
     BLOCK_SIZE = 1024
     num_blocks = triton.cdiv(num_elements, BLOCK_SIZE)
-    kernel = gelu_kernel[(num_blocks,)](x, y, num_elements, BLOCK_SIZE=BLOCK_SIZE)
+    kernel = triton_gelu_kernel[(num_blocks,)](x, y, num_elements, BLOCK_SIZE=BLOCK_SIZE)
     output_ptx("triton_gelu", kernel)  # dump compiled PTX assembly to inspect vectorization (ld.global.v4)
     return y
 ```
