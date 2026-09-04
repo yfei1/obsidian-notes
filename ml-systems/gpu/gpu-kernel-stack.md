@@ -71,6 +71,17 @@ def triton_gelu(x: torch.Tensor) -> torch.Tensor:
 - **Tensor Core Control**: In Triton, `tl.dot(a, b)` is the exclusive gateway to Tensor Cores (lowered to `mma.sync` on Ampere, `wgmma` on Hopper, `tcgen05` on Blackwell), while elementwise operators (`*`, `+`) route to scalar CUDA Core ALUs. In CUDA C++, Tensor Cores require explicit WMMA APIs (`wmma::mma_sync`) or CUTLASS rather than automatic compiler loop vectorization.
 - **Compiler Automation**: The Triton compiler automatically assigns physical threads, generates 32-thread warps, emits coalesced memory instructions, and manages Shared Memory double-buffering with zero manual bank padding (see [[ml-systems/gpu/gpu-architecture-fundamentals]]).
 
+#### Triton Blocked Layout & Thread Coarsening Invariants
+In Triton's MLIR compiler (`#triton_gpu.blocked`), block dimensions map to hardware via a product invariant:
+
+$$\text{BLOCK\_SIZE} = \text{sizePerThread} \times \text{threadsPerWarp (32)} \times \text{warpsPerCTA (num\_warps)}$$
+
+- **1D Worked Derivation ($1024 = 8 \times 32 \times 4$)**: For `BLOCK_SIZE = 1024` with `num_warps = 4` (128 threads), Triton automatically sets $\text{sizePerThread} = 1024 / 128 = 8\text{ elements/thread}$.
+- **Vectorized Instruction Emission**: Each thread loads its 8 elements using two 128-bit vector loads (`ld.global.v4.b32`, 4 floats/16B each) to saturate bus bandwidth, and unrolls 8 consecutive `mul.f32` / `add.f32` instructions to maximize Instruction-Level Parallelism (ILP).
+- **PTX Assembly Symbols & Constants**:
+  - Registers: `%f*` (32-bit floats), `%r*` (32-bit integers/bits), `%rd*` (64-bit addresses), `%p*` (1-bit predicates for `@%p1` masked loads), `%ctaid.x` (Block ID), `%tid.x` (Thread ID).
+  - Hexadecimal Float Constants: `0f3F000000` encodes $0.5$, `0f3F800000` encodes $1.0$, `0f3D372713` encodes $0.044715$.
+
 ### torch.compile (Inductor)
 
 Traces a model's forward pass into an FX graph (a DAG of tensor ops). The Inductor backend fuses sequences of element-wise ops into single kernels, eliminating intermediate tensor allocations. Does NOT touch matmuls (already handled by **cuBLAS** — NVIDIA's optimized matrix-multiply library) or custom Triton kernels (registered as opaque custom ops).
