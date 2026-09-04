@@ -66,9 +66,10 @@ def triton_gelu(x: torch.Tensor) -> torch.Tensor:
     return y
 ```
 
-- **Program ID as Block ID**: `tl.program_id(0)` maps directly to CUDA `blockIdx.x`.
+- **Program ID as Block ID**: `tl.program_id(0)` maps directly to CUDA `blockIdx.x` for the **Thread Block / CTA (Cooperative Thread Array)**.
 - **Contiguity Invariant**: `assert x.is_contiguous()` prevents silent indexing corruption on transposed/strided tensor views.
-- **Compiler Automation**: The Triton compiler automatically generates 32-thread warps, emits coalesced memory instructions, and eliminates manual Shared Memory bank padding (see [[ml-systems/gpu/gpu-architecture-fundamentals]]).
+- **Tensor Core Control**: In Triton, `tl.dot(a, b)` is the exclusive gateway to Tensor Cores (lowered to `mma.sync` on Ampere, `wgmma` on Hopper, `tcgen05` on Blackwell), while elementwise operators (`*`, `+`) route to scalar CUDA Core ALUs. In CUDA C++, Tensor Cores require explicit WMMA APIs (`wmma::mma_sync`) or CUTLASS rather than automatic compiler loop vectorization.
+- **Compiler Automation**: The Triton compiler automatically assigns physical threads, generates 32-thread warps, emits coalesced memory instructions, and manages Shared Memory double-buffering with zero manual bank padding (see [[ml-systems/gpu/gpu-architecture-fundamentals]]).
 
 ### torch.compile (Inductor)
 
