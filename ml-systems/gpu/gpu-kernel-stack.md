@@ -22,11 +22,42 @@ A Python-like language for writing individual GPU kernels. Compiles directly to 
 - **Inductor Code Scaffolding**: Running `TORCH_LOGS="output_code" python script.py` prints the auto-generated Triton kernels directly to stdout, providing templates for custom kernel authoring.
 - **Interpreter Debugging**: Setting `TRITON_INTERPRET=1` before kernel decoration (in modern Triton 3.x; legacy Triton 2.1 supported `@triton.jit(interpret=True)`) runs the kernel on the CPU as pure Python on Linux hosts. This enables standard `breakpoint()` / `pdb` stepping through block arithmetic and indexing masks.
 
-#### Block-Level Programming: Thinking in Thread Blocks
-Unlike CUDA C++ where programmers write scalar code for a single **Thread** (`threadIdx.x`), Triton code is written natively from the perspective of a **Thread Block (CTA)**:
-- **Program ID as Block ID**: Each execution instance represents one thread block (`pid = tl.program_id(0)` corresponds to CUDA `blockIdx.x`).
-- **Block-Level Vector Operations**: Instructions operate directly on 1D/2D block tiles (`tl.arange(0, BLOCK_SIZE)`), eliminating scalar thread indexing and explicit thread barriers (`__syncthreads()`).
-- **Compiler Automation (Triton vs CUDA C++)**: In Triton-emitted code, the compiler automatically assigns physical threads, generates 32-thread warps, emits coalesced memory transactions, and manages on-chip Shared Memory double-buffering and bank layout scheduling (freeing programmers from manual CUDA `s_tile[32][33]` padding; see [[ml-systems/gpu/gpu-architecture-fundamentals]]).
+#### Block-Level Programming: Thinking in Thread Blocks (GELU Example)
+Unlike CUDA C++ where programmers write scalar code for a single **Thread** (`threadIdx.x`), Triton code is written natively from the perspective of a **Thread Block (CTA)**. Below is the canonical fused GELU implementation:
+
+```python
+import torch, triton
+import triton.language as tl
+
+@triton.jit
+def gelu_kernel(x_ptr, y_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    pid = tl.program_id(axis=0)                                # 1. Block ID
+    offsets = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)     # 2. Block-level pointer offsets
+    mask = offsets < n_elements                                # 3. Boundary guard
+    x = tl.load(x_ptr + offsets, mask=mask)                    # 4. Coalesced vector load
+
+    # Fused Tanh GELU: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    c1, c2 = 0.044715, 0.7978845608
+    inner = c2 * (x + c1 * x * x * x)
+    output = 0.5 * x * (1.0 + tl.math.tanh(inner))
+
+    tl.store(y_ptr + offsets, output, mask=mask)               # 5. Coalesced store
+
+def triton_gelu(x: torch.Tensor) -> torch.Tensor:
+    assert x.is_cuda, "Input must reside on CUDA device"
+    assert x.is_contiguous(), "Input must be contiguous in memory"
+    y = torch.empty_like(x)
+    n_elements = x.numel()
+    BLOCK_SIZE = 1024
+    num_blocks = triton.cdiv(n_elements, BLOCK_SIZE)           # ceil(N / 1024)
+    kernel = gelu_kernel[(num_blocks,)](x, y, n_elements, BLOCK_SIZE=BLOCK_SIZE)
+    # kernel.asm['ptx'] can be inspected to verify vectorization (ld.global.v4)
+    return y
+```
+
+- **Program ID as Block ID**: `tl.program_id(0)` maps directly to CUDA `blockIdx.x`.
+- **Contiguity Invariant**: `assert x.is_contiguous()` prevents silent indexing corruption on transposed/strided tensor views.
+- **Compiler Automation**: The Triton compiler automatically generates 32-thread warps, emits coalesced memory instructions, and eliminates manual Shared Memory bank padding (see [[ml-systems/gpu/gpu-architecture-fundamentals]]).
 
 ### torch.compile (Inductor)
 
