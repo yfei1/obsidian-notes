@@ -41,13 +41,18 @@ def triton_gelu_kernel(x_ptr, y_ptr, num_elements, BLOCK_SIZE: tl.constexpr):
     offsets = start + tl.arange(0, BLOCK_SIZE)
     # Don't read/write past the end of tensor
     mask = offsets < num_elements
-    x = tl.load(x_ptr + offsets, mask=mask)                    # Coalesced vector load
+    # Read
+    x = tl.load(x_ptr + offsets, mask=mask)
 
-    # Fused Tanh GELU: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-    c1, c2 = 0.044715, 0.7978845608
-    inner = c2 * (x + c1 * x * x * x)
-    output = 0.5 * x * (1.0 + tl.math.tanh(inner))
-    tl.store(y_ptr + offsets, output, mask=mask)               # Coalesced store
+    # Approx gelu is 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
+    # Compute (tl.tanh doesn't exist, use tanh(a) = (exp(2a) - 1) / (exp(2a) + 1))
+    a = 0.79788456 * (x + 0.044715 * x * x * x)
+    exp = tl.exp(2 * a)
+    tanh = (exp - 1) / (exp + 1)
+    y = 0.5 * x * (1 + tanh)
+
+    # Store
+    tl.store(y_ptr + offsets, y, mask=mask)
 
 def triton_gelu(x: torch.Tensor) -> torch.Tensor:
     assert x.is_cuda
