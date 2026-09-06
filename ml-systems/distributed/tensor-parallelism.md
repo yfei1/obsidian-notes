@@ -72,6 +72,25 @@ Side-by-side — same physical weight, two naming conventions:
 
 For consecutive linear layers $Y = f(X W_1) \cdot W_2$ (e.g., gate_up → SiluAndMul → down), four TP pairings are possible. Only Column→Row eliminates intermediate layer communication.
 
+### Real-Scale Walkthrough: Qwen3-0.6B Shapes (TP=2, hidden=1024, intermediate=3072)
+
+To trace dimension alignment on production architectures, consider Qwen3-0.6B with TP=2:
+- **Initial Activation**: Both GPUs hold input $x \in \mathbb{R}^{N 	imes 1024}$.
+- **gate_up (ColumnParallel)**: PyTorch weight $W \in \mathbb{R}^{6144 	imes 1024}$ split along dim 0 $	o$ each GPU holds $[3072, 1024]$.
+  - GPU 0 computes: $[N, 1024] 	imes W_0^T 	o [N, 3072]$.
+  - GPU 1 computes: $[N, 1024] 	imes W_1^T 	o [N, 3072]$.
+  - *(Zero communication)*.
+- **SiluAndMul (TP-Safe Elementwise Activation)**:
+  - GPU 0 applies gated product: $[N, 3072] 	o [N, 1536]$.
+  - GPU 1 applies gated product: $[N, 3072] 	o [N, 1536]$.
+  - *(Zero communication — elementwise operations depend strictly on local values)*.
+- **down (RowParallel)**: PyTorch weight $W \in \mathbb{R}^{1024 	imes 3072}$ split along dim 1 $	o$ each GPU holds $[1024, 1536]$.
+  - GPU 0 computes: $[N, 1536] 	imes W_0^T 	o [N, 1024]$.
+  - GPU 1 computes: $[N, 1536] 	imes W_1^T 	o [N, 1024]$.
+  - Single collective: $	ext{dist.all\_reduce}(	ext{op}=	ext{dist.ReduceOp.SUM}) 	o [N, 1024]$.
+
+Total communication: exactly 1 All-Reduce across the 2-layer block.
+
 ### Concrete Toy Example: Why Col→Row Needs Zero Intermediate Sync
 
 Consider 2 GPUs with input $X \in \mathbb{R}^{1 \times 4}$, $W_1 \in \mathbb{R}^{4 \times 8}$, and $W_2 \in \mathbb{R}^{8 \times 4}$:
