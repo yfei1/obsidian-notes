@@ -179,3 +179,4 @@ If an $L$-layer network is divided into segments of $K$ layers:
 - [[ml-systems/training/scaling-laws]] — the $C \approx 6ND$ compute identity and $6ND \to 8ND$ recomputation math
 - [[ml-systems/distributed/zero-fsdp-memory-optimization]] — sharding model states across GPUs in ZeRO/FSDP
 - [[ml-systems/gpu/gpu-kernel-timing-and-benchmarking]] — MFU vs HFU definitions and hardware measurement
+- [[ml-systems/distributed/pipeline-parallelism]] — Activation memory scaling in pipeline parallelism ($O(m)$ in GPipe vs $O(p)$ in 1F1B)

@@ -142,3 +142,4 @@ A 32-layer model requires 32 sequential memory reads per token, whereas a 256-la
 - [[ml-systems/distributed/parallelism-strategies]] — Tensor Parallelism and Pipeline Parallelism bubble dynamics
 - [[ml-systems/foundations/gqa-mqa-attention-variants]] — MHA, MQA, GQA, and MLA head architectures and KV cache memory scaling
 - [[ml-systems/foundations/linear-and-efficient-attention]] — factorized linear attention, kernel feature maps, and state-space duality
+- [[ml-systems/distributed/pipeline-parallelism]] — Pipeline bubble overhead $F = (p-1)/m$ and micro-batch scheduling

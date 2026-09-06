@@ -342,3 +342,4 @@ The bubble shrinks to near-zero because the blocking condition — "wait for the
 - [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — how Pipeline Parallelism bubble overhead forces wider, shallower models
 - [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier interconnect hierarchy (NVLink, InfiniBand, Ethernet), 18x bandwidth gap, and CPU bypass mechanisms
 - [[ml-systems/distributed/data-parallelism]] — Canonical DDP mechanics: batch sharding, gradient all-reduce, AdamW update invariance, and code walkthrough
+- [[ml-systems/distributed/pipeline-parallelism]] — Pipeline Parallelism execution mechanics, micro-batch scheduling, and bubble fraction derivations

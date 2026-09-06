@@ -188,9 +188,33 @@ Timeline:           ◄───────────────────
 2. **Gradient Bucketing (25 MiB Buffers)**: Dispatching thousands of individual parameter tensors creates severe network latency bottlenecks from packet header serialization. PyTorch groups parameters into reverse-ordered buckets (default 25 MiB = 26.214 MB, defined by `_DEFAULT_BUCKET_CAP_MB = 25` in `distributed.py:31`). To overlap communication even earlier, DDP configures a smaller initial bucket (`first_bucket_bytes_cap`, `reducer.cpp:96`). As soon as a bucket fills, PyTorch dispatches an asynchronous `all_reduce` collective on a background CUDA stream.
 3. **Latent Overlap**: While earlier layers compute on the main CUDA compute stream, the network card concurrently transfers filled gradient buckets over the network fabric. By the time backpropagation reaches Layer 1, the vast majority of model gradients have already been reduced and averaged across all workers.
 
+### The Boundary Hazard: Why the Final Layer's Overhead is Exposed ($T_{\text{exposed}} > 0$)
+
+While intermediate buckets overlap seamlessly with earlier layer backpropagation, the final layer (Layer 1, the input layer) represents a hard boundary condition:
+1. **No Remaining Compute**: Once backpropagation computes gradients for Layer 1, no upstream layers remain to execute on the compute stream.
+2. **Mandatory Synchronization Fence**: `optimizer.step()` cannot execute until all gradients are reduced and averaged.
+3. **Exposed Tail Latency**: The GPU compute engine must stall until the final bucket's all-reduce completes across the network fabric:
+   $$\text{Step Time} = \max(T_{\text{compute}}, T_{\text{comm}}) + T_{\text{exposed}}(\text{Bucket 0})$$
+   This physical boundary explains why PyTorch's C++ Reducer configures a smaller initial bucket (`first_bucket_bytes_cap`, `reducer.cpp:96`)—deliberately shrinking the un-overlapped tail payload to minimize exposed idle stalls.
+
 ---
 
 ## Memory Overhead and Scaling Boundaries
+
+### Communication Volume vs VRAM Footprint Across Optimizers
+
+A common misconception conflates gradient communication volume with optimizer state memory:
+- **Gradient Communication ($2\text{ bytes/parameter}$ in BF16)**: Every parameter requires one gradient scalar during backpropagation. Under 16-bit precision (BF16/FP16, 2 bytes/element), the gradient tensor size is strictly $2N$ bytes, **identical for both AdamW and SGD**. Ring all-reduce transfers $2 \cdot \frac{P-1}{P} \times 2N \approx 4N$ bytes per GPU.
+- **Optimizer State Footprint (AdamW vs SGD Memory Divergence)**:
+
+| Memory Component | AdamW (Mixed Precision) | Momentum-Free SGD |
+|---|---|---|
+| **Model Parameters (BF16)** | 2 bytes / param | 2 bytes / param |
+| **Gradients (BF16, communicated)** | **2 bytes / param (identical)** | **2 bytes / param (identical)** |
+| **Momentum $m$ (FP32)** | 4 bytes / param | 0 bytes |
+| **Variance $v$ (FP32)** | 4 bytes / param | 0 bytes |
+| **FP32 Master Weights** | 4 bytes / param | 0 bytes |
+| **Total Optimizer State Footprint** | **8 to 12 bytes / param** | **0 bytes (stateless)** |
 
 While DDP is conceptually simple and requires only one collective phase per step, it incurs distinct memory and communication constraints:
 
@@ -224,3 +248,4 @@ While DDP is conceptually simple and requires only one collective phase per step
 - [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier interconnect architecture, 18x bandwidth gap, and NCCL collective execution
 - [[ml-systems/training/first-order-optimizers]] — Mathematical derivations and implementation of SGD, Adam, and AdamW with decoupled weight decay
 - [[ml-systems/distributed/communication-computation-overlap]] — Overlapping gradient all-reduce transfers with backward layer execution
+- [[ml-systems/distributed/pipeline-parallelism]] — Pipeline stage partitioning and micro-batch pipelining compared against data parallel worker replication
