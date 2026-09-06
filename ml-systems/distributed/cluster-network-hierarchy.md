@@ -169,11 +169,12 @@ Scaling from a single 8-GPU node to a multi-node cluster (such as 2 nodes with 8
 
 ### The 18x Bandwidth Cliff & Hierarchical All-Reduce
 
-- **The Bandwidth Cliff**: Intra-node transfers run over NVLink at 900 GB/s per direction, while inter-node transfers cross InfiniBand at 50 GB/s per direction. If NCCL ran a single flat ring across all 16 GPUs, the two inter-node links would throttle the entire ring to 50 GB/s, causing an 18x throughput penalty.
-- **NCCL 3-Stage Hierarchical Solution**:
+- **The Per-GPU Bandwidth Cliff**: Intra-node transfers run over NVLink at 900 GB/s per direction per GPU (7.2 TB/s aggregate per 8-GPU node). Inter-node transfers across 8 ConnectX-7 NICs deliver 50 GB/s per rail (400 GB/s aggregate per node). If a collective runs a single flat ring across all 16 GPUs, each rail throttles to the 50 GB/s inter-node link rate, imposing an 18x per-GPU throughput penalty.
+- **Classic 2D Hierarchical All-Reduce Pattern**:
+  To prevent inter-node links from stalling fast intra-node NVLink transfers, distributed frameworks partition collectives into a 2D hierarchical pattern (implemented in NCCL via tree and hierarchical algorithms configured by `NCCL_ALGO`):
   1. *Local Reduce-Scatter*: The 8 GPUs inside each node perform local reduce-scatter over 900 GB/s NVLink, reducing per-GPU payload to $\frac{1}{8} S$.
-  2. *Inter-Node All-Reduce*: Corresponding GPUs across nodes exchange only the $\frac{1}{8} S$ partition over 50 GB/s InfiniBand. Compressing inter-node volume by 8x offsets the 18x bandwidth gap.
-  3. *Local All-Gather*: Each node all-gathers the aggregated partitions across its local 8 GPUs over NVLink.
+  2. *Inter-Node All-Reduce*: Corresponding GPUs across nodes exchange only the $\frac{1}{8} S$ partition across InfiniBand. Compressing inter-node payload volume by 8x reduces the per-GPU communication penalty from 18x to approximately 2.25x ($18 / 8 = 2.25$).
+  3. *Local All-Gather*: Each node all-gathers the aggregated partitions across its local 8 GPUs over 900 GB/s NVLink.
 
 ### Measuring True Cluster Latency: Max Reduction vs Rank 0 Bias
 
