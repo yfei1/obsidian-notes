@@ -203,3 +203,4 @@ Because optimizer compute scales as $O(N)$ while matrix multiplications scale as
 - [[ml-systems/distributed/zero-fsdp-memory-optimization]] — sharding the $8\text{ B/param}$ FP32 optimizer states across ranks in ZeRO-1 / FSDP
 - [[ml-systems/training/training-memory-management]] — managing dynamic activation memory via gradient accumulation and checkpointing
 - [[ml-systems/training/loss-landscape-and-flat-minima]] — loss surface geometry, Hessian curvature, and flat basin proofs
+- [[ml-systems/distributed/data-parallelism]] — Why distributed training requires gradient all-reduce prior to AdamW step rather than post-step weight averaging

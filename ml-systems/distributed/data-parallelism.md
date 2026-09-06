@@ -1,0 +1,180 @@
+# Distributed Data Parallelism: Gradient Averaging and Execution Mechanics
+
+#ml-systems #distributed-systems #interview-prep
+
+## TL;DR
+
+Distributed Data Parallelism (DDP) scales deep learning workloads by replicating model parameters across $P$ worker processes while partitioning the global training batch into disjoint local slices. Each worker independently computes local forward activations and backward gradients, synchronizing only parameter gradients across ranks using `dist.all_reduce(op=dist.ReduceOp.AVG)` prior to the optimizer update. Gradient averaging ensures exact mathematical equivalence to single-worker large-batch training. In contrast, local parameter updates followed by weight averaging break under modern adaptive optimizers like AdamW, because non-linear second-moment normalization and sign-disagreement cancellations distort update trajectories. While DDP requires minimal communication ($2 \times \text{parameters}$ per step), each GPU retains a full copy of model weights and optimizer states, creating memory ceilings that necessitate sharded data parallelism (ZeRO/FSDP) at scale.
+
+---
+
+## Core Mechanics: The DDP Execution Pipeline
+
+Data Parallelism partitions training across workers through five sequential phases:
+
+```text
+Worker 0: Data Slice B0 ──► Local Forward ──► Local Backward ──┐
+Worker 1: Data Slice B1 ──► Local Forward ──► Local Backward ──┼─► dist.all_reduce(param.grad, AVG) ──► optimizer.step()
+Worker 2: Data Slice B2 ──► Local Forward ──► Local Backward ──┤   (Synchronizes Gradients)             (Identical Updates)
+Worker 3: Data Slice B3 ──► Local Forward ──► Local Backward ──┘
+```
+
+1. **Batch Sharding**: The global batch $B$ is evenly divided across $P$ ranks:
+   $$\text{local\_batch\_size} = \lfloor B / P \rfloor$$
+   Each worker ingests a disjoint sub-batch $[r \cdot \text{local\_batch\_size} : (r + 1) \cdot \text{local\_batch\_size}]$.
+2. **Replicated Parameters**: Every GPU initializes an identical copy of model parameters $W_0$. Each rank instantiates an independent local optimizer state.
+3. **Local Forward & Backward Passes**: Workers evaluate the loss on their local slice and run backpropagation, generating unshared local gradients $g_p = \nabla L_p(W)$.
+4. **Gradient All-Reduce**: Before calling `optimizer.step()`, workers invoke `dist.all_reduce(tensor=param.grad, op=dist.ReduceOp.AVG)`. This replaces local gradients with the exact arithmetic mean:
+   $$\bar{g} = \frac{1}{P} \sum_{p=1}^P g_p$$
+5. **Independent Parameter Updates**: Each rank applies `optimizer.step()`. Because initial weights $W_t$ and averaged gradients $\bar{g}_t$ are identical across all ranks, every worker computes the exact same weight transition, maintaining parameter synchronization without communicating weights.
+
+*(Source: CS336 lecture slides. The gradient all-reduce is the only functional divergence between standard single-device training and DDP).*
+
+---
+
+## Why All-Reduce Gradients Before Step (Gradient vs Weight Averaging)
+
+A fundamental architectural question in distributed optimization is why frameworks all-reduce gradients before `optimizer.step()`, rather than letting workers step locally and averaging model weights afterwards.
+
+### Mathematical Equivalence to Large-Batch SGD
+
+The global training objective is the average loss across the complete batch $B$:
+$$L(W) = \frac{1}{B} \sum_{i=1}^B l_i(W) = \frac{1}{P} \sum_{p=1}^P L_p(W)$$
+Because the derivative operator is linear, the true gradient of the global batch is the exact arithmetic mean of the local gradients:
+$$\nabla L(W) = \frac{1}{P} \sum_{p=1}^P \nabla L_p(W) = \bar{g}$$
+Applying `optimizer.step()` to $\bar{g}$ produces a weight trajectory mathematically identical to single-device training with batch size $B$, provided three conditions hold:
+1. **Equal Local Batch Sizing**: Every rank processes identical sample/token counts (with variable sequence lengths in LLMs, naive `ReduceOp.AVG` mis-weights loss gradients unless scaled by per-rank token count).
+2. **Mean-Reduction Loss**: The global loss is an unweighted mean over individual sample losses.
+3. **No Unsynchronized Batch-Dependent Layers**: Layers computing batch statistics (such as BatchNorm) require `SyncBatchNorm` across ranks; standard layer normalization (RMSNorm/LayerNorm) operates per-token and is unaffected.
+
+### The Non-Linearity and Sign-Cancellation Breakdown of AdamW
+
+For vanilla, momentum-free SGD ($\Delta W = -\eta g$), gradient averaging and weight averaging produce identical mathematical outputs because the update rule is linear:
+$$\frac{1}{P} \sum_{p=1}^P (W - \eta g_p) = W - \eta \left( \frac{1}{P} \sum_{p=1}^P g_p \right)$$
+
+Modern LLMs rely on AdamW (see [[ml-systems/training/first-order-optimizers]]), which applies non-linear second-moment normalization ($m_t / \sqrt{v_t}$):
+
+1. **Sign-Disagreement Cancellation**: In early optimization steps, AdamW step magnitude is roughly $\eta \cdot \text{sign}(g)$ per coordinate. If Worker 1 observes $g_1 = +0.40$ and Worker 2 observes $g_2 = -0.20$:
+   - *Weight Averaging*: Worker 1 steps by $-\eta$ and Worker 2 steps by $+\eta$. Averaging their updated weights cancels the update entirely ($0.0$), stalling optimization.
+   - *Gradient Averaging (DDP)*: The averaged gradient is $\bar{g} = (+0.40 - 0.20)/2 = +0.10$. AdamW follows the true consensus sign and updates the parameter in the correct descent direction.
+2. **Variance Distortions**: Normalizing by uncentered second moments is non-linear:
+   $$\frac{\bar{g}}{\sqrt{\bar{v}} + \epsilon} \ne \frac{1}{P} \sum_{p=1}^P \frac{g_p}{\sqrt{v_p} + \epsilon}$$
+   Local weight stepping distorts curvature estimates across small micro-batches, inducing trajectory drift and loss divergence.
+3. **Optimizer State Desynchronization**: If workers step locally, their first and second momentum buffers ($m_p, v_p$) diverge. Synchronizing weights without synchronizing optimizer states causes immediate trajectory fracture on the subsequent step; synchronizing weights, momentum, and variance increases communication by $3\times$ under uniform precision (from $2M$ to $6M$ bytes per parameter), or by $5\times$ under mixed precision where 2-byte BF16 weights accompany two 4-byte FP32 AdamW moments ($2 + 4 + 4 = 10M$ bytes).
+
+---
+
+## Minimal PyTorch DDP Implementation from Scratch
+
+The following self-contained script implements minimal Data Parallelism across 4 processes:
+
+```python
+import os
+import torch
+import torch.nn.functional as F
+import torch.distributed as dist
+import torch.multiprocessing as mp
+
+def cuda_if_available(rank):
+    return f"cuda:{rank}" if torch.cuda.is_available() else "cpu"
+
+def int_divide(a, b):
+    return a // b
+
+def get_init_params(in_dim, out_dim, rank):
+    torch.manual_seed(42)  # Replicate identical initial weights
+    return torch.nn.Parameter(torch.randn(in_dim, out_dim, device=cuda_if_available(rank)) * 0.02)
+
+def setup(rank: int, world_size: int):
+    os.environ["MASTER_ADDR"] = "localhost"
+    os.environ["MASTER_PORT"] = "15641"
+    backend = "nccl" if torch.cuda.is_available() else "gloo"
+    dist.init_process_group(backend, rank=rank, world_size=world_size)
+
+def data_parallelism_main(rank: int, world_size: int, data: torch.Tensor, num_layers: int, num_steps: int):
+    setup(rank, world_size)
+
+    # 1. Disjoint batch slicing per rank
+    batch_size = data.size(0)
+    num_dim = data.size(1)
+    local_batch_size = int_divide(batch_size, world_size)
+    start_index = rank * local_batch_size
+    end_index = start_index + local_batch_size
+    local_data = data[start_index:end_index].to(cuda_if_available(rank))
+
+    # 2. Replicated model parameters and local optimizer
+    params = [get_init_params(num_dim, num_dim, rank) for layer in range(num_layers)]
+    optimizer = torch.optim.AdamW(params, lr=1e-3)
+
+    for step in range(num_steps):
+        optimizer.zero_grad()
+        
+        # 3. Local forward pass
+        x = local_data
+        for param in params:
+            x = F.gelu(x @ param)
+        loss = x.square().mean()
+
+        # 4. Local backward pass
+        loss.backward()
+
+        # 5. Gradient all-reduce across workers
+        for param in params:
+            dist.all_reduce(tensor=param.grad, op=dist.ReduceOp.AVG, async_op=False)
+
+        # 6. Synchronized parameter update
+        optimizer.step()
+
+    # Verify identical parameter convergence across ranks
+    dist.barrier()
+    p0_norm = params[0].data.norm().item()
+    print(f"Rank {rank} final layer 0 param norm: {p0_norm:.6f}", flush=True)
+
+    dist.destroy_process_group()
+```
+
+Raw execution output across 4 workers (Apple Silicon CPU host, Gloo backend, exit code 0):
+```text
+Rank 0 final layer 0 param norm: 0.157498
+Rank 1 final layer 0 param norm: 0.157498
+Rank 3 final layer 0 param norm: 0.157498
+Rank 2 final layer 0 param norm: 0.157498
+```
+*(Every rank arrives at the identical parameter norm `0.157498`, proving parameter synchronization invariance).*
+
+---
+
+## Memory Overhead and Scaling Boundaries
+
+While DDP is conceptually simple and requires only one collective phase per step, it incurs distinct memory and communication constraints:
+
+1. **Memory Redundancy**: Every GPU stores a full replica of model parameters ($M$ bytes), gradients ($M$ bytes), and optimizer states (for fp32 AdamW, $2 \times 4M = 8M$ bytes). Memory usage scales with model size $O(M)$, rather than shrinking with cluster size $P$.
+2. **Transition to Sharded Data Parallelism**: When model states exceed single-GPU VRAM limits, standard DDP becomes impossible. Frameworks transition to ZeRO / FSDP (see [[ml-systems/distributed/zero-fsdp-memory-optimization]]), which shards optimizer states, gradients, and parameters across data-parallel ranks.
+3. **Communication Footprint**: Ring all-reduce transfers $2 \cdot \frac{P-1}{P} \cdot M \approx 2M$ bytes per GPU per step. Because gradients are synchronized after backpropagation, DDP can overlap communication with backward computation (see [[ml-systems/distributed/communication-computation-overlap]]). High-bandwidth node fabrics (see [[ml-systems/distributed/cluster-network-hierarchy]]) ensure gradient transfers do not bottleneck step throughput.
+
+---
+
+## Interview Talking Points
+
+1. **Explain: What is the fundamental difference between standard single-device training and Distributed Data Parallelism?**
+   The only algorithmic divergence is gradient synchronization: DDP inserts an all-reduce operation (`dist.all_reduce(param.grad, op=ReduceOp.AVG)`) across workers prior to `optimizer.step()`. Forward execution, loss computation, backpropagation, and parameter updates remain local.
+
+2. **Decide: Why does DDP average gradients before updating weights instead of averaging updated model weights?**
+   Gradient averaging guarantees mathematical equivalence to single-worker large-batch training. Weight averaging fails under adaptive optimizers like AdamW because second-moment normalization is non-linear and coordinate sign conflicts cancel updates. Weight averaging also desynchronizes local optimizer states ($m, v$).
+
+3. **Explain: Why does DDP require all workers to initialize with identical parameter weights?**
+   Because DDP synchronizes only gradients, workers rely on identical initial states ($W_0$) and identical averaged gradients ($\bar{g}_t$) to compute identical next states ($W_{t+1}$). If initial weights diverge, identical updates preserve the initial divergence across all training steps.
+
+4. **Decide: When does standard DDP break down, and what parallelism strategy replaces it?**
+   Standard DDP breaks down when model weights, gradients, and optimizer states exceed a single GPU's HBM capacity (typically around 10B parameters on 80 GB GPUs). It is replaced by ZeRO/FSDP to shard optimizer states across ranks, combined with Tensor Parallelism (see [[ml-systems/distributed/tensor-parallelism]]) and Pipeline Parallelism (see [[ml-systems/distributed/parallelism-strategies]]).
+
+---
+
+## See Also
+
+- [[ml-systems/distributed/parallelism-strategies]] — High-level taxonomy of DP, TP, PP, and EP and how dimensions compose
+- [[ml-systems/distributed/zero-fsdp-memory-optimization]] — Sharding optimizer states, gradients, and parameters to overcome DDP memory ceilings
+- [[ml-systems/distributed/tensor-parallelism]] — Partitioning intra-layer weight matrices across GPUs within an NVLink domain
+- [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier interconnect architecture, 18x bandwidth gap, and NCCL collective execution
+- [[ml-systems/training/first-order-optimizers]] — Mathematical derivations and implementation of SGD, Adam, and AdamW with decoupled weight decay
+- [[ml-systems/distributed/communication-computation-overlap]] — Overlapping gradient all-reduce transfers with backward layer execution

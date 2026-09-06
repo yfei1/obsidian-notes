@@ -117,3 +117,4 @@ vLLM and SGLang don't support ZeRO/FSDP for this reason: there's nothing to shar
 - [[ml-systems/distributed/communication-computation-overlap]] — prefetching layer l+1 weights during layer l forward compute in FSDP
 - [[ml-systems/training/first-order-optimizers]] — state buffer memory accounting across SGD (0 B), AdaGrad (4 B), and Adam (8 B)
 - [[ml-systems/training/training-memory-management]] — activation memory scaling (2BDL) and micro-batch memory reduction
+- [[ml-systems/distributed/data-parallelism]] — Standard DDP baseline before ZeRO sharding, full parameter replication, and gradient all-reduce mechanics

@@ -277,3 +277,4 @@ The physical interconnect hierarchy dictates how 3D parallelism strategies parti
 - [[ml-systems/distributed/communication-computation-overlap]] — Overlapping NCCL collective transfers with GEMM compute operations
 - [[ml-systems/hardware/pcie-dma-mechanics]] — PCIe DMA, TLP packet structures, and host-to-HCA communication bottlenecks
 - [[ml-systems/gpu/gpu-architecture-fundamentals]] — GPU Streaming Multiprocessors, warp scheduling, and memory hierarchy
+- [[ml-systems/distributed/data-parallelism]] — Canonical DDP execution pipeline, gradient all-reduce mechanics, and parameter synchronization invariance

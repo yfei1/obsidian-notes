@@ -80,6 +80,7 @@ Read after GPU section.
 6. [[ml-systems/distributed/vllm-process-group-rebuild]] — runtime group rebuild for PT-MoE
 7. [[ml-systems/distributed/validating-parallelism-at-scale]] — testing distributed with tiny model
 8. [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier interconnect hierarchy (NVLink, InfiniBand, Ethernet), 18x bandwidth gap, RDMA vs NVLink memory semantics, and NCCL kernel mechanics
+9. [[ml-systems/distributed/data-parallelism]] — Canonical DDP execution pipeline, batch sharding, gradient all-reduce vs weight averaging, and AdamW non-linearity
 
 ### 5. Inference — Engine, KV Cache, Serving
 
