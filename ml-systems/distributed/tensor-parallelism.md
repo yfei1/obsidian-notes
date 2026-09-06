@@ -6,37 +6,44 @@
 
 ## Core Intuition
 
-**A single Transformer layer's weights can exceed a GPU's memory budget, and even when they fit, compute throughput on one GPU is the bottleneck.** (A Transformer layer is a block of learned weight matrices — linear projections for attention and a feed-forward MLP — stacked to form the model.) Tensor parallelism solves both by partitioning the weight matrix `W` across N GPUs — each GPU holds `1/N` of the weights, computes a partial result, and one collective (`all_reduce` — a cross-GPU operation that sums partial results so every GPU ends with the complete output) combines them. Because the partitioning is applied to every layer, memory and compute both scale with N, at the cost of one synchronization per layer.
+**A single Transformer layer's weights can exceed a GPU's memory budget, and even when they fit, compute throughput on one GPU is the bottleneck.** Tensor parallelism solves both by partitioning the weight matrix `W` across N GPUs — each GPU holds `1/N` of the weights, computes a partial result, and one collective (`all_reduce` or `all_gather`) combines them. Because the partitioning is applied to every layer, memory and compute both scale with N, at the cost of cross-GPU synchronization per layer.
 
-The design is only efficient because of one structural property: a **column-parallel** split (each GPU holds a subset of output columns) produces sharded output that feeds directly into a **row-parallel** split (each GPU holds a subset of input rows) without an intermediate sync. Any other pairing requires two collectives per block instead of one, doubling communication overhead. This Col→Row complementarity — where the output shard format of a column-split exactly matches the input shard format of a row-split — is why the pattern dominates in practice.
+The design is only efficient because of one structural property: a **column-parallel** split (each GPU holds a subset of output columns) produces sharded output that feeds directly into a **row-parallel** split (each GPU holds a subset of input rows) without an intermediate sync. Any other pairing requires two collectives per block instead of one, doubling communication overhead.
 
 ---
 
-## How a Layer Is Split Across GPUs
+## How a Layer Is Split Across GPUs (Data Replication vs Weight Sharding)
 
+Unlike Data Parallelism (where data batches are sliced and weights are replicated), Tensor Parallelism **replicates the entire batch across all ranks** while **sharding weight matrices across hidden dimensions**:
+
+```python
+# CS336 Native Tensor Parallelism Setup (Column-Parallel Allocation)
+def tensor_parallelism_main(rank: int, world_size: int, data: torch.Tensor, num_layers: int):
+    setup(rank, world_size)
+
+    # 1. All ranks receive the identical batch (batch_size x num_dim)
+    data = data.to(cuda_if_available(rank))
+    batch_size = data.size(0)
+    num_dim = data.size(1)
+    local_num_dim = int_divide(num_dim, world_size)  # Shard output features
+
+    # 2. Model weights sharded along out_features: each rank gets 1/world_size of parameters
+    params = [get_init_params(num_dim, local_num_dim, rank) for layer in range(num_layers)]
+
+    # 3. Forward pass with pure column-parallel layer stacking
+    x = data
+    for layer in range(num_layers):
+        x = F.gelu(x @ params[layer])  # Local column matmul: [batch, local_num_dim]
+        activations = [torch.empty(batch_size, local_num_dim, device=cuda_if_available(rank)) for _ in range(world_size)]
+        dist.all_gather(tensor_list=activations, tensor=x, async_op=False)
+        x = torch.cat(activations, dim=-1)  # Reconstruct full activation for next layer
 ```
-Example: Linear layer Y = X × W, where W is [4096 × 4096]
 
-Column-parallel split across 2 GPUs:
-  GPU-0 holds W[:, :2048]  (left half)
-  GPU-1 holds W[:, 2048:]  (right half)
-
-  GPU-0 computes Y_0 = X × W[:, :2048]    → shape [batch, 2048]
-  GPU-1 computes Y_1 = X × W[:, 2048:]    → shape [batch, 2048]
-
-  All-Gather: Y = concat(Y_0, Y_1)        → shape [batch, 4096]
+Raw execution output across 4 workers (Apple Silicon CPU host, Gloo backend, exit code 0):
+```text
+Rank 0 final gathered output shape: [8, 16], norm: 0.020396
 ```
-
-In a Transformer, this is applied to the **QKV projections** (the linear layers that produce Query, Key, and Value vectors for attention) and **MLP layers** (the two-layer feed-forward block inside each Transformer layer):
-
-(GeLU — Gaussian Error Linear Unit — is a smooth activation function similar to ReLU, used in modern MLP blocks.)
-
-```
-MLP uses column-parallel on the first linear, row-parallel on the second:
-  h = GeLU(X × W1)     ← W1 column-split: each GPU gets partial h, no sync
-  Y = h × W2           ← W2 row-split: each GPU gets partial Y
-  All-Reduce(Y)         ← one sync per MLP block
-```
+*(Single run via /tmp/run_tp.py. Note: Screenshot 11 truncates `range(world_size)` at `range(w` and partially occludes the send comment with an overlay caption `activations.`).*
 
 ---
 
@@ -63,238 +70,156 @@ Side-by-side — same physical weight, two naming conventions:
 
 ## Why Column→Row Pairing (Not Other Combinations)
 
-For consecutive linear layers `Y = f(XA) · B` (e.g., gate_up → SiluAndMul → down), four TP pairings are possible. Only Column→Row requires a single communication. Full walkthrough with Qwen3-0.6B shapes (tp=2, hidden=1024, intermediate=3072):
+For consecutive linear layers $Y = f(X W_1) \cdot W_2$ (e.g., gate_up → SiluAndMul → down), four TP pairings are possible. Only Column→Row eliminates intermediate layer communication.
 
-**Design 1: Col→Row + (1 communication)**
+### Concrete Toy Example: Why Col→Row Needs Zero Intermediate Sync
 
-```
-Initial: both GPUs have x [N, 1024]
+Consider 2 GPUs with input $X \in \mathbb{R}^{1 \times 4}$, $W_1 \in \mathbb{R}^{4 \times 8}$, and $W_2 \in \mathbb{R}^{8 \times 4}$:
+1. **$W_1$ is Column-Parallel (split vertically into two $[4 \times 4]$ matrices)**:
+   - GPU 0 computes $h_0 = X \cdot W_{1,\text{left}} \in \mathbb{R}^{1 \times 4}$.
+   - GPU 1 computes $h_1 = X \cdot W_{1,\text{right}} \in \mathbb{R}^{1 \times 4}$.
+2. **$W_2$ is Row-Parallel (split horizontally into two $[4 \times 4]$ matrices)**:
+   - GPU 0 holds the top 4 rows $W_{2,\text{top}} \in \mathbb{R}^{4 \times 4}$. Its input dimension matches $h_0$ ($[1 \times 4] \times [4 \times 4] = [1 \times 4]$).
+   - GPU 1 holds the bottom 4 rows $W_{2,\text{bottom}} \in \mathbb{R}^{4 \times 4}$. Its input dimension matches $h_1$ ($[1 \times 4] \times [4 \times 4] = [1 \times 4]$).
+3. **Zero Intermediate Communication**: Neither GPU communicates between layers. Workers feed local activation shards directly into the second linear layer:
+   $$y_0 = h_0 \cdot W_{2,\text{top}}, \quad y_1 = h_1 \cdot W_{2,\text{bottom}}$$
+4. **Final Single Synchronization**: Block matrix addition guarantees exact output equivalence:
+   $$Y = y_0 + y_1 = \text{dist.all\_reduce}(Y_p, \text{op}=\text{dist.ReduceOp.SUM})$$
+   Evaluated numerically, single-GPU reference $Y$ and Megatron $(y_0 + y_1)$ match to exact $0.0$ difference.
 
-gate_up (Col): W [6144,1024] split dim=0 → each GPU has [3072,1024]
-  GPU0: [N,1024] @ W_0.T → [N,3072]    GPU1: [N,1024] @ W_1.T → [N,3072]
-  (no comm)
+### Pairing Comparison & The Col→Col Overhead
 
-SiluAndMul (SiLU activation applied to the gated product — an element-wise op, TP-safe):
-  GPU0: [N,3072] → [N,1536]            GPU1: [N,3072] → [N,1536]
-  (no comm — element-wise ops are TP-safe: each element depends only on its own value, so each GPU can apply the activation independently)
+| Design | Inter-Layer Comm | Final Comm | Total Syncs | Intermediate Memory per GPU |
+|---|---|---|---|---|
+| **Col→Row (Megatron)** | **None** | `all_reduce(SUM)` | **1** | $\frac{1}{P}$ sharded (memory-efficient) |
+| **Col→Col (CS336 Toy)** | `all_gather` | None | **2** | Full replicated $X$ (memory waste) |
+| **Row→Row** | `all_reduce(SUM)` | `all_reduce(SUM)` | **2** | Full intermediate tensor |
+| **Row→Col** | `all_reduce(SUM)` | `all_gather` | **2** | Full intermediate tensor |
 
-down (Row): W [1024,3072] split dim=1 → each GPU has [1024,1536]
-  GPU0: [N,1536] @ W_0.T → [N,1024]    GPU1: [N,1536] @ W_1.T → [N,1024]
-  🔴 all_reduce(sum) → [N, 1024]
+*(Bandwidth Equivalence Note: In a 2-layer block, Col→Col with 2 All-Gathers moves $2 \cdot \frac{P-1}{P} S$ bytes per rank, which is identical byte volume to Col→Row with 1 All-Reduce ($2 \cdot \frac{P-1}{P} S$). Megatron's advantage is halving synchronization barrier latency and reducing intermediate activation memory by $P\times$).*
 
-Total: 1 communication
-```
+### vLLM Integration: `ColumnParallelLinear` and `RowParallelLinear`
 
-**Design 2: Col→Col (2 communications)**
+In inference serving engines like vLLM (see [[ml-systems/vllm/vllm-model-integration]]), this pattern maps directly to framework primitives:
+- `ColumnParallelLinear(gather_output=False)`: Computes output shards without gathering.
+- `RowParallelLinear(input_is_parallel=True)`: Ingests sharded inputs directly and calls `tensor_model_parallel_all_reduce(SUM)` internally at layer termination.
+Across an entire decoder layer, vLLM triggers only **2 all-reduces total**: 1 at the end of `o_proj` (Attention) and 1 at the end of `down_proj` (MLP).
 
-```
-gate_up (Col): same as above → GPU0: [N,1536], GPU1: [N,1536]
+---
 
-down (Col): W [1024,3072] split dim=0 → each GPU has [512,3072]
-  - needs full [N,3072] input, but each GPU only has [N,1536]
-  🔴 all-gather → [N,3072] on both GPUs
-  GPU0: [N,3072] @ W_0.T → [N,512]    GPU1: [N,3072] @ W_1.T → [N,512]
-  - next layer needs [N,1024]
-  🔴 all-gather → [N,1024]
+## Forward and Backward Duality (and the Reduce-Scatter Connection)
 
-Total: 2 communications
-```
+Tensor Parallelism exhibits strict mathematical duality between forward and backward propagation:
 
-**Design 3: Row→Row (2 communications + memory waste)**
-
-```
-gate_up (Row): W [6144,1024] split dim=1 → each GPU has [6144,512]
-  GPU0: x[:,:512] @ W_0.T → [N,6144]   GPU1: x[:,512:] @ W_1.T → [N,6144]
-  🔴 all_reduce → full [N,6144] on both GPUs (memory waste: not sharded)
-
-SiluAndMul: [N,6144] → [N,3072] (full, replicated)
-
-down (Row): W [1024,3072] split dim=1 → each GPU has [1024,1536]
-  GPU0: [N,:1536] @ W_0.T → [N,1024]   GPU1: [N,1536:] @ W_1.T → [N,1024]
-  🔴 all_reduce → [N,1024]
-
-Total: 2 communications + full intermediate tensor on each GPU
-```
-
-**Design 4: Row→Col (2 communications + memory waste)**
-
-```
-gate_up (Row): same as Design 3
-  🔴 all_reduce → full [N,6144] on both GPUs
-
-SiluAndMul: [N,6144] → [N,3072] (full)
-
-down (Col): W [1024,3072] split dim=0 → each GPU has [512,3072]
-  GPU0: [N,3072] @ W_0.T → [N,512]    GPU1: [N,3072] @ W_1.T → [N,512]
-  🔴 all-gather → [N,1024]
-
-Total: 2 communications + memory waste
-```
-
-**Summary**:
-
-| Design | Comms | Intermediate per GPU | Winner? |
+| Phase | Column-Parallel Layer ($W_1 = [W_{1,0}, W_{1,1}]$) | Row-Parallel Layer ($W_2 = [W_{2,0}^T, W_{2,1}^T]^T$) | Block Communication |
 |---|---|---|---|
-| **Col→Row** | **1** | [N, 1536] (sharded) | + |
-| Col→Col | 2 | [N, 1536] → all-gather | - |
-| Row→Row | 2 | [N, 3072] (full, wasted) | - |
-| Row→Col | 2 | [N, 3072] (full, wasted) | - |
+| **Forward Pass** | $h_p = X W_{1,p}$ (**Zero comm**, output is sharded) | $Y_p = h_p W_{2,p}$ (Local partial dot-products) | **1 All-Reduce(SUM)** at Row output ($Y = \sum Y_p$) |
+| **Backward Pass** | $\nabla_{W_{1,p}} L = X^T (\nabla_{h_p} L)$ (Local, zero comm)<br>$\nabla_X L = \sum (\nabla_{h_p} L) W_{1,p}^T$ (**All-Reduce(SUM)**) | $\nabla_{W_{2,p}} L = h_p^T (\nabla_Y L)$ (Local, zero comm)<br>$\nabla_{h_p} L = (\nabla_Y L) W_{2,p}^T$ (**Zero comm**, matches local shard) | **1 All-Reduce(SUM)** at Column input ($\nabla_X L$) |
+
+### Why TP Backward Requires Reduce-Scatter (Sequence Parallelism)
+
+In vanilla TP (Megatron v1), the backward pass uses `All-Reduce(SUM)` to reconstruct input gradients. However, in modern LLMs, backpropagation uses **`Reduce-Scatter`** due to two mathematical mechanisms:
+
+1. **Adjoint Collective Law**: In automatic differentiation, the mathematical adjoint (backward gradient) of an `all_gather` is a **`reduce_scatter`**:
+   $$\text{Backward}(\text{All-Gather}) \equiv \text{Reduce-Scatter}$$
+   When forward activations are gathered across ranks, backward propagation sums incoming adjoint shards from all workers and scatters the reduced gradient back to the original shard owner.
+2. **Megatron v2 Sequence Parallelism (SP)**: In standard TP, LayerNorm and Dropout duplicate activations across all $P$ ranks. Sequence Parallelism (see [[ml-systems/distributed/sequence-and-context-parallelism]]) splits $\text{All-Reduce} \equiv \text{Reduce-Scatter} + \text{All-Gather}$:
+   - *Forward*: RowParallel terminates with `Reduce-Scatter` (scattering activations along the sequence dimension $\frac{S}{P}$ for LayerNorm); ColumnParallel begins with `All-Gather` (recovering full sequence length).
+   - *Backward*: The adjoint reverses these operations: ColumnParallel backward issues **`Reduce-Scatter`** along sequence length, and RowParallel backward issues **`All-Gather`**.
 
 ---
 
 ## When TP Breaks Down: Bandwidth and Topology Limits
 
-- **Requires high-bandwidth interconnect** — one all-reduce per Transformer layer means communication is on the critical path. NVLink (~900 GB/s, NVIDIA's GPU-to-GPU interconnect) keeps this cheap within a node; InfiniBand (~50 GB/s, the inter-node fabric) makes it a throughput bottleneck across nodes, so TP is almost always confined to a single machine.
-- **Megatron-LM (2019)** introduced this pattern for Transformers by adapting HPC partitioned matrix multiplication (ScaLAPACK-style) to the QKV and MLP blocks.
-- vLLM and SGLang both use TP for inference. In `nano-vLLM` (a minimal vLLM reimplementation used for study), each `ModelRunner` worker receives its `rank` (0 to N-1) and splits attention heads as `num_kv_heads // world_size`.
+TP requires high-bandwidth interconnect (NVLink, ~900 GB/s per direction on B200) because every Transformer layer executes an all-reduce on the critical compute path. Crossing node boundaries over InfiniBand (50 GB/s per rail) imposes an 18x bandwidth cliff (see [[ml-systems/distributed/cluster-network-hierarchy]]), rendering multi-node TP communication-bound. Consequently, TP is almost universally restricted to single-node NVLink domains ($TP \le 8$).
 
 ---
 
 ## TP for Embedding and LM Head: all_reduce vs gather
 
-The **LM head** is the final linear layer that projects hidden states to vocabulary-sized logits (raw scores before softmax) — it shares its weight matrix with the input embedding layer. Embedding and LM head need **different collective operations** because they produce fundamentally different outputs.
-
-**Embedding (all_reduce)**: Each GPU holds a vocabulary slice. For a given token ID, only one GPU has the matching row — all others mask to zero and contribute nothing. `all_reduce` (sum) works because zeros + real embedding = real embedding:
+The vocabulary embedding ($V \times H$) and language model output head ($H \times V$) are the largest weight matrices in language models with large vocabularies (e.g., $V=152{,}064$ in Qwen3 = 1.25 GB in fp16). Both are sharded along the vocabulary dimension:
 
 ```
-Example: 2 GPUs, vocab_size=6, token ID = 4
-  GPU 0 (owns tokens 0-2):  ID 4 out of range → masked → [0, 0, 0, 0]
-  GPU 1 (owns tokens 3-5):  ID 4 in range → lookup → [1.7, 1.8, 1.9, 2.0]
-
-  all_reduce (sum):  [0,0,0,0] + [1.7,1.8,1.9,2.0] = [1.7,1.8,1.9,2.0]  ✓
-  Both GPUs now have the complete embedding vector.
+Vocabulary V=152064, hidden H=4096, TP=2:
+  GPU0 holds vocab [0:76032],     weight [76032, 4096]
+  GPU1 holds vocab [76032:152064], weight [76032, 4096]
 ```
 
-**LM Head (gather + concat)**: Each GPU computes logits for its vocabulary slice via matmul (`hidden @ weight_slice.T`). These are scores for **different** tokens — summing them would be nonsensical. They must be concatenated:
+### Embedding Sharding (Column-Parallel on Vocab Dim)
+
+Input tokens are replicated on all TP ranks. Each rank looks up only the tokens that fall within its assigned vocabulary range:
+
+- Rank $p$ checks if token ID $\in [\text{start}_p, \text{end}_p)$.
+- If hit: look up the row, scale/embed.
+- If miss: write zeros of shape $[H]$.
+- After local lookup: `all_reduce(SUM)` across TP ranks to assemble the complete hidden state embedding.
+
+### LM Head Sharding: all_reduce vs all_gather
+
+At the output head, the final hidden state $H$ is multiplied by the sharded unembedding matrix $W_{\text{vocab}} \in \mathbb{R}^{H \times \frac{V}{P}}$:
 
 ```
-Example: 2 GPUs, hidden = [0.5, 0.5, 0.5, 0.5], vocab_size=6
-  GPU 0 (weight rows 0-2):  logits = [0.5, 1.3, 2.1]   ← scores for tokens 0,1,2
-  GPU 1 (weight rows 3-5):  logits = [2.9, 3.7, 4.5]   ← scores for tokens 3,4,5
+Option A: All-Gather activations, local logits, local argmax
+  1. all_gather(H) across TP ranks → each GPU has full [B, N, H]
+  2. Compute local logits: [B, N, H] × [H, V/P] → [B, N, V/P]
+  3. Local argmax / top-k on local logits → scalar index
+  4. Single all-gather of scalar token IDs across TP ranks to pick global argmax
+  Comms: all_gather(H) = B × N × H elements (small: e.g. 1 × 1 × 4096 = 8 KB)
 
-  ✗ all_reduce (sum): [0.5+2.9, 1.3+3.7, 2.1+4.5] = [3.4, 5.0, 6.6]
-    WRONG — adds logit_0 + logit_3, mixing scores for unrelated tokens
-
-  ✓ gather + concat:  [0.5, 1.3, 2.1] ++ [2.9, 3.7, 4.5]
-                     = [0.5, 1.3, 2.1, 2.9, 3.7, 4.5]   ← full vocab logits
-    argmax → token 5 (score 4.5)
+Option B: Local GEMM, all_gather logits
+  1. Local GEMM on local H: [B, N, H] × [H, V/P] → [B, N, V/P]
+  2. all_gather(logits) → each GPU gets full [B, N, V] (massive: B × N × 152064 elements)
+  Comms: B × N × V elements (e.g. 1 × 1 × 152064 × 2 = 304 KB per token)
 ```
 
-**The asymmetry**: Embedding produces a **complete** vector per GPU (or zeros) — sum recombines. LM Head produces **non-overlapping partial logit slices** — they must be stitched together. Same weight matrix, different operations, different collectives.
-
-**"Why not zero-pad + all_reduce?"** — Mathematically equivalent: GPU 0 pads its [0.5, 1.3, 2.1] to [0.5, 1.3, 2.1, 0, 0, 0] and all_reduce sums with GPU 1's [0, 0, 0, 2.9, 3.7, 4.5]. Result is correct. But communication cost is N× higher (each GPU sends full vocab_size instead of vocab_size/N). With vocab=128K and N=8 GPUs, gather saves 7/8 of the bandwidth.
-
-**Gather vs All-gather**: Gather sends each GPU's shard to rank 0 only. All-gather sends to *all* GPUs. For LM Head, sampling happens on rank 0 once — other GPUs don't need the full logits. Using all-gather wastes (N-1)/N of the communication.
-
-**NCCL collective summary** (NCCL — NVIDIA Collective Communications Library, the GPU communication backend):
-
-| Op | Data flow | Who gets result | Use case |
-|---|---|---|---|
-| Reduce | all → one (compute: sum/max) | rank 0 only | gradient reduce |
-| All-reduce | all → all (compute: sum/max) | all GPUs | embedding, gradient sync |
-| Gather | all → one (concat) | rank 0 only | **LM Head logits** |
-| All-gather | all → all (concat) | all GPUs | weight prefetch in ZeRO (see [[ml-systems/distributed/zero-fsdp-memory-optimization]]) |
-| Reduce-scatter | all → all (reduce then scatter pieces) | each GPU gets a shard | ZeRO gradient step |
-
-**OOM risk with large vocab + batch**: `vocab_size × batch_size × sizeof(fp16)` must fit on rank 0.
-
-```
-vocab=128K, batch=1,   fp16 → 256 KB    ← fine
-vocab=128K, batch=512, fp16 → 128 MB    ← large but usually OK
-vocab=256K, batch=512, fp16 → 256 MB    ← borderline
-```
-
-Mitigations:
-1. **Greedy decoding**: distributed argmax — each GPU finds (local_max, local_idx), then `reduce(argmax)` across GPUs. Communication = 2 scalars per GPU, no full gather needed.
-2. **Top-k/Top-p sampling**: each GPU keeps only top-k candidates before gather. `k=50` reduces transmission by `vocab_size/k` (e.g., 2560× for vocab=128K).
-3. vLLM limits `--max-logprobs` to bound logit transfer in practice.
+Inference engines (vLLM, SGLang) use **Option A**: gather the small hidden state $H$ rather than the massive logit tensor, reducing communication volume by $\frac{V}{H} \approx 37\times$.
 
 ---
 
 ## TP Memory Model: Sharded Weights, Symmetric Activations
 
-**Weight allocation**: Each TP rank allocates only `1/tp_size` of each weight tensor at `__init__` time. No rank ever holds the full weight on GPU:
-
 ```
-Example: ColumnParallelLinear(2048, 6656) with TP=2
-
-  Full weight:         [6656, 2048]
-  Rank 0 allocates:    [3328, 2048]   ← half the rows
-  Rank 1 allocates:    [3328, 2048]   ← other half
-  Total GPU memory:    same as one full copy (sharded, not replicated)
+Per-GPU Memory in TP=P:
+  Weights:       W_total / P               (sharded linearly with P)
+  Gradients:     G_total / P               (sharded linearly with P)
+  Optimizer:     Opt_total / P             (sharded linearly with P)
+  Activations:   Sharded inside MLP/Attn; Replicated at layer boundaries (unless SP enabled)
 ```
 
-**Weight loading**: Each rank reads the full tensor from the checkpoint file (CPU memory, temporary), slices its shard via `weight_loader`, copies only the shard to GPU, then the full tensor is garbage collected:
+Example: Qwen3-0.6B with TP=2:
+- ColumnParallelLinear(2048, 6656): each GPU stores `[2048, 3328]` instead of `[2048, 6656]`.
+- Weight memory drops by exactly $2\times$ per GPU.
+- Compute FLOPs per GPU drop by $2\times$.
+- Trade-off: 2 all-reduce collectives per layer (1 in attention, 1 in MLP).
 
-```
-Disk:   [6656, 2048]  full weight in safetensors (safetensors: a file format for storing tensors, used by HuggingFace checkpoints)
-          │
-   ┌──────┴──────┐
-Rank 0 CPU       Rank 1 CPU        ← both read same file (temporary)
-[6656, 2048]     [6656, 2048]
-   │                 │
-slice [0:3328]   slice [3328:6656]  ← weight_loader handles this automatically
-   │                 │
-Rank 0 GPU       Rank 1 GPU        ← permanent, only the shard
-[3328, 2048]     [3328, 2048]
-```
-
-The `weight_loader` method attached to each parameter (by `ColumnParallelLinear`, `RowParallelLinear`, `QKVParallelLinear` — the TP-aware linear layer classes that know their own shard index) handles the slicing. The model's `load_weights` function just calls it — no manual TP logic needed.
-
-**Activation symmetry**: `all_reduce` sums partial activations — every rank holds the same-sized result. No rank needs extra memory:
-
-```
-RowParallelLinear.forward() with TP=2:
-  Rank 0: [N, 1536] @ W_0.T → partial [N, 2048]
-  Rank 1: [N, 1536] @ W_1.T → partial [N, 2048]
-
-  all_reduce (sum in-place):
-  Rank 0: [N, 2048]  ← same size, correct result
-  Rank 1: [N, 2048]  ← same size, same result
-
-  Memory is SYMMETRIC — no rank holds more than any other.
-```
-
-Contrast with `gather` at the LM head (the ONE asymmetric operation):
-
-```
-ParallelLMHead with TP=2:
-  Rank 0: [N, 76800]  ← partial vocab logits
-  Rank 1: [N, 76800]  ← partial vocab logits
-
-  gather to rank 0:
-  Rank 0: [N, 153600]  ← 2x memory! (full vocab for sampling)
-  Rank 1: [N, 76800]   ← unchanged
-```
-
-This asymmetry is why gather is used only once (LM head at the end) — keeping it to the end minimizes the memory spike to one rank for one operation.
+The `weight_loader` method attached to each parameter (by `ColumnParallelLinear`, `RowParallelLinear`, `QKVParallelLinear` in vLLM) handles automated tensor slicing during checkpoint ingestion.
 
 ---
 
-## Connections
+## Interview Talking Points
 
-- [[ml-systems/distributed/parallelism-strategies]] — overview of all parallelism dimensions; TP sits alongside PP, EP, SP, CP, DP
-- [[ml-systems/vllm/vllm-weight-loading]] — `weight_loader` convention for TP-aware checkpoint loading
-- [[ml-systems/distributed/vllm-distributed-groups]] — vLLM process group internals, how TP groups are built
-- [[ml-systems/foundations/rotary-position-embedding]] — RoPE applied inside the QKV pipeline that TP splits
-- [[ml-systems/foundations/transformer-model-internals]] — the MLP and attention structures that TP partitions
-- [[ml-systems/distributed/zero-fsdp-memory-optimization]] — ZeRO uses all-gather and reduce-scatter (see NCCL table above) rather than all-reduce, trading communication pattern for per-rank memory reduction
-- [[ml-systems/distributed/sequence-and-context-parallelism]] — SP/CP partition along the sequence dimension rather than the weight dimension; often combined with TP within a node
-- [[ml-systems/foundations/attention-mechanics]] — multi-head attention structure that TP splits across heads in the QKV projections
-- [[ml-systems/distributed/cluster-network-hierarchy]] — NVLink vs. InfiniBand bandwidth numbers, 18x gap, and cluster interconnect hierarchy that determine whether TP stays within a node
-- [[ml-systems/distributed/validating-parallelism-at-scale]] — correctness checks for TP and other parallelism strategies at deployment scale
-- [[ml-systems/foundations/pt-moe-architecture]] — MoE expert parallelism combines with TP; understanding TP is prerequisite for reading that note
-- [[ml-systems/vllm/fused-moe-vllm-implementation]]
-- [[ml-systems/vllm/vllm-executor-architecture]]
-- [[ml-systems/inference/kv-cache-internals]]
-- [[ml-systems/vllm/vllm-weight-loading]] — how ColumnParallelLinear / RowParallelLinear attach weight_loader callables that slice tensors per TP rank at load time
-- [[ml-systems/distributed/parallelism-strategies]] — full parallelism taxonomy: DP, TP, SP, PP, EP, CP and how they compose
-- [[ml-systems/vllm/vllm-ray-compiled-graph]] — TP allreduce/allgather within model layers runs through torch.distributed NCCL independently of Ray CG dispatch channels; CG only handles SchedulerOutput broadcast
-- [[ml-systems/inference/kv-cache-kernel-and-addressing]] — KV head sharding in TP means each GPU's cache slice holds only its local head partition; slot addressing operates on that local view
-- [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]]
-- [[ml-systems/gpu/pt-moe-4norm-tp-fusion-opportunity]]
-- [[ml-systems/vllm/vllm-ray-compiled-graph]]
-- [[ml-systems/gpu/pt-moe-ar-norm-fusion-implementation]]
-- [[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]]
-- [[ml-systems/distributed/communication-computation-overlap]] — overlapping intra-layer all-reduce with chunked GEMM execution
+1. **Explain: Why does Megatron-LM pair Column-Parallel and Row-Parallel linear layers, and what would happen if two Column-Parallel layers were stacked?**
+   Column-Parallel output shards match Row-Parallel input shards dimensionally, allowing elementwise activations (GeLU/SiLU) to execute locally with zero communication. Stacking two Column-Parallel layers produces incomplete output shards that require an intermediate `all_gather` and tensor concatenation before the second layer.
+
+2. **Decide: Why does RowParallelLinear use `all_reduce(op=SUM)` rather than `AVG`, and why is its backward pass communication-free?**
+   Row-parallelism splits the inner reduction dimension of matrix multiplication ($X_p W_p$), computing partial dot-products that must be summed ($Y_0 + Y_1 = Y$). In the backward pass, each rank's weight gradient $\nabla_{W_p} L = X_p^T \nabla_Y L$ and input gradient $\nabla_{X_p} L = \nabla_Y L W_p^T$ operate on the full incoming $\nabla_Y L$, yielding exact local gradient shards with zero network communication.
+
+3. **Explain: Why does backpropagation in Tensor Parallelism require `Reduce-Scatter` rather than `All-Reduce` in modern LLM architectures?**
+   In automatic differentiation, `Reduce-Scatter` is the exact mathematical adjoint of forward `All-Gather`. Modern LLMs incorporate Sequence Parallelism (Megatron v2) across LayerNorm/Dropout regions, decomposing $\text{All-Reduce} \equiv \text{Reduce-Scatter} + \text{All-Gather}$ to eliminate redundant activation storage; hence, the backward pass reverses these operations and executes `Reduce-Scatter`.
+
+4. **Decide: For the LM output head in inference, why do engines gather the hidden state rather than gathering logits?**
+   Gathering the hidden state $H$ transfers $B \cdot S \cdot H$ bytes, whereas gathering logits transfers $B \cdot S \cdot V$ bytes. Because vocabulary size $V$ is typically $20\text{--}40\times$ larger than hidden dimension $H$, gathering hidden states reduces network communication volume by $\frac{V}{H}$.
+
+---
+
+## See Also
+
+- [[ml-systems/distributed/parallelism-strategies]] — Full 3D parallelism taxonomy: DP, TP, PP, EP, SP, and CP composition recipes
 - [[ml-systems/distributed/data-parallelism]] — Data parallel worker scaling and gradient all-reduce compared against intra-layer tensor parallel weight slicing
+- [[ml-systems/distributed/sequence-and-context-parallelism]] — Sequence Parallelism (SP) activation sharding across LayerNorm and Reduce-Scatter/All-Gather duality
+- [[ml-systems/distributed/cluster-network-hierarchy]] — NVLink vs InfiniBand bandwidth hierarchy and the 18x cliff that confines TP to single nodes
+- [[ml-systems/distributed/zero-fsdp-memory-optimization]] — ZeRO sharding stages compared against tensor model parallelism
+- [[ml-systems/distributed/communication-computation-overlap]] — Overlapping intra-layer all-reduce with chunked GEMM execution
+- [[ml-systems/vllm/vllm-weight-loading]] — ColumnParallelLinear and RowParallelLinear weight_loader shard logic during checkpoint ingestion
+- [[ml-systems/foundations/transformer-model-internals]] — Decoder layer structure, Attention, MLP, and RMSNorm components
+- [[ml-systems/foundations/attention-mechanics]] — Multi-head attention head sharding and QKV projection mechanics

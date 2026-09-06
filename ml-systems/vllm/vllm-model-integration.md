@@ -387,3 +387,4 @@ All assertions passed.
 - [[ml-systems/inference/cuda-graph-inference-optimization]] — the model forward pass recorded into CUDA graphs during decode; static tensor shapes required at capture time
 - [[ml-systems/gpu/pt-moe-4norm-fused-kernel-integration]] — detailed walkthrough of `CustomOp` dispatch, `direct_register_custom_op`, and the three integration tiers for adding a custom Triton kernel to vLLM
 - [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]]
+- [[ml-systems/distributed/tensor-parallelism]] — ColumnParallelLinear and RowParallelLinear execution mechanics and weight loading
