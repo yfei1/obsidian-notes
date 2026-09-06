@@ -10,6 +10,18 @@
 
 The design is only efficient because of one structural property: a **column-parallel** split (each GPU holds a subset of output columns) produces sharded output that feeds directly into a **row-parallel** split (each GPU holds a subset of input rows) without an intermediate sync. Any other pairing requires two collectives per block instead of one, doubling communication overhead.
 
+### The Inference Roofline Trade-off: Trading Communication Latency for HBM Bandwidth
+
+In low-batch auto-regressive decode ($B=1$), generating each token requires reading the entire model's weights from high-bandwidth memory (HBM). With arithmetic intensity bounded at $\approx 1\text{ FLOP/byte}$, single-GPU generation is strictly memory-bandwidth bound. 
+
+Enabling Tensor Parallelism explicitly trades off collective communication latency across NVLink to aggregate physical HBM memory bandwidth across $P$ GPUs:
+
+- **HBM Bandwidth Multiplier**: $P$ GPUs provide $P$ independent memory controllers, scaling aggregate memory read throughput from $2\text{ TB/s}$ (single A100) to $16\text{ TB/s}$ ($TP=8$). For a 70B parameter model (140 GB in fp16), weight read time per token drops from $70\text{ ms}$ to $8.75\text{ ms}$ (a $+61.25\text{ ms}$ saving).
+- **Communication Cost Incurred**: An 80-layer model requires 2 All-Reduces per layer, totaling 160 All-Reduces per generated token. At $B=1$, the transferred tensor is tiny ($1 \times 8192 \times 2\text{ bytes} \approx 16\text{ KB}$), executing in $\approx 2\text{--}3\,\mu\text{s}$ per collective over 900 GB/s NVLink. Total communication cost is only $160 \times 3\,\mu\text{s} \approx 0.48\text{ ms}$.
+- **Net Latency Gain**: Total per-token latency drops from $70.0\text{ ms}$ to $8.75 + 0.48 = 9.23\text{ ms}$, accelerating generation throughput from $14\text{ tokens/s}$ to $108\text{ tokens/s}$ (a $7.6\times$ speedup).
+
+*(Failure Boundaries: This trade-off breaks down when (1) TP crosses nodes over InfiniBand where $50\,\mu\text{s}$ collective latency inflates communication to $8\text{ ms}$; (2) models are small ($\le 2\text{B}$) where HBM savings are smaller than kernel launch overhead; or (3) large batch sizes shift execution into the compute-bound regime).*
+
 ---
 
 ## How a Layer Is Split Across GPUs (Data Replication vs Weight Sharding)

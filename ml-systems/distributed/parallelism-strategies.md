@@ -19,35 +19,33 @@ Seven parallelism strategies distribute LLM workloads across GPUs. ZeRO/FSDP are
 | **Pipeline Parallelism (PP)** | Model layers across GPUs | Across nodes | + | + |
 | **Expert Parallelism (EP)** | MoE experts assigned to specific GPUs | Across GPUs | + | + |
 | **Context Parallelism (CP)** | Sequence length across GPUs | Within/across nodes | + | + |
+### The 3D Parallelism Transmission Matrix: What Actually Travels on the Wire
+
+A universal rule across standard distributed strategies is that **model weights are never communicated across the network**:
+
+| Strategy | Forward Transmission | Backward Transmission | Weights Communicated? | Interconnect Requirement |
+|---|---|---|---|---|
+| **Data Parallelism (DP)** | **Zero (0 B)** (local data slice) | **Weight Gradients $\nabla_W L$** (`All-Reduce(AVG)`) | **No** | InfiniBand / RoCE (overlapped) |
+| **Pipeline Parallelism (PP)** | **Boundary Activations $Y$** (`P2P send/recv`) | **Boundary Gradients $\nabla_Y L$** (`P2P send/recv`) | **No** | InfiniBand / Ethernet (tolerant) |
+| **Tensor Parallelism (TP)** | **Activation Partial Sums** (`All-Reduce(SUM)`) | **Input Gradient Partial Sums** (`All-Reduce(SUM)`) | **No** | **NVLink mandatory** (900 GB/s) |
+
+*(Full execution pipelines: DP in [[ml-systems/distributed/data-parallelism]], PP in [[ml-systems/distributed/pipeline-parallelism]], TP in [[ml-systems/distributed/tensor-parallelism]]).*
 
 ---
 
 ## 1. Data Parallelism (DP)
 
-### DP: How a Global Batch Becomes Per-GPU Micro-Batches
+Every GPU holds an identical replica of model weights and evaluates a disjoint slice of the global batch. Communication occurs strictly in backpropagation, where parameter gradients are averaged via `dist.all_reduce(op=dist.ReduceOp.AVG)` prior to `optimizer.step()`. Because gradient transfers asynchronously overlap with backward computation, DP achieves near-linear scaling across inter-node networks.
 
-```
-Setup: 4 GPUs, each holds a FULL copy of the model
+Full execution pipeline, batch sharding, and AdamW gradient vs weight averaging derivations: [[ml-systems/distributed/data-parallelism]]
 
-1. Global batch (64 samples) splits into micro-batches: GPU 0 (0-15), GPU 1 (16-31), GPU 2 (32-47), GPU 3 (48-63)
+### Why TP is Necessary Despite DP: The Three Physical Walls
 
-2. Each GPU runs forward + backward pass independently
+While DP requires zero forward communication and hides backward transfers, three boundaries make Tensor Parallelism irreplaceable:
 
-3. All-Reduce (sums tensors across all GPUs, distributes result back to every GPU): GPUs synchronize gradients
-   → Each GPU averages gradients across all 4 copies
-   → Each GPU applies the same optimizer step
-   → Models stay identical
-
-4. Repeat with next batch
-```
-
-### Why DP Breaks at 70B+ Parameters
-
-Every GPU holds the **entire** model + optimizer states + gradients + activations. A 70B parameter model at fp16 is ~140 GB of weights alone — nearly 2× a single 80 GB A100, before accounting for optimizer states (3–4× model size for Adam fp32) or activations.
-
-### DP in Inference: Independent Replicas, No Sync
-
-DP runs as N independent model replicas behind a load balancer. No synchronization needed because there is no gradient exchange.
+1. **Single-Layer VRAM OOM**: DP requires every GPU to fit at least one full layer in memory. For 70B+ models where single projection matrices exceed tens of gigabytes, DP cannot execute; TP shards individual matrices across GPUs ($W/P$).
+2. **Inference Latency & The Memory Wall**: Online inference operates at batch size $B=1$, where token generation is memory-bandwidth bound ($\approx 1\text{ FLOP/byte}$). DP scales throughput across independent requests but cannot accelerate a single user's latency. TP aggregates $P \times$ HBM memory controllers across NVLink ($2\text{ TB/s} \to 16\text{ TB/s}$), accelerating 70B decode from $14\text{ tokens/s}$ to $108\text{ tokens/s}$.
+3. **Critical Batch Size in Training**: Adding GPUs via DP requires linearly scaling the global batch size ($B = P \times b$). Beyond OpenAI's empirical Critical Batch Size, sample efficiency drops sharply. TP consumes additional compute without expanding global batch size.
 
 ---
 

@@ -204,17 +204,17 @@ While intermediate buckets overlap seamlessly with earlier layer backpropagation
 ### Communication Volume vs VRAM Footprint Across Optimizers
 
 A common misconception conflates gradient communication volume with optimizer state memory:
-- **Gradient Communication ($2\text{ bytes/parameter}$ in BF16)**: Every parameter requires one gradient scalar during backpropagation. Under 16-bit precision (BF16/FP16, 2 bytes/element), the gradient tensor size is strictly $2N$ bytes, **identical for both AdamW and SGD**. Ring all-reduce transfers $2 \cdot \frac{P-1}{P} \times 2N \approx 4N$ bytes per GPU.
+- **Gradient Communication**: Every parameter requires one gradient scalar during backpropagation. Under native 16-bit precision (BF16/FP16 parameters), gradients are 2 bytes/param ($2N$ bytes payload), yielding a ring all-reduce transfer of $2 \cdot \frac{P-1}{P} \times 2N \approx 4N$ bytes per GPU. Under mixed precision with FP32 master weights where gradients are cast to FP32, the payload is $4N$ bytes. Crucially, **communicated gradient volume is identical for both AdamW and SGD**.
 - **Optimizer State Footprint (AdamW vs SGD Memory Divergence)**:
 
-| Memory Component | AdamW (Mixed Precision) | Momentum-Free SGD |
+| Memory Component | AdamW Optimizer | Momentum-Free SGD |
 |---|---|---|
-| **Model Parameters (BF16)** | 2 bytes / param | 2 bytes / param |
-| **Gradients (BF16, communicated)** | **2 bytes / param (identical)** | **2 bytes / param (identical)** |
+| **Model Parameters** | 2 bytes (BF16) or 4 bytes (FP32) | 2 bytes (BF16) or 4 bytes (FP32) |
+| **Gradients (communicated)** | **2 or 4 bytes / param (identical)** | **2 or 4 bytes / param (identical)** |
 | **Momentum $m$ (FP32)** | 4 bytes / param | 0 bytes |
 | **Variance $v$ (FP32)** | 4 bytes / param | 0 bytes |
-| **FP32 Master Weights** | 4 bytes / param | 0 bytes |
-| **Total Optimizer State Footprint** | **8 to 12 bytes / param** | **0 bytes (stateless)** |
+| **FP32 Master Weights** | 4 bytes (in mixed precision; 0 bytes if pure FP32) | 0 bytes |
+| **Total Optimizer State Footprint** | **8 B/param (pure FP32: $m+v$) to 12 B/param (mixed: $m+v+W_{\text{master}}$)** | **0 bytes (stateless)** |
 
 While DDP is conceptually simple and requires only one collective phase per step, it incurs distinct memory and communication constraints:
 
