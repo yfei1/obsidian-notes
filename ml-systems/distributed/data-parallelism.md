@@ -144,6 +144,52 @@ Rank 2 final layer 0 param norm: 0.157498
 
 ---
 
+---
+
+## Communication-Computation Overlap: Asynchronous Backward All-Reduce
+
+The naive DDP pipeline executes backward computation and gradient synchronization sequentially:
+$$\text{Sequential Step Time} = T_{\text{forward}} + T_{\text{backward}} + T_{\text{all\_reduce}}$$
+In production training, gradient synchronization is almost completely hidden by overlapping it with backward computation (see [[ml-systems/distributed/communication-computation-overlap]]):
+
+### Layer Backward Dependency Analysis
+
+Backpropagation executes in reverse order, from the loss layer down to the input layer. At each layer $l$ with linear transformation $Y = X W_l$:
+
+```text
+               Incoming Activation Gradient ∇_Y L (from Layer l+1)
+                                      │
+                                      ▼
+                        ┌───────────────────────────┐
+                        │   Layer l Backward Pass   │
+                        └─────────────┬─────────────┘
+                                      │
+               ┌──────────────────────┴──────────────────────┐
+               ▼                                             ▼
+  Activation Gradient ∇_X L = (∇_Y L) W_l^T      Parameter Gradient ∇_{W_l} L = X^T (∇_Y L)
+  - Passed upstream to Layer l-1                  - Consumed ONLY by optimizer.step()
+  - Sits on the compute critical path             - FREE of downstream compute dependencies!
+```
+
+1. **Activation Gradient ($\nabla_X L$)**: Layer $l-1$ requires $\nabla_X L$ as its input to compute its own gradients. This dependency serializes the backward pass from layer $L$ to layer 1.
+2. **Parameter Gradient ($\nabla_{W_l} L$)**: Once computed, the weight gradient has no downstream dependents. It is not consumed by earlier layers and sits idle in memory until `optimizer.step()`.
+
+### "As Soon as Gradient is Done": The PyTorch Bucket Mechanism
+
+Because $\nabla_{W_l} L$ has no forward or backward dependents, frameworks do not wait for the backward pass to finish. As soon as a layer's weight gradient is calculated, PyTorch dispatches it to the network fabric immediately:
+
+```text
+GPU Compute Stream: [ Backprop Layer L ] ──► [ Backprop Layer L-1 ] ──► [ Backprop Layer L-2 ]
+NCCL Comm Stream:                            [ ░░ All-Reduce Layer L ░░ ] ──► [ ░ All-Reduce L-1 ░ ]
+Timeline:           ◄─────────────────────── max(T_backward, T_all_reduce) ───────────────────────►
+```
+
+1. **Autograd Post-Accumulate Hooks**: PyTorch attaches C++ hooks (`post_accumulate_grad_hook`) to every leaf parameter. As backpropagation populates `param.grad`, the hook fires immediately.
+2. **Gradient Bucketing (25 MB Buffers)**: Dispatching thousands of individual parameter tensors creates severe network latency bottlenecks due to packet header overhead and kernel launch overhead. PyTorch groups parameters into reverse-ordered buckets (default 25 MB). As soon as the backward pass fills a 25 MB bucket, PyTorch fires a single `all_reduce` collective on an asynchronous CUDA stream.
+3. **Latent Overlap**: While earlier layers compute on the main CUDA compute stream, the network card concurrently transfers filled gradient buckets over the network fabric. By the time backpropagation reaches Layer 1, the vast majority of model gradients have already been reduced and averaged across all workers.
+
+---
+
 ## Memory Overhead and Scaling Boundaries
 
 While DDP is conceptually simple and requires only one collective phase per step, it incurs distinct memory and communication constraints:
