@@ -192,3 +192,4 @@ tags or MRRS to cover the new BDP, the extra lanes sit idle.
 - [[ml-systems/hardware/numa-memory-architecture]] — NUMA topology, LFBs, why CPU access is sensitive
 - [[ml-systems/hardware/linux-numa-memory-policy]] — Controlling which NUMA node gets the allocation
 - [[ml-systems/gpu/gpu-memory-hierarchy]] — GPU-side memory system (HBM, L2, shared memory)
+- [[ml-systems/distributed/cluster-network-hierarchy]] — GPU and HCA interconnect topology, GPUDirect RDMA over PCIe, and CPU bypass mechanics

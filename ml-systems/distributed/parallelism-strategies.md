@@ -340,3 +340,4 @@ The bubble shrinks to near-zero because the blocking condition — "wait for the
 - [[ml-systems/distributed/communication-computation-overlap]] — overlapping NCCL collectives with GEMM compute across TP, PP, and FSDP
 - [[ml-systems/foundations/sequential-vs-parallel-blocks]] — halving Tensor Parallelism all-reduce calls via parallel block execution
 - [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — how Pipeline Parallelism bubble overhead forces wider, shallower models
+- [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier interconnect hierarchy (NVLink, InfiniBand, Ethernet), 18x bandwidth gap, and CPU bypass mechanisms

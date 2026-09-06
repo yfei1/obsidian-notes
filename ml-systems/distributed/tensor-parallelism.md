@@ -281,7 +281,7 @@ This asymmetry is why gather is used only once (LM head at the end) — keeping 
 - [[ml-systems/distributed/zero-fsdp-memory-optimization]] — ZeRO uses all-gather and reduce-scatter (see NCCL table above) rather than all-reduce, trading communication pattern for per-rank memory reduction
 - [[ml-systems/distributed/sequence-and-context-parallelism]] — SP/CP partition along the sequence dimension rather than the weight dimension; often combined with TP within a node
 - [[ml-systems/foundations/attention-mechanics]] — multi-head attention structure that TP splits across heads in the QKV projections
-- [[ml-systems/gpu/gpu-memory-hierarchy]] — NVLink vs. InfiniBand bandwidth numbers that determine whether TP stays within a node
+- [[ml-systems/distributed/cluster-network-hierarchy]] — NVLink vs. InfiniBand bandwidth numbers, 18x gap, and cluster interconnect hierarchy that determine whether TP stays within a node
 - [[ml-systems/distributed/validating-parallelism-at-scale]] — correctness checks for TP and other parallelism strategies at deployment scale
 - [[ml-systems/foundations/pt-moe-architecture]] — MoE expert parallelism combines with TP; understanding TP is prerequisite for reading that note
 - [[ml-systems/vllm/fused-moe-vllm-implementation]]

@@ -79,6 +79,7 @@ Read after GPU section.
 5. [[ml-systems/distributed/vllm-distributed-groups]] — 6 process groups, 5D rank tensor
 6. [[ml-systems/distributed/vllm-process-group-rebuild]] — runtime group rebuild for PT-MoE
 7. [[ml-systems/distributed/validating-parallelism-at-scale]] — testing distributed with tiny model
+8. [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier interconnect hierarchy (NVLink, InfiniBand, Ethernet), 18x bandwidth gap, RDMA vs NVLink memory semantics, and NCCL kernel mechanics
 
 ### 5. Inference — Engine, KV Cache, Serving
 

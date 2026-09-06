@@ -128,3 +128,4 @@ $$\text{Realistic Step Time} = \max(T_{\text{computation}}, T_{\text{communicati
 - [[ml-systems/gpu/gpu-kernel-timing-and-benchmarking]] — asynchronous CUDA stream timing, warmup, and MFU derivations
 - [[ml-systems/gpu/arithmetic-intensity-and-roofline]] — operational arithmetic intensity and hardware machine balance
 - [[ml-systems/foundations/sequential-vs-parallel-blocks]] — comparing block parallelization against multi-stream communication-computation overlap
+- [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier cluster interconnect hierarchy, NCCL channel kernel launch, and CPU-off-data-path RDMA transports
