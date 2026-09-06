@@ -104,7 +104,7 @@ Consider 2 GPUs with input $X \in \mathbb{R}^{1 \times 4}$, $W_1 \in \mathbb{R}^
    $$y_0 = h_0 \cdot W_{2,\text{top}}, \quad y_1 = h_1 \cdot W_{2,\text{bottom}}$$
 4. **Final Single Synchronization**: Block matrix addition guarantees exact output equivalence:
    $$Y = y_0 + y_1 = \text{dist.all\_reduce}(Y_p, \text{op}=\text{dist.ReduceOp.SUM})$$
-   Evaluated numerically, single-GPU reference $Y$ and Megatron $(y_0 + y_1)$ match to exact $0.0$ difference.
+   Evaluated numerically, single-GPU reference $Y$ and Megatron $(y_0 + y_1)$ match to machine precision (within floating-point rounding $\epsilon \le 10^{-7}$).
 
 ### Pairing Comparison & The Col→Col Overhead
 
