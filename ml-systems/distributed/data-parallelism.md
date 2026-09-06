@@ -184,8 +184,8 @@ NCCL Comm Stream:                            [ ░░ All-Reduce Layer L ░░ 
 Timeline:           ◄─────────────────────── max(T_backward, T_all_reduce) ───────────────────────►
 ```
 
-1. **Autograd Post-Accumulate Hooks**: PyTorch attaches C++ hooks (`post_accumulate_grad_hook`) to every leaf parameter. As backpropagation populates `param.grad`, the hook fires immediately.
-2. **Gradient Bucketing (25 MB Buffers)**: Dispatching thousands of individual parameter tensors creates severe network latency bottlenecks due to packet header overhead and kernel launch overhead. PyTorch groups parameters into reverse-ordered buckets (default 25 MB). As soon as the backward pass fills a 25 MB bucket, PyTorch fires a single `all_reduce` collective on an asynchronous CUDA stream.
+1. **Autograd Accumulator Hooks**: In default eager mode, PyTorch's C++ Reducer (`torch/csrc/distributed/c10d/reducer.cpp:185, 192`) installs post-hooks on each parameter's gradient accumulator (`grad_accumulator->add_post_hook`). As backpropagation populates `param.grad`, it triggers `mark_variable_ready_dense` (:612). In compiled DDP with `torch.compile`, it attaches `param.register_post_accumulate_grad_hook` (`torch/nn/parallel/distributed.py:1191`).
+2. **Gradient Bucketing (25 MiB Buffers)**: Dispatching thousands of individual parameter tensors creates severe network latency bottlenecks from packet header serialization. PyTorch groups parameters into reverse-ordered buckets (default 25 MiB = 26.214 MB, defined by `_DEFAULT_BUCKET_CAP_MB = 25` in `distributed.py:31`). To overlap communication even earlier, DDP configures a smaller initial bucket (`first_bucket_bytes_cap`, `reducer.cpp:96`). As soon as a bucket fills, PyTorch dispatches an asynchronous `all_reduce` collective on a background CUDA stream.
 3. **Latent Overlap**: While earlier layers compute on the main CUDA compute stream, the network card concurrently transfers filled gradient buckets over the network fabric. By the time backpropagation reaches Layer 1, the vast majority of model gradients have already been reduced and averaged across all workers.
 
 ---
