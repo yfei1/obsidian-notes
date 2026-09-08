@@ -161,7 +161,7 @@ The historical transition from Mean Squared Error (MSE) to Cross-Entropy solved 
   When a model is completely wrong ($P_{\text{target}} \to 0.0001$), the term $P(1 - P) \approx 0.0001$ shrinks the gradient by $10{,}000\times$, freezing parameter updates in a dead state.
 - **Cross-Entropy Exact Cancellation (Canonical Link)**: Cross-entropy's derivative $\frac{\partial L}{\partial P} = -\frac{1}{P}$ cancels the Softmax derivative numerator $P(1 - P)$:
   $$\frac{\partial L}{\partial Z} = \frac{1}{P} \cdot P(1 - P) = (1 - P) = P - T$$
-  In GLM theory (Nelder & Wedderburn, 1972), Softmax and Cross-Entropy form a canonical link pair where non-linear curvature cancels exactly.
+  In GLM theory (Nelder & Wedderburn, 1972, JRSS Series A 135(3):370-384), Softmax and Cross-Entropy form a canonical link pair where non-linear curvature cancels exactly.
 - **Gradient Stability Bound**: Even if $P_{\text{target}} \to 0.0$ and $\text{Loss} \to +\infty$, the gradient is strictly bounded:
   $$\left|\frac{\partial \text{Loss}}{\partial z_k}\right| = |P_k - T_k| \le 1.0$$
   The gradient cannot explode at the loss layer; large penalties manifest as firm, bounded $\pm 1.0$ update vectors.
