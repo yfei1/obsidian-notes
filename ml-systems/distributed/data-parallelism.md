@@ -211,8 +211,8 @@ While intermediate buckets overlap seamlessly with upstream backpropagation, the
 
 1. **Head Boundary (Cold-Start Bubble at Layer $L$)**: When backpropagation starts at the loss layer, the network fabric idles with zero utilization waiting for gradients to compute. If a bucket requires 25 MiB, the network stalls until enough layers finish to fill it. To trigger early dispatch and eliminate cold-start idling, PyTorch configures a smaller initial bucket (`first_bucket_bytes_cap`, `reducer.cpp:96`).
 2. **Tail Boundary (Exposed Latency at Layer 1)**: When backpropagation reaches the input layer, no upstream layers remain to execute on the compute stream. Because `optimizer.step()` requires all gradients to be fully reduced, the GPU must stall until the final bucket (Bucket 0) finishes transmitting across the network fabric:
-   $$\text{Real Step Time} = \max(T_{\text{compute}}, T_{\text{comm}}) + T_{\text{cold\_start}}(\text{first bucket}) + T_{\text{exposed}}(\text{final bucket})$$
-   Intermediate layers achieve full overlap, but both boundaries expose un-overlapped tail latency on the critical path.
+   $$\text{Real Step Time} = \max(T_{\text{compute}}, T_{\text{cold\_start}} + T_{\text{comm\_intermediate}}) + T_{\text{exposed}}(\text{Bucket 0})$$
+   Resource idling differs at each boundary: at the head, the network idles while the GPU computes Layer $L$ (absorbed by compute unless communication dominates); at the tail, the GPU compute engine idles while Bucket 0 finishes transmitting (always paid on the critical path).
 
 ---
 
