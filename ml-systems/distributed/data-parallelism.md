@@ -64,6 +64,21 @@ Modern LLMs rely on AdamW (see [[ml-systems/training/first-order-optimizers]]), 
 
 ---
 
+### Deterministic Mirroring: Why DDP Communicates Only Gradients (Not g², m, or v)
+
+AdamW requires both first moments ($m_t$, from gradients $g$) and second moments ($v_t$, from squared gradients $g^2$). A common puzzle is why DDP only communicates the first-order gradient $\bar{g}$, rather than transmitting $g^2$, momentum $m$, or variance $v$:
+
+1. **The Deterministic Mirroring Principle**:
+   - Once all workers receive the identical averaged global gradient $\bar{g}_t$ via `all_reduce(op=AVG)`, every worker holds the exact same input.
+   - Initial parameters $W_0$ and initial optimizer states ($m_0 = 0, v_0 = 0$) are identical across workers.
+   - Because AdamW state updates ($m_t = \beta_1 m_{t-1} + (1-\beta_1) \bar{g}_t$ and $v_t = \beta_2 v_{t-1} + (1-\beta_2) \bar{g}_t^2$) are purely deterministic functions of identical inputs, each GPU computes the exact same $m_t, v_t$, and $W_{t+1}$ locally. Communicating $g^2, m$, or $v$ over the network would be completely redundant.
+2. **Why Averaging $g^2$ on the Wire is Mathematically Invalid**:
+   Averaging squared local gradients across workers produces a different quantity than squaring the average gradient:
+   $$\frac{1}{P} \sum_{p=1}^P g_p^2 \ne \left(\frac{1}{P} \sum_{p=1}^P g_p\right)^2 = \bar{g}^2$$
+   The mean of squares exceeds the square of the mean by the cross-worker variance $\text{Var}(g)$. Large-batch AdamW normalizes updates by the square of the global average gradient $\bar{g}^2$, which each worker computes locally. Averaging local squares would distort curvature estimates by inflating second moments with micro-batch variance.
+
+---
+
 ## Minimal PyTorch DDP Implementation from Scratch
 
 The following self-contained script implements minimal Data Parallelism across 4 processes:
