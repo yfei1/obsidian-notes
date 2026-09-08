@@ -174,7 +174,7 @@ In vanilla TP (Megatron v1), the backward pass uses `All-Reduce(SUM)` to reconst
 2. **Megatron v2 Sequence Parallelism (Korthikanti et al., 2022, arXiv:2205.05198)**: In standard TP, LayerNorm and Dropout duplicate activations across all $P$ ranks. Sequence Parallelism (see [[ml-systems/distributed/sequence-and-context-parallelism]]) splits $\text{All-Reduce} \equiv \text{Reduce-Scatter} + \text{All-Gather}$:
    - *Forward*: RowParallel terminates with `Reduce-Scatter` (scattering activations along sequence dimension $\frac{S}{P}$ for LayerNorm); ColumnParallel begins with `All-Gather` (recovering full sequence length).
    - *Backward*: The adjoint reverses these operations: ColumnParallel backward issues **`Reduce-Scatter`** along sequence length, and RowParallel backward issues **`All-Gather`**.
-   - *(Byte-Neutrality Note: Because Reduce-Scatter and All-Gather each transfer $\frac{P-1}{P} S$ bytes, the pair moves $2 \frac{P-1}{P} S$ bytes—identical network volume to All-Reduce. SP is byte-neutral and wins strictly by slashing activation memory $P\times$).*
+   - *(Byte-Neutrality Note: Because Reduce-Scatter and All-Gather each transfer $\frac{P-1}{P} S$ bytes, the pair moves $2 \frac{P-1}{P} S$ bytes—identical network volume to All-Reduce. SP is byte-neutral; it wins by shrinking duplicated LayerNorm and Dropout activations by $P\times$, achieving up to $5\times$ total activation memory reduction when combined with selective recomputation per Korthikanti et al., 2022).*
 
 ---
 
