@@ -112,6 +112,62 @@ pay          floor      your model's fault
 
 ---
 
+---
+
+## Formal Derivation of Cross-Entropy Loss & The $P - T$ Gradient
+
+In neural language modeling, the training loss transforms a model's high-dimensional unnormalized score vector (logits $Z$) into a single scalar value that guides gradient descent.
+
+### 1. The Step-by-Step Mathematical Derivation: From MLE to $-\log(P_{\text{target}})$
+
+1. **Maximum Likelihood Estimation (MLE)**: For a training sequence, the objective is to maximize the joint probability of predicting the correct next tokens:
+   $$\text{Maximize } \mathcal{L} = \prod_{t=1}^T P(w_t \mid w_{<t})$$
+2. **Logarithmic Transformation (Summation over Product)**: Multiplying thousands of probabilities $P < 1.0$ causes floating-point underflow ($P \to 0.0$). Taking the natural logarithm converts the product into a sum without altering the location of the optimum:
+   $$\log \mathcal{L} = \sum_{t=1}^T \log P(w_t \mid w_{<t})$$
+3. **Negative Sign (Minimization Objective)**: Gradient descent minimizes loss functions ($\text{Loss} \to 0$). Because probabilities satisfy $P \in (0, 1]$, their logarithms are strictly non-positive ($\log P \le 0$). Adding a negative sign yields a positive penalty:
+   $$\text{Loss} = -\log P(w_{\text{target}})$$
+4. **Cancellation of Non-Target Classes**: The formal cross-entropy between true distribution $T$ and predicted distribution $P$ across vocabulary size $V$ is:
+   $$\text{Loss} = -\sum_{i=1}^V T_i \log(P_i)$$
+   Because ground-truth classification provides a one-hot label vector ($T_{\text{target}} = 1$, and $T_{j \ne \text{target}} = 0$), all incorrect class terms multiply by zero and vanish:
+   $$\text{Loss} = -\left(1 \cdot \log(P_{\text{target}}) + \sum_{j \ne \text{target}} 0 \cdot \log(P_j)\right) = -\log(P_{\text{target}})$$
+
+---
+
+### 2. The $P - T$ Gradient Derivation: Why $T$ Emerges from $-\log(P_{\text{target}})$
+
+Expanding $P_{\text{target}}$ using the Softmax definition ($P_i = \frac{e^{z_i}}{\sum_j e^{z_j}}$) exposes the underlying logits:
+$$\text{Loss} = -\log\left(\frac{e^{z_{\text{target}}}}{\sum_j e^{z_j}}\right) = -z_{\text{target}} + \log\left(\sum_{j=1}^V e^{z_j}\right)$$
+
+Differentiating this scalar loss with respect to any logit $z_k$:
+
+1. **For the Target Class ($k = \text{target}$, where $T_k = 1$)**:
+   $$\frac{\partial \text{Loss}}{\partial z_{\text{target}}} = \frac{\partial}{\partial z_{\text{target}}}\left(-z_{\text{target}}\right) + \frac{\frac{\partial}{\partial z_{\text{target}}}\left(\sum e^{z_j}\right)}{\sum e^{z_j}} = -1 + \frac{e^{z_{\text{target}}}}{\sum e^{z_j}} = P_{\text{target}} - 1$$
+2. **For Non-Target Classes ($k \ne \text{target}$, where $T_k = 0$)**:
+   $$\frac{\partial \text{Loss}}{\partial z_k} = \frac{\partial}{\partial z_k}\left(-z_{\text{target}}\right) + \frac{\frac{\partial}{\partial z_k}\left(\sum e^{z_j}\right)}{\sum e^{z_j}} = 0 + \frac{e^{z_k}}{\sum e^{z_j}} = P_k - 0$$
+
+Assembling all class derivatives into vector form proves the identity:
+$$\nabla_Z \text{Loss} = \left[\frac{\partial L}{\partial z_1}, \dots, \frac{\partial L}{\partial z_V}\right] = [P_1 - T_1, \dots, P_V - T_V] = \mathbf{P - T}$$
+
+*(The label vector $T = [1, 0, \dots, 0]$ is not an external heuristic; the value $1$ emerges naturally from the derivative of $-z_{\text{target}}$, and $0$ emerges because non-target logits do not appear in the numerator).*
+
+---
+
+### 3. Canonical Link Function & Why Cross-Entropy Prevents Gradient Vanishing
+
+The historical transition from Mean Squared Error (MSE) to Cross-Entropy solved a foundational failure in neural network training:
+
+- **MSE Gradient Saturation**: Under MSE ($\frac{1}{2}(P - T)^2$), the derivative with respect to logits carries an extra Softmax derivative factor:
+  $$\frac{\partial L_{\text{MSE}}}{\partial Z} = (P - T) \cdot P(1 - P)$$
+  When a model is completely wrong ($P_{\text{target}} \to 0.0001$), the term $P(1 - P) \approx 0.0001$ shrinks the gradient by $10{,}000\times$, freezing parameter updates in a dead state.
+- **Cross-Entropy Exact Cancellation (Canonical Link)**: Cross-entropy's derivative $\frac{\partial L}{\partial P} = -\frac{1}{P}$ cancels the Softmax derivative numerator $P(1 - P)$:
+  $$\frac{\partial L}{\partial Z} = \frac{1}{P} \cdot P(1 - P) = (1 - P) = P - T$$
+  In GLM theory (Nelder & Wedderburn, 1972), Softmax and Cross-Entropy form a canonical link pair where non-linear curvature cancels exactly.
+- **Gradient Stability Bound**: Even if $P_{\text{target}} \to 0.0$ and $\text{Loss} \to +\infty$, the gradient is strictly bounded:
+  $$\left|\frac{\partial \text{Loss}}{\partial z_k}\right| = |P_k - T_k| \le 1.0$$
+  The gradient cannot explode at the loss layer; large penalties manifest as firm, bounded $\pm 1.0$ update vectors.
+
+---
+
 ## Perplexity: Loss as a Number of Choices
 
 Cross-entropy is a logarithm, and humans read logarithms badly. **Perplexity un-logs it into a count: how many equally-likely options the model is effectively choosing between.**
