@@ -166,14 +166,15 @@ Neither worker holds the full gradient ($110 \ne 260$, $150 \ne 260$); each hold
 
 ### Why TP Backward Requires Reduce-Scatter (Sequence Parallelism)
 
-In vanilla TP (Megatron v1), the backward pass uses `All-Reduce(SUM)` to reconstruct input gradients. However, in modern LLMs, backpropagation uses **`Reduce-Scatter`** due to two mathematical mechanisms:
+In vanilla TP (Megatron v1), the backward pass uses `All-Reduce(SUM)` to reconstruct input gradients. However, in modern LLMs with Sequence Parallelism enabled, backpropagation uses **`Reduce-Scatter`** due to two mathematical mechanisms:
 
 1. **Adjoint Collective Law**: In automatic differentiation, the mathematical adjoint (backward gradient) of an `all_gather` is a **`reduce_scatter`**:
    $$\text{Backward}(\text{All-Gather}) \equiv \text{Reduce-Scatter}$$
    When forward activations are gathered across ranks, backward propagation sums incoming adjoint shards from all workers and scatters the reduced gradient back to the original shard owner.
-2. **Megatron v2 Sequence Parallelism (SP)**: In standard TP, LayerNorm and Dropout duplicate activations across all $P$ ranks. Sequence Parallelism (see [[ml-systems/distributed/sequence-and-context-parallelism]]) splits $\text{All-Reduce} \equiv \text{Reduce-Scatter} + \text{All-Gather}$:
-   - *Forward*: RowParallel terminates with `Reduce-Scatter` (scattering activations along the sequence dimension $\frac{S}{P}$ for LayerNorm); ColumnParallel begins with `All-Gather` (recovering full sequence length).
+2. **Megatron v2 Sequence Parallelism (Korthikanti et al., 2022, arXiv:2205.05198)**: In standard TP, LayerNorm and Dropout duplicate activations across all $P$ ranks. Sequence Parallelism (see [[ml-systems/distributed/sequence-and-context-parallelism]]) splits $\text{All-Reduce} \equiv \text{Reduce-Scatter} + \text{All-Gather}$:
+   - *Forward*: RowParallel terminates with `Reduce-Scatter` (scattering activations along sequence dimension $\frac{S}{P}$ for LayerNorm); ColumnParallel begins with `All-Gather` (recovering full sequence length).
    - *Backward*: The adjoint reverses these operations: ColumnParallel backward issues **`Reduce-Scatter`** along sequence length, and RowParallel backward issues **`All-Gather`**.
+   - *(Byte-Neutrality Note: Because Reduce-Scatter and All-Gather each transfer $\frac{P-1}{P} S$ bytes, the pair moves $2 \frac{P-1}{P} S$ bytes—identical network volume to All-Reduce. SP is byte-neutral and wins strictly by slashing activation memory $P\times$).*
 
 ---
 
