@@ -147,6 +147,23 @@ Tensor Parallelism exhibits strict mathematical duality between forward and back
 | **Forward Pass** | $h_p = X W_{1,p}$ (**Zero comm**, output is sharded) | $Y_p = h_p W_{2,p}$ (Local partial dot-products) | **1 All-Reduce(SUM)** at Row output ($Y = \sum Y_p$) |
 | **Backward Pass** | $\nabla_{W_{1,p}} L = X^T (\nabla_{h_p} L)$ (Local, zero comm)<br>$\nabla_X L = \sum (\nabla_{h_p} L) W_{1,p}^T$ (**All-Reduce(SUM)**) | $\nabla_{W_{2,p}} L = h_p^T (\nabla_Y L)$ (Local, zero comm)<br>$\nabla_{h_p} L = (\nabla_Y L) W_{2,p}^T$ (**Zero comm**, matches local shard) | **1 All-Reduce(SUM)** at Column input ($\nabla_X L$) |
 
+### Why Column-Parallel Backpropagation Produces Partial Sums
+
+In any linear transformation $Y = X W$, backpropagation computes two distinct gradients:
+1. **Weight Gradient ($\nabla_W L = X^T \nabla_Y L$)**: Updates local parameters (consumed locally).
+2. **Input Gradient ($\nabla_X L = \nabla_Y L \cdot W^T$)**: Propagates upstream as the activation gradient for earlier layers.
+
+In Column Parallelism, $W$ is sliced into $[W_0, W_1]$. While each rank computes its local weight gradient independently ($\nabla_{W_p} L = X^T \nabla_{Y_p} L$), the input gradient is an algebraic sum across all column slices:
+$$\nabla_X L = (\nabla_Y L) \cdot W^T = [(\nabla_Y L)_0, (\nabla_Y L)_1] \cdot \begin{bmatrix} W_0^T \\ W_1^T \end{bmatrix} = (\nabla_Y L)_0 W_0^T + (\nabla_Y L)_1 W_1^T$$
+
+Each rank computes only its local dot-product component:
+- Consider $X = [1, 2]$, $W = \begin{bmatrix} 3 & 4 & 5 \\ 6 & 7 & 8 \end{bmatrix}$, and $\nabla_Y L = [10, 20, 30]$.
+- **Single-GPU Ground Truth**: $\nabla_X L = [10, 20, 30] \begin{bmatrix} 3 & 6 \\ 4 & 7 \\ 5 & 8 \end{bmatrix} = [260, 440]$.
+- **GPU 0 ($W_0 = \begin{bmatrix} 3 & 4 \\ 6 & 7 \end{bmatrix}$)**: $(\nabla_X L)_0 = [10, 20] \begin{bmatrix} 3 & 6 \\ 4 & 7 \end{bmatrix} = [110, 200]$.
+- **GPU 1 ($W_1 = \begin{bmatrix} 5 \\ 8 \end{bmatrix}$)**: $(\nabla_X L)_1 = [30] \begin{bmatrix} 5 & 8 \end{bmatrix} = [150, 240]$.
+
+Neither worker holds the full gradient ($110 \ne 260$, $150 \ne 260$); each holds a partial sum across all features. Ranks must execute `all_reduce(op=dist.ReduceOp.SUM)` to assemble $[110, 200] + [150, 240] = [260, 440]$.
+
 ### Why TP Backward Requires Reduce-Scatter (Sequence Parallelism)
 
 In vanilla TP (Megatron v1), the backward pass uses `All-Reduce(SUM)` to reconstruct input gradients. However, in modern LLMs, backpropagation uses **`Reduce-Scatter`** due to two mathematical mechanisms:
