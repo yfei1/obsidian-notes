@@ -69,13 +69,15 @@ Modern LLMs rely on AdamW (see [[ml-systems/training/first-order-optimizers]]), 
 AdamW requires both first moments ($m_t$, from gradients $g$) and second moments ($v_t$, from squared gradients $g^2$). A common puzzle is why DDP only communicates the first-order gradient $\bar{g}$, rather than transmitting $g^2$, momentum $m$, or variance $v$:
 
 1. **The Deterministic Mirroring Principle**:
-   - Once all workers receive the identical averaged global gradient $\bar{g}_t$ via `all_reduce(op=AVG)`, every worker holds the exact same input.
+   - Once all workers receive the identical averaged global gradient $\bar{g}_t$ via `all_reduce(op=AVG)` (which ring all-reduce guarantees bitwise identical across ranks by broadcast), every worker holds the exact same input.
    - Initial parameters $W_0$ and initial optimizer states ($m_0 = 0, v_0 = 0$) are identical across workers.
-   - Because AdamW state updates ($m_t = \beta_1 m_{t-1} + (1-\beta_1) \bar{g}_t$ and $v_t = \beta_2 v_{t-1} + (1-\beta_2) \bar{g}_t^2$) are purely deterministic functions of identical inputs, each GPU computes the exact same $m_t, v_t$, and $W_{t+1}$ locally. Communicating $g^2, m$, or $v$ over the network would be completely redundant.
+   - Under static cluster membership, identical hyperparameters, and deterministic execution, AdamW state updates ($m_t = \beta_1 m_{t-1} + (1-\beta_1) \bar{g}_t$ and $v_t = \beta_2 v_{t-1} + (1-\beta_2) \bar{g}_t^2$) are purely deterministic functions of identical inputs. Each GPU computes the exact same $m_t, v_t$, and $W_{t+1}$ locally with zero drift. Communicating $g^2, m$, or $v$ over the network is completely redundant.
 2. **Why Averaging $g^2$ on the Wire is Mathematically Invalid**:
    Averaging squared local gradients across workers produces a different quantity than squaring the average gradient:
    $$\frac{1}{P} \sum_{p=1}^P g_p^2 \ne \left(\frac{1}{P} \sum_{p=1}^P g_p\right)^2 = \bar{g}^2$$
-   The mean of squares exceeds the square of the mean by the cross-worker variance $\text{Var}(g)$. Large-batch AdamW normalizes updates by the square of the global average gradient $\bar{g}^2$, which each worker computes locally. Averaging local squares would distort curvature estimates by inflating second moments with micro-batch variance.
+   The mean of squares exceeds the square of the mean by the cross-worker population variance:
+   $$\frac{1}{P} \sum_{p=1}^P g_p^2 = \bar{g}^2 + \text{Var}_{\text{pop}}(g), \quad \text{where } \text{Var}_{\text{pop}}(g) = \frac{1}{P} \sum_{p=1}^P (g_p - \bar{g})^2$$
+   Large-batch AdamW normalizes updates by the square of the global average gradient $\bar{g}^2$, which each worker computes locally. Averaging local squares on the wire would artificially inflate second moments by 2--4x with micro-batch variance, shrinking update step sizes by 30--50%.
 
 ---
 
