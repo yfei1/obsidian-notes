@@ -205,14 +205,14 @@ Timeline:           ◄───────────────────
 2. **Gradient Bucketing (25 MiB Buffers)**: Dispatching thousands of individual parameter tensors creates severe network latency bottlenecks from packet header serialization. PyTorch groups parameters into reverse-ordered buckets (default 25 MiB = 26.214 MB, defined by `_DEFAULT_BUCKET_CAP_MB = 25` in `distributed.py:31`). To overlap communication even earlier, DDP configures a smaller initial bucket (`first_bucket_bytes_cap`, `reducer.cpp:96`). As soon as a bucket fills, PyTorch dispatches an asynchronous `all_reduce` collective on a background CUDA stream.
 3. **Latent Overlap**: While earlier layers compute on the main CUDA compute stream, the network card concurrently transfers filled gradient buckets over the network fabric. By the time backpropagation reaches Layer 1, the vast majority of model gradients have already been reduced and averaged across all workers.
 
-### The Boundary Hazard: Why the Final Layer's Overhead is Exposed ($T_{\text{exposed}} > 0$)
+### The Boundary Hazard: Head and Tail Overlap Failures ($T_{\text{cold\_start}}$ and $T_{\text{exposed}}$)
 
-While intermediate buckets overlap seamlessly with earlier layer backpropagation, the final layer (Layer 1, the input layer) represents a hard boundary condition:
-1. **No Remaining Compute**: Once backpropagation computes gradients for Layer 1, no upstream layers remain to execute on the compute stream.
-2. **Mandatory Synchronization Fence**: `optimizer.step()` cannot execute until all gradients are reduced and averaged.
-3. **Exposed Tail Latency**: The GPU compute engine must stall until the final bucket's all-reduce completes across the network fabric:
-   $$\text{Step Time} = \max(T_{\text{compute}}, T_{\text{comm}}) + T_{\text{exposed}}(\text{Bucket 0})$$
-   This physical boundary explains why PyTorch's C++ Reducer configures a smaller initial bucket (`first_bucket_bytes_cap`, `reducer.cpp:96`)—deliberately shrinking the un-overlapped tail payload to minimize exposed idle stalls.
+While intermediate buckets overlap seamlessly with upstream backpropagation, the pipeline boundaries cannot achieve perfect overlap:
+
+1. **Head Boundary (Cold-Start Bubble at Layer $L$)**: When backpropagation starts at the loss layer, the network fabric idles with zero utilization waiting for gradients to compute. If a bucket requires 25 MiB, the network stalls until enough layers finish to fill it. To trigger early dispatch and eliminate cold-start idling, PyTorch configures a smaller initial bucket (`first_bucket_bytes_cap`, `reducer.cpp:96`).
+2. **Tail Boundary (Exposed Latency at Layer 1)**: When backpropagation reaches the input layer, no upstream layers remain to execute on the compute stream. Because `optimizer.step()` requires all gradients to be fully reduced, the GPU must stall until the final bucket (Bucket 0) finishes transmitting across the network fabric:
+   $$\text{Real Step Time} = \max(T_{\text{compute}}, T_{\text{comm}}) + T_{\text{cold\_start}}(\text{first bucket}) + T_{\text{exposed}}(\text{final bucket})$$
+   Intermediate layers achieve full overlap, but both boundaries expose un-overlapped tail latency on the critical path.
 
 ---
 
