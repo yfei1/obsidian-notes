@@ -208,7 +208,7 @@ Despite the presence of pipeline bubbles ("Pipelines seem terrible. Why do we do
    - In Naïve DDP, every GPU holds full model parameters ($2\Psi$) and full optimizer states ($12\Psi$). A 70B parameter model in BF16 requires $\approx 1.1\text{ TB}$ of static memory per worker, exceeding single-GPU physical capacity.
    - Pipeline Parallelism partitions layers sequentially across $p$ stages, shrinking static weight memory per GPU to $\mathbf{\frac{2\Psi}{p}}$ and optimizer states to $\mathbf{\frac{12\Psi}{p}}$, rendering model training physically feasible.
 
-2. **Pipelines Have Superior Communication Properties (Compared to FSDP)**:
+2. **Pipelines Have Superior Communication Properties (Compared to FDSP [sic] / FSDP)**:
    - **FSDP Communication Burden**: FSDP requires $3\times \text{\#params}$ across cluster-wide All-Gathers and Reduce-Scatters. Any network straggler stalls the entire collective synchronization barrier.
    - **Point-to-Point (P2P) Topology**: In Pipeline Parallelism, communication occurs strictly between adjacent stages ($r \to r+1$). There are zero global collective barriers; stage workers communicate asynchronously via `dist.send` and `dist.recv`.
    - **Small Activation Volume ($b \times s \times h$)**: The transmitted payload is strictly the boundary activation tensor:
@@ -218,10 +218,10 @@ Despite the presence of pipeline bubbles ("Pipelines seem terrible. Why do we do
 3. **Industrial Interconnect Affinity (Rule of Thumb)**:
    As the CS336 slide concludes: *"Generally, we will use pipelines on slower network links (i.e. inter-node) as a way to get better memory-wise scaling."* While Tensor Parallelism is confined to intra-node NVLink, Pipeline Parallelism comfortably scales across inter-node InfiniBand or Ethernet fabrics:
 
-| Interconnect Level | Hardware Bandwidth | Recommended Parallelism | Physical Rationale |
+| Interconnect Level | Hardware Bandwidth (Directional Conventions) | Recommended Parallelism | Physical Rationale |
 |---|---|---|---|
-| **Intra-Node (Host)** | High Bandwidth (NVLink: 900 GB/s – 1.8 TB/s) | **TP / FSDP** | Global All-Reduce and layer-by-layer parameter All-Gathers require NVLink bandwidth to overlap compute. |
-| **Inter-Node (Cluster)** | Lower Bandwidth (InfiniBand / RoCE: 400 Gbps $\approx$ 50 GB/s) | **PP / DP** | Point-to-point boundary activations ($b \times s \times h$) easily fit inside slower inter-node links without saturating bandwidth. |
+| **Intra-Node (Host)** | Ultra-High: **450 GB/s/dir (H100) / 900 GB/s/dir (B200)** (900 GB/s / 1.8 TB/s bidirectional aggregate per GPU) | **TP / FSDP** | Global All-Reduce and layer-by-layer parameter All-Gathers require NVLink bandwidth to overlap compute. |
+| **Inter-Node (Cluster)** | Lower: **50 GB/s/dir per NIC** (400 Gbps NDR InfiniBand / RoCE) | **PP / DP** | Point-to-point boundary activations ($b \times s \times h$) easily fit inside slower inter-node links without saturating bandwidth. |
 
 ---
 
@@ -242,7 +242,7 @@ Pipeline parallelism cannot achieve complete overlap at cluster boundaries:
    Data Parallelism shards the training batch while replicating model weights. Tensor Parallelism shards weight matrices within each individual layer across an NVLink domain. Pipeline Parallelism partitions layers sequentially across stages, communicating only boundary activations between adjacent stages via point-to-point transfers.
 
 2. **Decide: Why is Pipeline Parallelism favored for inter-node communication while Tensor Parallelism is restricted to intra-node NVLink?**
-   Tensor Parallelism performs two collective all-reduces per Transformer layer directly on the compute critical path, making it unviable over InfiniBand's 18x bandwidth cliff. Pipeline Parallelism only transfers activation boundaries of shape $[B_{\text{micro}}, S, H]$, which require low bandwidth and comfortably overlap across InfiniBand or Ethernet fabrics.
+   Tensor Parallelism performs two collective all-reduces per Transformer layer directly on the compute critical path, making it unviable over InfiniBand's bandwidth cliff (18x on DGX B200: 900 vs 50 GB/s/dir; 9x on DGX H100: 450 vs 50 GB/s/dir; see [[ml-systems/distributed/cluster-network-hierarchy]]). Pipeline Parallelism only transfers activation boundaries of shape $[B_{\text{micro}}, S, H]$, which require low bandwidth and comfortably overlap across InfiniBand or Ethernet fabrics.
 
 3. **Explain: What is the pipeline bubble, and what is the trade-off between GPipe and 1F1B scheduling?**
    The pipeline bubble represents GPU idle time during warm-up and cool-down, scaling as $F \approx \frac{p-1}{m}$. GPipe executes all forward micro-batches before backward passes, requiring $O(m)$ activation memory. 1F1B alternates forward and backward execution to cap in-flight activation memory to $O(p)$, enabling training with larger global batches without running out of memory.
