@@ -216,28 +216,37 @@ While intermediate buckets overlap seamlessly with upstream backpropagation, the
 
 ---
 
-## Memory Overhead and Scaling Boundaries
+## Memory Overhead and Scaling Boundaries (CS336 Naïve DP Cost Model)
 
-### Communication Volume vs VRAM Footprint Across Optimizers
+Naïve Data Parallelism exhibits three foundational scaling properties across compute, communication, and memory:
 
-A common misconception conflates gradient communication volume with optimizer state memory:
-- **Gradient Communication**: Every parameter requires one gradient scalar during backpropagation. Under native 16-bit precision (BF16/FP16 parameters), gradients are 2 bytes/param ($2N$ bytes payload), yielding a ring all-reduce transfer of $2 \cdot \frac{P-1}{P} \times 2N \approx 4N$ bytes per GPU. Under mixed precision with FP32 master weights where gradients are cast to FP32, the payload is $4N$ bytes. Crucially, **communicated gradient volume is identical for both AdamW and SGD**.
-- **Optimizer State Footprint (AdamW vs SGD Memory Divergence)**:
+### 1. Compute and Communication Scaling: Why "OK if Batches are Big"
 
-| Memory Component | AdamW Optimizer | Momentum-Free SGD |
-|---|---|---|
-| **Model Parameters** | 2 bytes (BF16) or 4 bytes (FP32) | 2 bytes (BF16) or 4 bytes (FP32) |
-| **Gradients (communicated)** | **2 or 4 bytes / param (identical)** | **2 or 4 bytes / param (identical)** |
-| **Momentum $m$ (FP32)** | 4 bytes / param | 0 bytes |
-| **Variance $v$ (FP32)** | 4 bytes / param | 0 bytes |
-| **FP32 Master Weights** | 4 bytes (in mixed precision; 0 bytes if pure FP32) | 0 bytes |
-| **Total Optimizer State Footprint** | **8 B/param (pure FP32: $m+v$) to 12 B/param (mixed: $m+v+W_{\text{master}}$)** | **0 bytes (stateless)** |
+In a cluster of $M$ machines with global batch size $B$:
+- **Compute Scaling**: Each GPU evaluates $\frac{B}{M}$ examples per step, scaling computational throughput linearly with cluster size.
+- **Communication Overhead ($2 \times \text{\# params}$ per batch)**:
+  - Forward pass requires **0 bytes** of communication.
+  - Backward pass synchronizes gradients via Ring All-Reduce, which requires two full cycles across the logical ring (Scatter-Reduce + All-Gather), transferring $2 \cdot \frac{M-1}{M} \times \text{Size} \approx \mathbf{2 \times \text{\# params}}$ per GPU.
+- **The Batch Dimension Contraction**:
+  In backpropagation, the weight gradient is computed as $\nabla_W L = X^T \cdot (\nabla_Y L)$. The matrix multiplication contracts the inner batch dimension $B$:
+  $$[D_{in} \times B] \times [B \times D_{out}] \implies [D_{in} \times D_{out}]$$
+  Regardless of whether $B = 1$ or $B = 100{,}000$, the communicated gradient tensor size is rigidly pinned at $2 \times \text{\# params}$. Because compute time scales linearly with batch size ($T_{\text{comp}} \propto \frac{B}{M}$) while communication volume is constant, large batches allow computation to easily dominate and hide communication latency under backward overlap.
 
-While DDP is conceptually simple and requires only one collective phase per step, it incurs distinct memory and communication constraints:
+### 2. Memory Breakdown: The 5 Copies and 16 Bytes per Parameter
 
-1. **Memory Redundancy**: Every GPU stores a full replica of model parameters ($M$ bytes), gradients ($M$ bytes), and optimizer states (for fp32 AdamW, $2 \times 4M = 8M$ bytes). Memory usage scales with model size $O(M)$, rather than shrinking with cluster size $P$.
-2. **Transition to Sharded Data Parallelism**: When model states exceed single-GPU VRAM limits, standard DDP becomes impossible. Frameworks transition to ZeRO / FSDP (see [[ml-systems/distributed/zero-fsdp-memory-optimization]]), which shards optimizer states, gradients, and parameters across data-parallel ranks.
-3. **Communication Footprint**: Ring all-reduce transfers $2 \cdot \frac{P-1}{P} \cdot M \approx 2M$ bytes per GPU per step. Because gradients are synchronized after backpropagation, DDP can overlap communication with backward computation (see [[ml-systems/distributed/communication-computation-overlap]]). High-bandwidth node fabrics (see [[ml-systems/distributed/cluster-network-hierarchy]]) ensure gradient transfers do not bottleneck step throughput.
+Naïve Data Parallelism provides **zero memory scaling**: every GPU must store full model states, creating severe VRAM bottlenecks for large models:
+
+| Tensor Copy | Component | Precision & Size | Purpose |
+|---|---|---|---|
+| **Copy 1** | **Model Parameters ($W$)** | 2 bytes (BF16) | High-speed forward and backward compute |
+| **Copy 2** | **Parameter Gradients ($g$)** | 2 bytes (BF16) | Transmitted across workers via All-Reduce |
+| **Copy 3** | **FP32 Master Weights ($W_{\text{master}}$)** | 4 bytes (FP32) | High-precision accumulator preventing underflow |
+| **Copy 4** | **Adam First Moment ($m$)** | 4 bytes (FP32) | Exponential moving average of past gradients |
+| **Copy 5** | **Adam Second Moment ($v$)** | 4 bytes (FP32) | Exponential moving average of squared gradients |
+| **Total Static Footprint** | **Full Mixed Precision** | **16 bytes / param** | **$8\times$ baseline BF16 weights (5 physical copies)** |
+| *Alternative (In-Place)* | *Without Master Weights* | *12 bytes / param* | *$6\times$ baseline BF16 weights (4 physical copies)* |
+
+*(Motivation for ZeRO / FSDP: Because all 5 copies are replicated identically across every GPU in Naïve DP, sharding optimizer states, gradients, and parameters across workers eliminates this redundancy at zero mathematical cost; see [[ml-systems/distributed/zero-fsdp-memory-optimization]]).*
 
 ---
 

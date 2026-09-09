@@ -12,13 +12,22 @@ See [[ml-systems/distributed/parallelism-strategies]] for how ZeRO/FSDP fits amo
 
 ## How ZeRO Works, Stage by Stage
 
-Running example: **7B model, Adam fp32, N=8 GPUs**.
+In the foundational ZeRO paper (Rajbhandari et al., 2020) and CS336 formulation, memory scaling is defined using standard algebraic notation:
+- $\mathbf{\Psi}$ (Greek letter **Psi**): Total model parameter count (e.g., $\Psi = 7.5\text{B}$).
+- $\mathbf{K = 12}$: FP32 AdamW optimizer state footprint per parameter (4 B master weights + 4 B first momentum $m$ + 4 B second variance $v$).
+- $\mathbf{N_d}$: Data parallel degree / number of GPU ranks (e.g., $N_d = 64$).
+- Baseline precision: 16-bit mixed precision (2 B for BF16 parameters, 2 B for BF16 gradients).
 
-Memory per component (derivation):
-- Parameters: `7×10⁹ × 4 B = 28 GB`
-- Gradients: `7×10⁹ × 4 B = 28 GB`
-- Adam states (momentum + variance): `2 × 7×10⁹ × 4 B = 56 GB`
-- **Total per GPU in vanilla DP: 112 GB** — identical copy on all 8 GPUs.
+### Stage-by-Stage Memory Consumption Table
+
+| ZeRO Stage | Sharded Components | Memory Consumed per GPU Formula | Numerical Footprint ($\Psi = 7.5\text{B}, N_d = 64, K = 12$) | Reduction Factor |
+|---|---|---|---|---|
+| **Baseline (Naïve DP)** | None (all states replicated) | $(2 + 2 + K) \cdot \Psi = \mathbf{16\Psi}$ | $16 \times 7.5\text{ GB} = \mathbf{120.0\text{ GB}}$ | $1.0\times$ (Baseline) |
+| **ZeRO-1 ($P_{os}$)** | **Optimizer States** only | $2\Psi + 2\Psi + \frac{K \cdot \Psi}{N_d}$ | $30\text{ GB} + \frac{12 \times 7.5}{64}\text{ GB} = \mathbf{31.4\text{ GB}}$ | $\mathbf{3.8\times}$ |
+| **ZeRO-2 ($P_{os+g}$)** | **Optimizer States + Gradients** | $2\Psi + \frac{(2 + K) \cdot \Psi}{N_d}$ | $15\text{ GB} + \frac{14 \times 7.5}{64}\text{ GB} = \mathbf{16.6\text{ GB}}$ | $\mathbf{7.2\times}$ |
+| **ZeRO-3 / FSDP ($P_{os+g+p}$)** | **Optimizer States + Gradients + Parameters** | $\frac{(2 + 2 + K) \cdot \Psi}{N_d} = \frac{\mathbf{16\Psi}}{\mathbf{N_d}}$ | $\frac{16 \times 7.5}{64}\text{ GB} = \mathbf{1.9\text{ GB}}$ | $\mathbf{64\times}$ ($= N_d$) |
+
+*(Derivation note: In ZeRO-3, the static memory footprint drops strictly linearly with cluster size $N_d$, enabling a 7.5B model to run on GPUs with less than 2 GB of VRAM).*
 
 ```
 Stage 1 — Shard Optimizer States (N=8):

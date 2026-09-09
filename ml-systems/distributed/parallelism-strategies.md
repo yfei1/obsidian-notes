@@ -8,17 +8,19 @@ Seven parallelism strategies distribute LLM workloads across GPUs. ZeRO/FSDP are
 
 ---
 
-## Overview: What Each Strategy Shards
+## Overview: The Three Standard Parallelization Primitives (CS336 Taxonomy)
 
-| Strategy | What It Shards | Scope | Training | Inference |
-|---|---|---|---|---|
-| **Data Parallelism (DP)** | Input data (replicate entire model) | Across GPU groups | + | + |
-| **ZeRO / FSDP** | Optimizer states, gradients, and/or parameters across DP replicas | Across DP replicas | + | - |
-| **Tensor Parallelism (TP)** | Individual weight matrices (column/row split) | Within a node | + | + |
-| **Sequence Parallelism (SP)** | Activations along sequence dimension | Within a node (with TP) | + | + |
-| **Pipeline Parallelism (PP)** | Model layers across GPUs | Across nodes | + | + |
-| **Expert Parallelism (EP)** | MoE experts assigned to specific GPUs | Across GPUs | + | + |
-| **Context Parallelism (CP)** | Sequence length across GPUs | Within/across nodes | + | + |
+Standard LLM parallelization organizes along three fundamental physical axes (CS336 Part 2 primitives):
+
+| Parallelism Axis | Distributed Primitive | What It Shards | Primary Hardware Scope |
+|---|---|---|---|
+| **1. Data Parallelism** | **Naïve Data Parallel (DP)** | Training batch into per-GPU slices (model replicated) | Inter-node (InfiniBand / RoCE) |
+| | **ZeRO / FSDP (Stages 1–3)** | Optimizer states, gradients, and/or parameters across DP ranks | Inter-node (InfiniBand / RoCE) |
+| **2. Model Parallelism** | **Tensor Parallelism (TP)** | Weight matrices along hidden dimensions (intra-layer) | Intra-node (NVLink mandatory) |
+| | **Pipeline Parallelism (PP)** | Model layers sequentially across stages (inter-layer) | Inter-node (P2P tolerant) |
+| **3. Activation Parallelism** | **Sequence Parallelism (SP)** | Activations along sequence dimension (LayerNorm/Dropout) | Intra-node (coupled with TP) |
+
+*(Specialized extensions: Expert Parallelism (EP) shards MoE experts across GPUs; Context Parallelism (CP) distributes long-sequence attention).*
 ### The 3D Parallelism Transmission Matrix: What Actually Travels on the Wire
 
 A universal rule across standard distributed strategies is that **model weights are never communicated across the network**:
