@@ -41,9 +41,11 @@ Micro-step 2: [ Forward b=B/4 ] ──► [ Backward & Accumulate Grad ] ──�
 
 ### 1. Transformer Per-Layer Activation Memory Formula (CS336 & Megatron Formulation)
 
-In transformer training without activation recomputation (storing all forward activations for backpropagation), activation memory per layer scales according to the exact structural breakdown:
+This formula represents the **baseline accounting ledger** for a standard unfused Transformer implementation without activation recomputation, storing all forward activations required for exact backpropagation in 16-bit format:
 
 $$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(34 + 5 \frac{a \cdot s}{h}\right)\text{ Bytes}}$$
+
+*(Analytical Scope: It is neither an upper bound nor an absolute physical lower bound. Actual VRAM consumption is typically higher due to PyTorch caching allocator fragmentation and cuBLAS/NCCL workspaces; conversely, memory can be substantially lower via RNG seed replay for dropouts, kernel fusion like FlashAttention, or full activation recomputation, which reaches the theoretical floor of $\mathbf{2 s b h\text{ Bytes}}$ per layer per arXiv:2205.05198 Table 2).*
 
 Where (CS336 Variable Glossary & Unit Conventions, arXiv:2205.05198 §4):
 - All reported sizes in this formula family are strictly **in BYTES** (not elements): activations are stored in 16-bit floating point format (**2 Bytes per element**), while dropout masks require **1 Byte per mask element**.
