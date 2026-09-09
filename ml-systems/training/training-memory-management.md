@@ -56,6 +56,14 @@ Where (CS336 Variable Glossary & Unit Conventions, arXiv:2205.05198 §4):
 - $t$: tensor parallel size
 - $v$: vocabulary size
 
+#### Reconciling the Two Activation Models: Boundary Tensor ($2BDL$) vs. Full Internal Storage ($34sbh$)
+Distributed systems literature employs two distinct activation accounting conventions:
+- **Boundary Tensor Model ($2 \cdot B \cdot D \cdot L\text{ Bytes}$)**: Counts strictly **one boundary activation tensor $[B, D]$ per layer** ($2D$ bytes per token in BF16). This serves as a rapid back-of-the-envelope model for evaluating the relative scaling gains of Gradient Accumulation ($1/k$) and full Activation Checkpointing ($O(1)$ boundary retention).
+- **Full Internal Storage Model ($34 \cdot s \cdot b \cdot h\text{ Bytes}$)**: Counts **all persistent intermediate forward tensors** across Attention, MLP, and LayerNorm operators required for exact gradient evaluation without recomputation (arXiv:2205.05198 §4).
+- **The $17\times$ Factor**: For an identical token and layer ($h = D$), boundary accounting allocates $2D$ bytes, while full internal accounting allocates $34h$ bytes—an exact $\frac{34h}{2D} = \mathbf{17\times}$ difference. The choice depends on analytical objective: boundary accounting for relative algorithmic trade-offs, full internal accounting for absolute VRAM capacity budgeting.
+
+---
+
 #### The Two Distinct Memory Regimes:
 1. **The Linear Term ($34 \cdot s \cdot b \cdot h\text{ Bytes}$)**: Evaluated in exact byte accounting (arXiv:2205.05198 §4), the breakdown decomposes into three foundational blocks:
    - **Self-Attention Block ($11 s b h\text{ Bytes}$)**: QKV shared projection input ($2 s b h$ B), $Q$ and $K$ stored for $Q K^T$ ($4 s b h$ B), Attention-over-$V$ projection input ($2 s b h$ B), linear projection $W_O$ input ($2 s b h$ B), and attention dropout mask ($1 s b h$ B at 1 B/mask). Subtotal: $\mathbf{11 s b h\text{ Bytes}}$.
