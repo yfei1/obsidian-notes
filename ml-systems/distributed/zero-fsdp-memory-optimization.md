@@ -53,16 +53,16 @@ Step 4: All-Gather updated parameters across all ranks (costs 1x #params volume)
         Reconstructs full updated parameters on all ranks: out[Y*count + i] = inY[i]
 ```
 
-#### Communication Volume Conservation: Why ZeRO-1 Adds Zero Overhead
+#### Communication Volume Conservation: Why ZeRO-1 Adds Zero Overhead (D81)
 
 A common misconception assumes sharding optimizer states adds network traffic. In reality, ZeRO Stage 1 decomposes the single All-Reduce of Naïve DDP into its two constituent halves:
-- **Naïve DDP**: Backward pass issues `All-Reduce(gradients)` ($2 \times \text{\# params}$), then every rank updates full parameters locally.
-- **ZeRO Stage 1**:
-  - Backward pass issues `Reduce-Scatter(gradients)` $\to$ **$1 \times \text{\# params}$**.
-  - Post-update issues `All-Gather(parameters)` $\to$ **$1 \times \text{\# params}$**.
-  - **Total Communication Volume**: $1 \times \text{\# params} + 1 \times \text{\# params} = \mathbf{2 \times \text{\# params}}$!
+- **Naïve DDP**: Backward pass issues `All-Reduce(gradients)` transferring $2 \cdot \frac{P-1}{P} \times \text{\# params}$ ($1.75\times$ at $P=8$; asymptotic $2 \times \text{\# params}$), then every rank updates full parameters locally.
+- **ZeRO Stage 1 (CS336 Slide Formulation)**:
+  - Backward pass issues `Reduce-Scatter(gradients)` $\to$ verbatim slide text: `incur #params communication cost` (exact volume $\frac{P-1}{P} \times \text{\# params}$, or $0.875\times$ at $P=8$).
+  - Post-update issues `All-Gather(parameters)` $\to$ verbatim slide text: `incur #params communication cost` (exact volume $\frac{P-1}{P} \times \text{\# params}$, or $0.875\times$ at $P=8$).
+  - **Total Communication Volume**: $\frac{P-1}{P} + \frac{P-1}{P} = 2 \cdot \frac{P-1}{P} \times \text{\# params}$ ($1.75\times$ at $P=8$; asymptotic $1\times + 1\times = 2\times \text{\# params}$).
 
-The communication volume is **100% identical to Naïve DDP**. ZeRO-1 achieves up to a $4\times$ memory reduction at zero communication bandwidth penalty.
+The communication volume is **100% mathematically identical to Naïve DDP** across every world size $P$. ZeRO-1 achieves up to a $4\times$ optimizer memory reduction at zero communication penalty.
 
 Stage 2 — + Shard Gradients (N=8):
   Each GPU keeps gradients only for its assigned partition.
