@@ -147,7 +147,7 @@ To prevent multi-hop communication stalls, Google's XLA and GSPMD compilers lock
 2. **Y-Axis (Local 1D/2D Mesh)**: Confinements **Expert Parallelism (EP All-to-All)** to a small local ring to bound multi-hop routing hops.
 3. **Z-Axis (Inter-Rack OCS Links)**: Maps **Data Parallelism (DP / FSDP)** across long-distance optical links. Because Ring All-Reduce transfers constant data volume regardless of ring distance, it is robust against inter-rack latency.
 
-### The MoE Achilles' Heel: The $N/4$ Traffic Amplification Penalty
+### The MoE Achilles' Heel: The $N^2/[4(N-1)]$ Traffic Amplification Penalty (Asymptotic $N/4\times$)
 
 While the 3D Torus excels on dense workloads, Mixture of Experts (MoE) exposes its structural limitation:
 
@@ -165,7 +165,7 @@ While the 3D Torus excels on dense workloads, Mixture of Experts (MoE) exposes i
 To prevent MoE All-to-All from overwhelming the Torus fabric, Google developed three architectural countermeasures:
 1. **EP Ring Clamping**: Packing 4–8 experts per device (leveraging estimated 192 GB HBM in TPU7x Ironwood per SemiAnalysis, D75) strictly bounds the physical EP ring to $N \le 8$, containing amplification to $\le 2.29\times$.
 2. **Physical Bandwidth Scaling**: TPU7x Ironwood targets estimated 9.6 Tbps (1.2 TB/s) ICI bandwidth (SemiAnalysis, D75), flushing multi-hop queues at line rate.
-3. **The Low-Diameter Inference Pivot (D74)**: In low-batch online inference where multi-hop transit latency cannot be hidden under compute, industry architecture reports (SemiAnalysis, 2024) disclose that Google's next-generation inference clusters transition away from pure Torus toward a low-diameter, high-radix Dragonfly-class topology (reported as "Boardfly" with a 7-hop diameter bound), offloading collective routing to hardware Collective Acceleration Engines (CAE).
+3. **The Low-Diameter Inference Pivot (D74)**: In low-batch online inference where multi-hop transit latency cannot be hidden under compute, industry architecture reports (SemiAnalysis, "Google TPU v7 Ironwood & Next-Gen AI Infrastructure", 2024) disclose that Google's next-generation inference clusters transition away from pure Torus toward a low-diameter, high-radix Dragonfly-class topology (reported as "Boardfly" with a 7-hop diameter bound), offloading collective routing to hardware Collective Acceleration Engines (CAE).
 
 ---
 
