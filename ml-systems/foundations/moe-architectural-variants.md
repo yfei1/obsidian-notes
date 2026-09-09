@@ -90,7 +90,7 @@ $$\mathbf{h}_t = \sum_{i=1}^{K_s} \text{FFN}_i^{\text{shared}}(\mathbf{u}_t) + \
 In DeepSeekMoE Figure 3 (*arXiv:2401.06066*), under identical total parameter and active FLOP budgets, isolating 1 shared expert and splitting routed experts (63 routed + 1 shared) boosts TriviaQA normalized accuracy from 0.61 to 1.0 (over 60% relative gain) and NaturalQuestions from 0.56 to 1.0 compared to baseline GShard (16 routed, 0 shared).
 
 #### C. Low-Rank Communication Compression in Expert Parallelism (Projection-Compressed Routing)
-In distributed Expert Parallelism, All-to-All network communication of full $d$-dimensional tokens accounts for 40%–60% of step time. Architectures exploring low-rank communication compression reduce the boundary dimension:
+In distributed Expert Parallelism across multi-node clusters, All-to-All network communication of full $d$-dimensional tokens can become a major scaling bottleneck when interconnect bandwidth is constrained. Architectures exploring low-rank communication compression reduce the boundary dimension:
 
 ```
 Standard MoE vs Low-Rank Compressed Flow:
@@ -98,11 +98,11 @@ Standard MoE:  Token u_t (dim d) ──► All-to-All Dispatch (dim d) ──►
 Compressed:    Token u_t (dim d) ──► Down-proj W_down (dim d_latent) ──► All-to-All (dim d_latent) ──► Latent FFN ──► Up-proj ──► Output
 ```
 
-1. **Compressed Network Wire**: Sender GPUs project tokens locally via $W_{\text{down}} \in \mathbb{R}^{d \times d_{\text{latent}}}$ ($d_{\text{latent}} = d/4$) before dispatch. The All-to-All collective transmits compact latent vectors, cutting network bandwidth and communication latency by 75%.
+1. **Compressed Network Wire**: Sender GPUs project tokens locally via $W_{\text{down}} \in \mathbb{R}^{d \times d_{\text{latent}}}$ ($d_{\text{latent}} = d/4$) before dispatch. The All-to-All collective transmits compact latent vectors, cutting transmitted payload volume by 75% (in bandwidth-bound regimes, transfer time drops proportionally, while base network transit and collective barrier synchronization latencies remain fixed).
 2. **Asymmetric Division of Labor (Why Shared Experts stay Full-Rank)**:
-   - **Routed Experts (over network)**: Sharded across GPUs, crossing network wires. Specialized domain sub-tasks have low intrinsic dimensionality, making $d_{\text{latent}}$ compression lossless in practice while slashing network traffic.
+   - **Routed Experts (over network)**: Sharded across GPUs, crossing network wires. Specialized domain sub-tasks exhibit low intrinsic dimensionality, making $d_{\text{latent}}$ compression near-lossless with negligible quality impact on downstream benchmarks while slashing network traffic.
    - **Shared Expert (local DP-replicated)**: Requires zero All-to-All communication (stays in local VRAM). It remains at full dimension $d$ alongside the residual skip connection, acting as a high-capacity anchor for universal linguistic features.
-3. **Accuracy per Byte Trade-off**: The 75% communication time savings allow training on $1.5\times\text{--}2\times$ more tokens within a fixed GPU-hour budget, while smaller expert matrices allow scaling expert counts by $4\times$, delivering higher end-to-end model performance.
+3. **Accuracy per Byte Trade-off**: The reduction in communication payload volume improves training throughput under network-constrained topologies, enabling models to process more tokens within a fixed training budget while smaller expert matrices allow scaling expert counts under fixed memory.
 
 ---
 
