@@ -47,7 +47,7 @@ With SP:
 
 ### The "Fixed 10" Problem: Activation Memory Under Tensor Parallelism
 
-In standard Tensor Parallelism with tensor parallel size $t$ (without Sequence Parallelism), activation memory per transformer layer does not scale purely as $1/t$:
+When deploying an $L$-layer Transformer across a Tensor Parallelism (TP) group of size $t$, per-GPU activation memory does not scale purely as $34/t$:
 
 $$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(10 + \frac{24}{t} + 5 \frac{a \cdot s}{h \cdot t}\right)\text{ Bytes}}$$
 
@@ -60,15 +60,25 @@ Where (CS336 Variable Glossary & Unit Conventions, arXiv:2205.05198 §4; reporte
 - $s$: sequence length (tokens per sample)
 - $t$: tensor parallel size
 - $v$: vocabulary size
-- $\frac{24}{t} \cdot s b h$: The matrix multiplication activations inside Attention and MLP, successfully sharded across $t$ GPUs along hidden dimensions.
-- $5 \frac{a s}{h t} \cdot s b h = \frac{5 a b s^2}{t}$: The quadratic attention matrix terms, sharded across $t$ attention head partitions.
-- **The "Fixed 10" ($10 \cdot s b h$)**: Activations from non-tensor-parallel operations that **cannot be sharded across the hidden dimension $h$**:
-  - LayerNorm inputs and outputs: **$4 s b h$**
-  - Dropout masks and activations: **$2 s b h$**
-  - Input buffers to Attention and MLP blocks: **$4 s b h$**
-  - Total unsharded term: $4 + 2 + 4 = \mathbf{10 s b h}$ elements.
 
-As models scale up $t$ (e.g. $t = 8$), the sharded terms shrink ($24/8 = 3$), leaving the fixed $10 s b h$ term to dominate up to **$70\%$ of the remaining activation memory**. Tensor Parallelism alone cannot reduce this memory.
+#### Where Does "$10 + 24$" Come From? ($10 + 24 = 34$)
+In baseline single-GPU training, total linear activation memory is $34 s b h$ Bytes. Under Tensor Parallelism, this $34 s b h$ splits into two distinct categories:
+1. **The Sharded Linear Term ($\frac{24}{t} \cdot s b h\text{ Bytes}$)**: Intermediate matrix multiplications inside Attention and MLP (projections and GeLU features) are successfully sharded across $t$ GPUs along hidden dimensions.
+2. **The "Fixed 10" ($10 \cdot s b h\text{ Bytes}$)**: Activations that remain **replicated on every single GPU** independent of $t$. At $t=8$, $\frac{24}{8} = 3 s b h$, leaving this unsharded $10 s b h$ term to consume over **$70\%$ of remaining activation memory**.
+
+#### Single-GPU Composition of the "Fixed 10" ($4 + 2 + 4 = 10\text{ Bytes}$)
+On each individual GPU, the $10 s b h$ Bytes consist of three pairs of unsharded tensors:
+- **Two LayerNorm Inputs ($4 s b h\text{ Bytes}$)**: Pre-Attention LayerNorm ($2 s b h$ B) + Pre-MLP LayerNorm ($2 s b h$ B).
+- **Two Dropout Masks ($2 s b h\text{ Bytes}$)**: Attention dropout mask ($1 s b h$ B) + MLP dropout mask ($1 s b h$ B).
+- **Two Block Forward Inputs ($4 s b h\text{ Bytes}$)**: Attention block input $X_{\text{attn}}$ ($2 s b h$ B) + MLP block input $X_{\text{mlp}}$ ($2 s b h$ B). Because Column-Parallel layers require the full input $X$ to compute local weight gradients $\nabla_W L = X^T \nabla_Y L$, each GPU must retain a full copy of $X$ locally.
+
+#### Can LayerNorm Theoretically Be Sharded Along $h$? (The Latency Disaster)
+LayerNorm normalizes across the feature channel dimension $h$:
+$$\mu = \frac{1}{h} \sum_{i=1}^h x_i, \quad \sigma^2 = \frac{1}{h} \sum_{i=1}^h (x_i - \mu)^2, \quad \text{LayerNorm}(x) = \frac{x - \mu}{\sqrt{\sigma^2 + \epsilon}} \odot \gamma + \beta$$
+
+- **Theoretical Sharding**: Slicing along $h$ ($h/t$ channels per GPU) is mathematically possible: each GPU computes local partial sums $\sum x_i$ and $\sum x_i^2$, followed by an **`All-Reduce`** across GPUs on the 2 scalar statistics to compute global $\mu$ and $\sigma^2$.
+- **Downstream Dimensional Barrier**: However, the downstream Column-Parallel linear layer ($X W_i$) requires the **full hidden dimension $h$** to perform matrix multiplication ($W_i \in \mathbb{R}^{h \times d_{\text{out}}/t}$). Thus, each GPU would have to perform a subsequent **`All-Gather`** across $h$ to reconstruct full hidden states before computing GEMM!
+- **Communication Cost**: Adding an `All-Reduce` and `All-Gather` around every LayerNorm would inject 4 extra collective operations per block in forward alone. For a $2\,\mu\text{s}$ lightweight kernel, stalling on $10\text{--}50\,\mu\text{s}$ network latency barriers would cripple MFU. Megatron-LM therefore chose replication over sharding along $h$.
 
 ---
 
