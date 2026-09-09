@@ -106,6 +106,31 @@ Transformer Input ──► [SP: LayerNorm] ──► g (All-Gather) ──► [
 
 ---
 
+#### Do LayerNorm and Dropout Have Weights? (The 2048x Trade-off under SP)
+
+A foundational architectural distinction governs normalization and dropout parameters under Sequence Parallelism:
+1. **Dropout**: Strictly parameter-free. The $2 s b h$ Bytes retained across the block consist exclusively of 1-byte boolean dropout masks (or 64-bit RNG seeds).
+2. **LayerNorm / RMSNorm**: Contains learned affine parameters: scale $\gamma \in \mathbb{R}^h$ and bias $\beta \in \mathbb{R}^h$ ($2h$ parameters per LayerNorm; RMSNorm contains only $\gamma$, $h$ parameters). The $4 s b h$ Bytes in the Fixed 10 represent **input activations saved for backward propagation**, completely distinct from static model parameters.
+3. **The Parameter Gradient All-Reduce in Megatron-LM (`finalize_model_grads.py`)**:
+   - In **vanilla TP**: LayerNorm inputs are identically replicated across all ranks. Every GPU evaluates identical parameter gradients ($\nabla_\gamma, \nabla_\beta$) locally, requiring zero network communication.
+   - In **Sequence Parallelism (SP)**: Each GPU evaluates LayerNorm over only its assigned $\frac{s}{t}$ token slice. Consequently, local parameter gradients $\nabla_\gamma = \sum_{i=1}^{s/t} \hat{x}_i \odot \nabla_y$ become **partial sums** that must be synchronized across tensor-model-parallel ranks.
+   - Production implementation (CITED: `megatron/core/distributed/finalize_model_grads.py:422-424`):
+     ```python
+     # All-reduce both layernorm grads (for sequence parallelism) and gradients
+     # from modules with average_gradients_across_tp_domain=True across tensor-model-parallel ranks.
+     if config.sequence_parallel and getattr(param, "sequence_parallel", False):  # :452
+         # Retains historical alias _allreduce_layernorm_grads (:491)
+     ```
+4. **The 2048x Memory-to-Communication Asymmetry (DERIVED)**:
+   For a standard configuration with $h = s = 8192, b = 1$:
+   - **Parameter Gradient All-Reduce Cost**: Synchronizing both LayerNorms per block ($2 \times (\gamma + \beta) = 4h$ scalars) transfers $4 \times 8192 = 32{,}768$ elements. In FP32 accumulation precision, this equals $32{,}768 \times 4\text{ Bytes} = \mathbf{128\text{ KB}}$ per step. Crucially, this volume depends exclusively on $h$ and is **completely independent of sequence length $s$ and batch size $b$**.
+   - **Activation Memory Eliminated by SP**: Sharding LayerNorm input activations ($4 s b h$ Bytes) eliminates $4 \times 8192 \times 1 \times 8192\text{ Bytes} \approx \mathbf{0.268\text{ GB}}$ ($256\text{ MiB}$) of activation storage per layer.
+   - **Asymmetry Ratio**:
+     $$\frac{\text{Activation Memory Saved}}{\text{Parameter Gradient Communication Incurred}} = \frac{268{,}435{,}456\text{ Bytes}}{131{,}072\text{ Bytes}} = \mathbf{2048\times}$$
+   This quantifies the fundamental economic payoff of Sequence Parallelism: paying a tiny, constant $128\text{ KB}$ parameter-gradient synchronization over fast intra-node NVLink to eliminate $0.27\text{ GB}$ of activation memory that would otherwise scale aggressively with $s \cdot b$.
+
+---
+
 ### Making Activation Memory Fully Scale: The Master Comparison Table
 
 Combining Tensor Parallelism, Sequence Parallelism, and Selective Activation Recomputation completely linearizes activation memory:
