@@ -78,7 +78,7 @@ $$\mu = \frac{1}{h} \sum_{i=1}^h x_i, \quad \sigma^2 = \frac{1}{h} \sum_{i=1}^h 
 
 - **Theoretical Sharding**: Slicing along $h$ ($h/t$ channels per GPU) is mathematically possible: each GPU computes local partial sums $\sum x_i$ and $\sum x_i^2$, followed by an **`All-Reduce`** across GPUs on the 2 scalar statistics to compute global $\mu$ and $\sigma^2$.
 - **Downstream Dimensional Barrier**: However, the downstream Column-Parallel linear layer ($X W_i$) requires the **full hidden dimension $h$** to perform matrix multiplication ($W_i \in \mathbb{R}^{h \times d_{\text{out}}/t}$). Thus, each GPU would have to perform a subsequent **`All-Gather`** across $h$ to reconstruct full hidden states before computing GEMM!
-- **Communication Cost**: Adding an `All-Reduce` and `All-Gather` around every LayerNorm would inject 4 extra collective operations per block in forward alone. For a $2\,\mu\text{s}$ lightweight kernel, stalling on $10\text{--}50\,\mu\text{s}$ network latency barriers would cripple MFU. Megatron-LM therefore chose replication over sharding along $h$.
+- **Communication Cost**: Adding an `All-Reduce` and `All-Gather` around every LayerNorm would inject 4 extra collective operations per block in forward alone. Each small-message collective requires $\approx 3\text{--}5\,\mu\text{s}$ over intra-node NVLink (and $10\text{--}50\,\mu\text{s}$ across multi-node InfiniBand); for a lightweight $\approx 2\,\mu\text{s}$ LayerNorm compute kernel, injecting $12\text{--}20\,\mu\text{s}$ of collective latency on NVLink would overwhelm compute time and cripple MFU. Megatron-LM therefore chose replication over sharding along $h$.
 
 ---
 
