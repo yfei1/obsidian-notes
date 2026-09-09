@@ -49,9 +49,9 @@ With SP:
 
 In standard Tensor Parallelism with tensor parallel size $t$ (without Sequence Parallelism), activation memory per transformer layer does not scale purely as $1/t$:
 
-$$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(10 + \frac{24}{t} + 5 \frac{a \cdot s}{h \cdot t}\right)\text{ elements}}$$
+$$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(10 + \frac{24}{t} + 5 \frac{a \cdot s}{h \cdot t}\right)\text{ Bytes}}$$
 
-Where (CS336 Variable Glossary):
+Where (CS336 Variable Glossary & Unit Conventions, arXiv:2205.05198 §4; reported in **Bytes** assuming 2 B/element for 16-bit activations and 1 B/element for dropout masks):
 - $a$: number of attention heads
 - $b$: micro-batch size
 - $h$: hidden dimension size ($d_{\text{model}}$)
@@ -100,7 +100,7 @@ Transformer Input ──► [SP: LayerNorm] ──► g (All-Gather) ──► [
 
 Combining Tensor Parallelism, Sequence Parallelism, and Selective Activation Recomputation completely linearizes activation memory:
 
-| Parallelism Configuration | Activation Memory per Transformer Layer (Elements) | Scaling Behavior |
+| Parallelism Configuration | Activation Memory per Transformer Layer (Bytes) | Scaling Behavior |
 |---|---|---|
 | **No Parallelism** | $s b h \left(34 + 5 \frac{a s}{h}\right)$ | Baseline ($O(s^2)$ attention + $34sbh$ linear) |
 | **Tensor Parallel (Baseline)** | $s b h \left(10 + \frac{24}{t} + 5 \frac{a s}{h t}\right)$ | Shards GEMMs, but hits the "fixed 10" floor |

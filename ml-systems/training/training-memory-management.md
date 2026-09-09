@@ -43,9 +43,10 @@ Micro-step 2: [ Forward b=B/4 ] ──► [ Backward & Accumulate Grad ] ──�
 
 In transformer training without activation recomputation (storing all forward activations for backpropagation), activation memory per layer scales according to the exact structural breakdown:
 
-$$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(34 + 5 \frac{a \cdot s}{h}\right)\text{ elements}}$$
+$$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(34 + 5 \frac{a \cdot s}{h}\right)\text{ Bytes}}$$
 
-Where (CS336 Variable Glossary):
+Where (CS336 Variable Glossary & Unit Conventions, arXiv:2205.05198 §4):
+- All reported sizes in this formula family are strictly **in BYTES** (not elements): activations are stored in 16-bit floating point format (**2 Bytes per element**), while dropout masks require **1 Byte per mask element**.
 - $a$: number of attention heads
 - $b$: micro-batch size
 - $h$: hidden dimension size ($d_{\text{model}}$)
@@ -54,16 +55,19 @@ Where (CS336 Variable Glossary):
 - $s$: sequence length (tokens per sample)
 - $t$: tensor parallel size
 - $v$: vocabulary size
-- In 16-bit precision (BF16), total bytes per layer equals $2 \times \text{elements}$.
 
 #### The Two Distinct Memory Regimes:
-1. **The Linear Term ($34 \cdot s \cdot b \cdot h$)**: Evaluated in 16-bit storage (arXiv:2205.05198 §4), the exact breakdown decomposes into three foundational blocks:
-   - **Self-Attention Block ($11 s b h + 5 a s^2 b$)**: QKV shared projection input ($2 s b h$), $Q$ and $K$ stored for $Q K^T$ ($4 s b h$), attention-over-$V$ inputs ($2 s b h$ for $V$, $2 a s^2 b$ for dropout output), linear projection $W_O$ input ($2 s b h$), and attention dropout mask ($s b h$). Subtotal: $\mathbf{11 s b h}$.
-   - **MLP Block ($19 s b h$)**: Up-projection input ($2 s b h$), GeLU intermediate input ($8 s b h$), down-projection input ($8 s b h$), and MLP dropout mask ($s b h$). Subtotal: $\mathbf{19 s b h}$.
-   - **LayerNorm / RMSNorm ($4 s b h$)**: Two normalization layers per block (pre-attention and pre-MLP), each storing its input ($2 \times 2 s b h = \mathbf{4 s b h}$).
-   - **Total Linear Storage**: $11 s b h + 19 s b h + 4 s b h = \mathbf{34 \cdot s \cdot b \cdot h}$.
+1. **The Linear Term ($34 \cdot s \cdot b \cdot h\text{ Bytes}$)**: Evaluated in exact byte accounting (arXiv:2205.05198 §4), the breakdown decomposes into three foundational blocks:
+   - **Self-Attention Block ($11 s b h\text{ Bytes}$)**: QKV shared projection input ($2 s b h$ B), $Q$ and $K$ stored for $Q K^T$ ($4 s b h$ B), Attention-over-$V$ projection input ($2 s b h$ B), linear projection $W_O$ input ($2 s b h$ B), and attention dropout mask ($1 s b h$ B at 1 B/mask). Subtotal: $\mathbf{11 s b h\text{ Bytes}}$.
+   - **MLP Block ($19 s b h\text{ Bytes}$)**: Up-projection input ($2 s b h$ B), GeLU intermediate input ($8 s b h$ B), down-projection input ($8 s b h$ B), and MLP dropout mask ($1 s b h$ B at 1 B/mask). Subtotal: $\mathbf{19 s b h\text{ Bytes}}$.
+   - **LayerNorm / RMSNorm ($4 s b h\text{ Bytes}$)**: Two normalization layers per block (pre-attention and pre-MLP), each storing its input ($2 \times 2 s b h = \mathbf{4 s b h\text{ Bytes}}$).
+   - **Total Linear Storage**: $11 s b h + 19 s b h + 4 s b h = \mathbf{34 \cdot s \cdot b \cdot h\text{ Bytes}}$.
    *(Connection to the "Fixed 10": Non-sharded LayerNorm $4sbh$ + Dropouts $2sbh$ + Block inputs $4sbh$ form the famous $10sbh$ floor; the remaining $34 - 10 = 24sbh$ is sharded across TP ranks as $\frac{24}{t}$).*
-2. **The Quadratic Attention Term ($5 \frac{a \cdot s}{h} \cdot s \cdot b \cdot h = 5 a b s^2$)**: Originates from the quadratic attention matrix operations ($Q K^T$ scores, Softmax probabilities, attention dropout masks, and Value context combinations).
+2. **The Quadratic Attention Term ($5 \frac{a \cdot s}{h} \cdot s \cdot b \cdot h = 5 a s^2 b\text{ Bytes}$)**: Decomposes into three exact byte-level terms (arXiv:2205.05198 §4):
+   - Softmax output probabilities: $(b, a, s, s)$ in 16-bit = **$2 a s^2 b$ Bytes**
+   - Softmax dropout mask: $(b, a, s, s)$ boolean mask at 1 Byte/element = **$1 a s^2 b$ Bytes**
+   - Attention-over-$V$ dropout output: $(b, a, s, s)$ in 16-bit = **$2 a s^2 b$ Bytes**
+   - Subtotal: $2 a s^2 b + 1 a s^2 b + 2 a s^2 b = \mathbf{5 a s^2 b\text{ Bytes}}$. *(The 1-byte dropout mask explains why the coefficient is an odd number 5 rather than an even multiple of 2 bytes).*
 3. **Dropping the Quadratic Term (FlashAttention & Recomputation)**:
    As sequence length $s$ expands, the quadratic $5 a b s^2$ term rapidly dwarfs the linear $34 s b h$ term. FlashAttention (Dao et al., 2022; arXiv:2205.14135) and selective activation checkpointing (Korthikanti et al., 2022) **drop this quadratic storage by tiling inside SM-level SRAM** (constrained by 192 KB on-chip SRAM per SM on A100, aggregate ~20 MB across 108 SMs). The forward kernel writes only output $O$ and softmax statistics $(m, \ell)$ of size $O(b \cdot a \cdot s)$ back to HBM, discarding intermediate $(b, a, s, s)$ scores entirely. In the backward kernel, $(m, \ell)$ and blocks of $Q, K, V$ are reloaded from HBM into SRAM to recompute attention probabilities on-the-fly, reducing quadratic attention storage to negligible linear $O(b a s)$ elements and leaving activation memory dominated strictly by the linear $34 s b h$ term.
 
