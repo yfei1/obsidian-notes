@@ -129,41 +129,50 @@ A common misconception assumes ZeRO-2 incurs communication overhead beyond ZeRO-
 
 While ZeRO-2 eliminates optimizer and gradient memory redundancy, every GPU still maintains a full copy of model parameters ($2\Psi$ bytes in BF16) at rest. When model parameters alone exceed single-GPU VRAM limits, training requires **ZeRO-3 / FSDP**, which shards parameters at rest and dynamically fetches them per layer during forward and backward passes.
 
-### ZeRO Stage 3 / FSDP Execution Lifecycle (The 3x Communication Pipeline)
+### ZeRO Stage 3 / FSDP Execution Lifecycle (Conceptual vs Production Overlap)
 
 In ZeRO Stage 3 ($P_{os+g+p}$, PyTorch Fully Sharded Data Parallel / FSDP), model weights are sharded across workers at rest and fetched dynamically per layer:
 
+#### 1. The Conceptual "Baby Version" (Sequential Lifecycle)
+
+CS336 presents the baseline sequential execution flow:
 ```text
-Forward Pass (per layer / FSDP unit):
-  All-Gather(layer weights) ──► Forward(local compute) ──► Free Full Weights immediately!
+Forward Pass:  [Load Shard from CPU if offloaded] ──► All-Gather(weights) ──► Forward(local compute) ──► Free Full Weights!
+Backward Pass: All-Gather(weights) ──► Backward(local compute) ──► Reduce-Scatter(grads) ──► Free Full Weights! ──► [Offload grads to CPU]
+Update Step:   Update Weights(local shard only using sharded optimizer states)
+```
+*(Key Invariant: "Free Full Weights" executes twice per layer—once after forward, once after backward—ensuring un-sharded weights exist only transiently in VRAM).*
 
-Backward Pass (per layer / FSDP unit):
-  All-Gather(layer weights) ──► Backward(local compute) ──► Reduce-Scatter(grads) ──► Free Full Weights immediately!
+#### 2. The Full-Blooded FSDP Stream Overlap (Zhao et al., arXiv:2304.11277)
 
-Parameter Update (post-backward):
-  Update Weights(local shard only using sharded optimizer states)
+In production FSDP, multi-stream asynchronous pipelining hides communication latency behind compute:
+
+```text
+CPU Host:     [Unit 0][Unit 1][Unit 1][Unit 0][Unit 2][Unit 2] ... [Unit 2][Unit 2][Unit 1][Unit 1][Unit 0][Unit 0]
+              (Dispatches non-blocking CUDA kernel launches ahead of hardware stream execution)
+
+GPU Compute:          [ FWD 0 ]──────►[ FWD 1 ]──►[Free W0]──►[ FWD 2 ]──► ... ──►[ BWD 2 ]──►[Free W2]──►[ BWD 1 ]──►[ BWD 0 ]
+GPU Comm:    [ AG 0 ]────►[ AG 1 ]────────►[ AG 2 ]────────────────────────►[ RS 2 ]──►[ AG 1 ]──►[ RS 1 ]────────►[ RS 0 ]
+Timeline:    ◄─── All-Gathers overlap forward compute ───►                 ◄─── Backward All-Gathers & Reduce-Scatters overlap ───►
 ```
 
-#### Why CS336 Calls This a "Baby Version" vs Production Full-Blooded FSDP
+- **Incremental Computation & Immediate Deallocation**: Parameters and gradients are requested just-in-time and freed immediately after layer compute (`Free Full Weights`).
+- **Asynchronous Prefetching Overlap**: While the GPU Compute Stream evaluates `FWD(i)` on Tensor Cores, the background GPU Communication Stream concurrently issues `AG(i+1)` to prefetch the next layer's weights over the network fabric, completely masking parameter communication latency.
 
-The diagram depicts a sequential, non-overlapped conceptual pipeline. Production FSDP (PyTorch FSDP / DeepSpeed ZeRO-3) incorporates four advanced engineering optimizations:
-1. **Prefetching Streams (Double Buffering)**: While GPU Tensor Cores compute Layer $l$ forward/backward on the compute stream, a background CUDA stream concurrently issues `All-Gather` to prefetch Layer $l+1$ weights, hiding parameter communication behind computation.
-2. **Backward Weight Reuse**: The final layer's weights gathered at the end of the forward pass are retained in memory for the start of backpropagation, eliminating one All-Gather collective at the boundary.
-3. **Module Wrapping (FSDP Units)**: Instead of sharding layer-by-layer, frameworks wrap nested transformer blocks (typically 100M–500M parameters per unit) to saturate network bandwidth and balance prefetch timing.
-4. **CPU / NVMe Offloading**: Sharded optimizer states and parameters can be swapped to host CPU DRAM or NVMe storage.
+#### 3. The Communication Tax: Why ZeRO-3 Costs Exactly 1.5x More Communication
 
-#### The Communication Tax: Why ZeRO-3 Costs 1.5x More Communication ($3 \times \text{\# params}$)
+Unlike ZeRO-1 and ZeRO-2 (which conserve communication at exactly $2 \cdot \frac{P-1}{P} \times \text{\# params}$), ZeRO-3 requires three network collectives per step:
+1. **Forward Parameter All-Gather**: Gathers full layer parameters before forward compute $\implies \frac{P-1}{P} \times \text{\# params}$.
+2. **Backward Parameter All-Gather**: Re-gathers full layer parameters before backward compute $\implies \frac{P-1}{P} \times \text{\# params}$.
+3. **Backward Gradient Reduce-Scatter**: Synchronizes and shards parameter gradients to owners $\implies \frac{P-1}{P} \times \text{\# params}$.
 
-Unlike ZeRO-1 and ZeRO-2 (which conserve communication at exactly $2 \times \text{\# params}$), ZeRO-3 requires three network collectives per step:
-1. **Forward All-Gather**: Gathers full layer parameters before forward compute $\implies \frac{P-1}{P} \times \text{\# params}$ ($1\times$ asymptotically).
-2. **Backward All-Gather**: Re-gathers full layer parameters before backward compute $\implies \frac{P-1}{P} \times \text{\# params}$ ($1\times$ asymptotically).
-3. **Backward Reduce-Scatter**: Synchronizes and shards parameter gradients to owners $\implies \frac{P-1}{P} \times \text{\# params}$ ($1\times$ asymptotically).
+$$\text{Total ZeRO-3 Communication} = 3 \cdot \frac{P - 1}{P} \times \text{\# params}$$
+$$\frac{\text{ZeRO-3 Volume}}{\text{Naïve DDP / ZeRO-2 Volume}} = \frac{3 \cdot \frac{P-1}{P} \times \text{\# params}}{2 \cdot \frac{P-1}{P} \times \text{\# params}} = \mathbf{1.5000\times \text{ (Exact at every cluster size } P)}$$
 
-$$\text{Total ZeRO-3 Communication} = 3 \cdot \frac{P - 1}{P} \times \text{\# params} \approx \mathbf{3 \times \text{\# params}} \quad (\mathbf{1.5\times \text{ relative to Naïve DDP / ZeRO-2}})$$
+*(D85 Note: While $3\times \text{\# params}$ is the large-$P$ asymptotic volume, the $1.5\times$ ratio over DDP is mathematically exact across all $P$, because the $\frac{P-1}{P}$ factor cancels identically).*
 
-#### Why Pay the 50% Communication Tax? (The Zero-to-One Feasibility Wall)
+#### 4. Why Pay the 50% Communication Tax? (The Zero-to-One Feasibility Wall)
 
-A common puzzle is why practitioners accept a 50% communication penalty when ZeRO-2 already eliminates optimizer and gradient memory redundancy:
 - **The Single-GPU VRAM Wall ($2\Psi$)**: In ZeRO-2, every GPU must hold full 16-bit model parameters ($2\Psi$ bytes). For a 70B parameter model, weights alone occupy **140 GB**. On an 80 GB A100/H100 GPU, ZeRO-2 crashes with an immediate out-of-memory (OOM) error before a single step executes.
 - **Enabling Impossible Workloads**: ZeRO-3 shards the 140 GB weights across 64 GPUs to just $\frac{140}{64} \approx \mathbf{2.1\text{ GB}}$ per GPU, enabling 70B models to train easily on 80 GB GPUs while leaving 70+ GB of headroom for long-context activation memory (32K–128K tokens).
 - **Economic Principle**: The 50% communication tax is not an optimization trade-off—it is the price paid for **zero-to-one feasibility** (the difference between crashing at step 0 and training successfully).
