@@ -18,7 +18,7 @@ In the foundational ZeRO paper (Rajbhandari et al., 2020) and CS336 formulation,
 - $\mathbf{N_d}$: Data parallel degree / number of GPU ranks (e.g., $N_d = 64$).
 - Baseline precision: 16-bit mixed precision (2 B for BF16 parameters, 2 B for BF16 gradients).
 
-### Stage-by-Stage Memory Consumption Table
+### Formulation A: 16-Bit Mixed-Precision (CS336 & DeepSpeed $\Psi$ Model: 2+2+12 B)
 
 | ZeRO Stage | Sharded Components | Memory Consumed per GPU Formula | Numerical Footprint ($\Psi = 7.5\text{B}, N_d = 64, K = 12$) | Reduction Factor |
 |---|---|---|---|---|
@@ -28,6 +28,10 @@ In the foundational ZeRO paper (Rajbhandari et al., 2020) and CS336 formulation,
 | **ZeRO-3 / FSDP ($P_{os+g+p}$)** | **Optimizer States + Gradients + Parameters** | $\frac{(2 + 2 + K) \cdot \Psi}{N_d} = \frac{\mathbf{16\Psi}}{\mathbf{N_d}}$ | $\frac{16 \times 7.5}{64}\text{ GB} = \mathbf{1.9\text{ GB}}$ | $\mathbf{64\times}$ ($= N_d$) |
 
 *(Derivation note: In ZeRO-3, the static memory footprint drops strictly linearly with cluster size $N_d$, enabling a 7.5B model to run on GPUs with less than 2 GB of VRAM).*
+
+> **Why the Reduction Ratios Diverge in Stages 1 & 2 (D78)**: Both formulations consume 16 bytes per parameter, but their internal precision split differs. In pure FP32 (Formulation B below), non-sharded parameters and gradients occupy 50% of total memory ($8\text{ B} / 16\text{ B}$), bounding Stage 1 reduction at $N=8$ to $1.78\times$ (~1.8x). In mixed precision (Formulation A above), non-sharded BF16 parameters and gradients occupy only 25% ($4\text{ B} / 16\text{ B}$), allowing optimizer sharding to yield a $2.91\times$ reduction at $N=8$ ($3.8\times$ at $N=64$). In Stage 3, all components are sharded, so both formulations scale by exactly $N$-fold.
+
+### Formulation B: Pure FP32 Precision Baseline (4+4+8 B, N=8 GPUs)
 
 ```
 Stage 1 — Shard Optimizer States (N=8):
