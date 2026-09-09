@@ -61,17 +61,7 @@ Rank 0 final gathered output shape: [8, 16], norm: 0.020396
 
 ## Why 'Column' and 'Row' Mean Different Things in Code vs. Math
 
-**"Column" and "Row" refer to the mathematical weight matrix A `[in, out]`** (Megatron convention — the naming scheme from Megatron-LM, the framework that introduced this pattern), which is the **transpose** of PyTorch's W `[out, in]`:
-
-```
-Side-by-side — same physical weight, two naming conventions:
-
-  Megatron math:   A  [in_features, out_features]  →  "columns" = out_features axis
-  PyTorch code:    W  [out_features, in_features]   →  W = A.T
-
-  ColumnParallel splits A's columns (out dim) = splits W along dim 0 (rows in code)
-  RowParallel    splits A's rows   (in dim)  = splits W along dim 1 (cols in code)
-```
+Megatron mathematical convention defines weight matrix $A \in \mathbb{R}^{\text{in\_features} \times \text{out\_features}}$ ("columns" = out_features axis), which is the exact **transpose** of PyTorch's weight $W \in \mathbb{R}^{\text{out\_features} \times \text{in\_features}}$ ($W = A^T$):
 
 | Megatron name | Splits math A along | Splits PyTorch W along | tp_dim | After matmul |
 |---|---|---|---|---|
@@ -232,11 +222,7 @@ TP requires high-bandwidth interconnect (NVLink, ~900 GB/s per direction on B200
 
 The vocabulary embedding ($V \times H$) and language model output head ($H \times V$) are the largest weight matrices in language models with large vocabularies (e.g., $V=152{,}064$ in Qwen3 = 1.25 GB in fp16). Both are sharded along the vocabulary dimension:
 
-```
-Vocabulary V=152064, hidden H=4096, TP=2:
-  GPU0 holds vocab [0:76032],     weight [76032, 4096]
-  GPU1 holds vocab [76032:152064], weight [76032, 4096]
-```
+For vocabulary $V=152{,}064, H=4096$ with $TP=2$: GPU 0 holds vocab range $[0:76032]$ with weight shape $[76032, 4096]$; GPU 1 holds $[76032:152064]$ with identical weight shape $[76032, 4096]$.
 
 ### Embedding Sharding (Column-Parallel on Vocab Dim)
 
@@ -271,13 +257,8 @@ Inference engines (vLLM, SGLang) use **Option A**: gather the small hidden state
 
 ## TP Memory Model: Sharded Weights, Symmetric Activations
 
-```
-Per-GPU Memory in TP=P:
-  Weights:       W_total / P               (sharded linearly with P)
-  Gradients:     G_total / P               (sharded linearly with P)
-  Optimizer:     Opt_total / P             (sharded linearly with P)
-  Activations:   Sharded inside MLP/Attn; Replicated at layer boundaries (unless SP enabled)
-```
+- **Weights, Gradients, and Optimizer States**: Sharded linearly across ranks, scaling to $\frac{W_{\text{total}}}{P}$, $\frac{G_{\text{total}}}{P}$, and $\frac{\text{Opt}_{\text{total}}}{P}$ per GPU.
+- **Activation Memory**: Sharded internally across intermediate Attention and MLP blocks; replicated across layer boundaries (unless Sequence Parallelism is enabled).
 
 Example: Qwen3-0.6B with TP=2:
 - ColumnParallelLinear(2048, 6656): each GPU stores `[2048, 3328]` instead of `[2048, 6656]`.
