@@ -122,24 +122,40 @@ A fundamental limitation of pipeline parallelism is the **pipeline bubble**: idl
 
 ### 1. The Bubble Ratio and Total Runtime Fraction (CS336 Formulation)
 
-In the GPipe schedule (Huang et al., 2019), training divides the batch into $m$ micro-batches (CS336 diagram illustrates $n_{\text{micro}} = 4$ across $n_{\text{stages}} = 4$):
-- Workers send off the first micro-batch and start computing the second.
-- Forward passes $F_{0,0} \dots F_{3,3}$ propagate across stages, followed by an idle bubble, backward passes $B_{3,3} \dots B_{0,0}$, and parameter updates.
+To visualize why pipeline parallelism incurs bubbles, consider a 4-stage assembly line (4 GPUs, $p=4$):
+- **GPU 0**: Assembles chassis (Layers 0–19)
+- **GPU 1**: Installs engine (Layers 20–39)
+- **GPU 2**: Mounts car body (Layers 40–59)
+- **GPU 3**: Paints exterior (Layers 60–79)
 
-Let $p$ be the number of pipeline stages ($n_{\text{stages}}$), and $m$ be the number of micro-batches ($n_{\text{micro}}$):
-- Non-bubble useful compute time: $t_{\text{useful}} = 2m \cdot t_{\text{stage}}$ (1 forward + 1 backward per micro-batch).
-- Total idle bubble slots across stages: $t_{\text{bubble}} = 2(p - 1) \cdot t_{\text{stage}}$.
+When the first micro-batch enters the pipeline:
+- GPU 0 begins computing, while GPUs 1, 2, and 3 idle with zero upstream inputs (warm-up phase).
+- When the batch completes forward compute on GPU 3, backward passes propagate in reverse.
+- Near the end of the step, GPU 0 completes its backward pass and idles while GPU 3 drains final gradients (cool-down phase).
+This idle waiting time is the **pipeline bubble**.
 
-CS336 establishes two distinct mathematical metrics:
-1. **Ratio of Bubble Time to Useful Compute**:
-   $$\text{Ratio} = \frac{t_{\text{bubble}}}{t_{\text{useful}}} = \frac{2(p - 1) \cdot t_{\text{stage}}}{2m \cdot t_{\text{stage}}} = \mathbf{\frac{n_{\text{stages}} - 1}{n_{\text{micro}}}} = \mathbf{\frac{p - 1}{m}}$$
-   *(As the slide notes: "The ratio of bubble time to useful compute is (n_stages - 1) / n_micro so we need a big batch size!").*
-2. **Fraction of Total Wall-Clock Runtime**:
-   $$F = \frac{t_{\text{bubble}}}{t_{\text{useful}} + t_{\text{bubble}}} = \frac{2(p - 1)}{2m + 2(p - 1)} = \mathbf{\frac{p - 1}{m + p - 1}} \approx \frac{p - 1}{m} \quad (\text{for } m \gg p)$$
+#### Non-Bubble Compute vs Idle Bubble Slots
+Let $p$ be the number of pipeline stages ($n_{\text{stages}}$), $m$ be the number of micro-batches ($n_{\text{micro}}$), and $t_{\text{stage}}$ be the execution latency of one micro-batch per stage:
+- **Useful Compute Time**: $T_{\text{useful}} = 2m \cdot t_{\text{stage}}$ ($m$ forward + $m$ backward passes per stage).
+- **Idle Bubble Slots**: $T_{\text{bubble}} = 2(p - 1) \cdot t_{\text{stage}}$ ($p - 1$ forward warm-up slots + $p - 1$ backward cool-down slots).
 
-Numerical scaling across cluster sizes:
-- At $p = 4$: Ratio $(p-1)/m$ is $0.75$ ($m = 4$), $0.188$ ($m = 16$), and $0.094$ ($m = 32$), representing $42.9\%$, $15.8\%$, and $8.6\%$ of total runtime.
-- At $p = 8$: Ratio $(p-1)/m$ is $0.875$ ($m = 8$), $0.219$ ($m = 32$), and $0.109$ ($m = 64$), representing $46.7\%$, $17.9\%$, and $9.9\%$ of total runtime.
+CS336 explicitly differentiates between two distinct mathematical metrics:
+
+1. **Ratio of Bubble Time to Useful Compute ($r$)**:
+   $$r = \frac{T_{\text{bubble}}}{T_{\text{useful}}} = \frac{2(p - 1) \cdot t_{\text{stage}}}{2m \cdot t_{\text{stage}}} = \mathbf{\frac{n_{\text{stages}} - 1}{n_{\text{micro}}}} = \mathbf{\frac{p - 1}{m}}$$
+   - **Physical Meaning**: The ratio of idle time spent waiting relative to active compute time.
+   - **Slide Quotation**: *"The ratio of bubble time to useful compute is (n_stages - 1) / n_micro so we need a big batch size!"*
+
+2. **Fraction of Total Wall-Clock Runtime ($F$)**:
+   $$F = \frac{T_{\text{bubble}}}{T_{\text{useful}} + T_{\text{bubble}}} = \frac{2(p - 1)}{2m + 2(p - 1)} = \mathbf{\frac{p - 1}{m + p - 1}} = \frac{r}{1 + r}$$
+   - **Physical Meaning**: The percentage of total step wall-clock time wasted on idle bubble slots.
+   - **Asymptotic Convergence**: When $m \gg p$ (large batch size), $p - 1$ in the denominator becomes negligible, yielding $F \approx \frac{p - 1}{m}$.
+
+#### Concrete Numerical Example: $p = 4, m = 8$
+- **Bubble Ratio ($r$)**: $r = \frac{4 - 1}{8} = \frac{3}{8} = \mathbf{37.5\%}$ (idle time is $37.5\%$ of active compute time).
+- **Runtime Bubble Fraction ($F$)**: $F = \frac{4 - 1}{8 + 4 - 1} = \frac{3}{11} \approx \mathbf{27.27\%}$ ($27.27\%$ of total step time is wasted in bubbles).
+
+*(Exam Distinction: If asked for "ratio of bubble to compute", evaluate $r = \frac{p-1}{m}$; if asked for "bubble overhead / fraction of total runtime", evaluate $F = \frac{p-1}{m+p-1}$).*
 
 ### 2. GPipe vs 1F1B: The Same Bubble, Divergent Memory
 
@@ -183,16 +199,25 @@ Because weight gradient computation $W$ is needed only for `optimizer.step()`, i
 
 ## Why Pipeline Parallel? (The Two Structural Advantages of PP)
 
-Despite the pipeline bubble ("Pipelines seem terrible. Why do we do it?"), Pipeline Parallelism provides two structural advantages over DDP and FSDP:
+Despite the presence of pipeline bubbles ("Pipelines seem terrible. Why do we do it?"), Pipeline Parallelism provides two structural advantages over DDP and FSDP:
 
 1. **Pipelines Save Memory (Compared to DDP)**:
-   In Naïve DDP, every GPU holds full model parameters ($2\Psi$) and full optimizer states ($12\Psi$). Pipeline Parallelism partitions layers sequentially across $p$ stages, shrinking static weight memory per GPU to $\frac{2\Psi}{p}$ and optimizer states to $\frac{12\Psi}{p}$.
+   - In Naïve DDP, every GPU holds full model parameters ($2\Psi$) and full optimizer states ($12\Psi$). A 70B parameter model in BF16 requires $\approx 1.1\text{ TB}$ of static memory per worker, exceeding single-GPU physical capacity.
+   - Pipeline Parallelism partitions layers sequentially across $p$ stages, shrinking static weight memory per GPU to $\mathbf{\frac{2\Psi}{p}}$ and optimizer states to $\mathbf{\frac{12\Psi}{p}}$, rendering model training physically feasible.
+
 2. **Pipelines Have Superior Communication Properties (Compared to FSDP)**:
-   In FSDP (FDSP [sic]), communication requires $3\times \text{\# params}$ across cluster-wide All-Gathers and Reduce-Scatters. In Pipeline Parallelism:
-   - Transmission volume **depends strictly on activations ($b \times s \times h$)**, where $b$ is micro-batch size, $s$ is sequence length, and $h$ is hidden dimension.
-   - Traffic is strictly **point-to-point (P2P)** between adjacent ranks ($r \to r+1$), eliminating cluster-wide collective barriers.
-3. **Interconnect Affinity**:
-   "Generally, we will use pipelines on slower network links (i.e. inter-node) as a way to get better memory-wise scaling." While Tensor Parallelism is confined to intra-node NVLink, Pipeline Parallelism comfortably scales across inter-node InfiniBand or Ethernet fabrics.
+   - **FSDP Communication Burden**: FSDP requires $3\times \text{\#params}$ across cluster-wide All-Gathers and Reduce-Scatters. Any network straggler stalls the entire collective synchronization barrier.
+   - **Point-to-Point (P2P) Topology**: In Pipeline Parallelism, communication occurs strictly between adjacent stages ($r \to r+1$). There are zero global collective barriers; stage workers communicate asynchronously via `dist.send` and `dist.recv`.
+   - **Small Activation Volume ($b \times s \times h$)**: The transmitted payload is strictly the boundary activation tensor:
+     $$\text{Volume per Transfer} = \mathbf{2 \times b \times s \times h\text{ Bytes (in BF16)}}$$
+   - **Parameter-Count Independence**: The boundary activation volume depends exclusively on micro-batch size $b$, sequence length $s$, and hidden dimension $h$. **It does not scale with the number of layers or parameter count within the stage**. Whether a stage contains 10 layers or 40 layers, the boundary payload remains identical.
+
+3. **Industrial Interconnect Affinity (Rule of Thumb)**:
+
+| Interconnect Level | Hardware Bandwidth | Recommended Parallelism | Physical Rationale |
+|---|---|---|---|
+| **Intra-Node (Host)** | High Bandwidth (NVLink: 900 GB/s – 1.8 TB/s) | **TP / FSDP** | Global All-Reduce and layer-by-layer parameter All-Gathers require NVLink bandwidth to overlap compute. |
+| **Inter-Node (Cluster)** | Lower Bandwidth (InfiniBand / RoCE: 400 Gbps $\approx$ 50 GB/s) | **PP / DP** | Point-to-point boundary activations ($b \times s \times h$) easily fit inside slower inter-node links without saturating bandwidth. |
 
 ---
 
