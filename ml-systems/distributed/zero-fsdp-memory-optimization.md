@@ -129,22 +129,44 @@ A common misconception assumes ZeRO-2 incurs communication overhead beyond ZeRO-
 
 While ZeRO-2 eliminates optimizer and gradient memory redundancy, every GPU still maintains a full copy of model parameters ($2\Psi$ bytes in BF16) at rest. When model parameters alone exceed single-GPU VRAM limits, training requires **ZeRO-3 / FSDP**, which shards parameters at rest and dynamically fetches them per layer during forward and backward passes.
 
-Stage 3 — + Shard Parameters (N=8):
-  No GPU holds the full model at rest.
-  Per-GPU: (28 + 28 + 56) / 8 = 14 GB
-  Reduction: 112 → 14 GB  (8x = N)
+### ZeRO Stage 3 / FSDP Execution Lifecycle (The 3x Communication Pipeline)
 
-  Before forward pass on a layer:
-    → All-Gather: collect that layer's params from all GPUs
-    → Compute forward
-    → Discard the gathered params
-  Before backward pass on a layer:
-    → All-Gather again
-    → Compute backward
-    → Reduce-Scatter gradients
-    → Discard params
-  → Maximum memory savings, but 1.5x communication volume vs. Stage 2
+In ZeRO Stage 3 ($P_{os+g+p}$, PyTorch Fully Sharded Data Parallel / FSDP), model weights are sharded across workers at rest and fetched dynamically per layer:
+
+```text
+Forward Pass (per layer / FSDP unit):
+  All-Gather(layer weights) ──► Forward(local compute) ──► Free Full Weights immediately!
+
+Backward Pass (per layer / FSDP unit):
+  All-Gather(layer weights) ──► Backward(local compute) ──► Reduce-Scatter(grads) ──► Free Full Weights immediately!
+
+Parameter Update (post-backward):
+  Update Weights(local shard only using sharded optimizer states)
 ```
+
+#### Why CS336 Calls This a "Baby Version" vs Production Full-Blooded FSDP
+
+The diagram depicts a sequential, non-overlapped conceptual pipeline. Production FSDP (PyTorch FSDP / DeepSpeed ZeRO-3) incorporates four advanced engineering optimizations:
+1. **Prefetching Streams (Double Buffering)**: While GPU Tensor Cores compute Layer $l$ forward/backward on the compute stream, a background CUDA stream concurrently issues `All-Gather` to prefetch Layer $l+1$ weights, hiding parameter communication behind computation.
+2. **Backward Weight Reuse**: The final layer's weights gathered at the end of the forward pass are retained in memory for the start of backpropagation, eliminating one All-Gather collective at the boundary.
+3. **Module Wrapping (FSDP Units)**: Instead of sharding layer-by-layer, frameworks wrap nested transformer blocks (typically 100M–500M parameters per unit) to saturate network bandwidth and balance prefetch timing.
+4. **CPU / NVMe Offloading**: Sharded optimizer states and parameters can be swapped to host CPU DRAM or NVMe storage.
+
+#### The Communication Tax: Why ZeRO-3 Costs 1.5x More Communication ($3 \times \text{\# params}$)
+
+Unlike ZeRO-1 and ZeRO-2 (which conserve communication at exactly $2 \times \text{\# params}$), ZeRO-3 requires three network collectives per step:
+1. **Forward All-Gather**: Gathers full layer parameters before forward compute $\implies \frac{P-1}{P} \times \text{\# params}$ ($1\times$ asymptotically).
+2. **Backward All-Gather**: Re-gathers full layer parameters before backward compute $\implies \frac{P-1}{P} \times \text{\# params}$ ($1\times$ asymptotically).
+3. **Backward Reduce-Scatter**: Synchronizes and shards parameter gradients to owners $\implies \frac{P-1}{P} \times \text{\# params}$ ($1\times$ asymptotically).
+
+$$\text{Total ZeRO-3 Communication} = 3 \cdot \frac{P - 1}{P} \times \text{\# params} \approx \mathbf{3 \times \text{\# params}} \quad (\mathbf{1.5\times \text{ relative to Naïve DDP / ZeRO-2}})$$
+
+#### Why Pay the 50% Communication Tax? (The Zero-to-One Feasibility Wall)
+
+A common puzzle is why practitioners accept a 50% communication penalty when ZeRO-2 already eliminates optimizer and gradient memory redundancy:
+- **The Single-GPU VRAM Wall ($2\Psi$)**: In ZeRO-2, every GPU must hold full 16-bit model parameters ($2\Psi$ bytes). For a 70B parameter model, weights alone occupy **140 GB**. On an 80 GB A100/H100 GPU, ZeRO-2 crashes with an immediate out-of-memory (OOM) error before a single step executes.
+- **Enabling Impossible Workloads**: ZeRO-3 shards the 140 GB weights across 64 GPUs to just $\frac{140}{64} \approx \mathbf{2.1\text{ GB}}$ per GPU, enabling 70B models to train easily on 80 GB GPUs while leaving 70+ GB of headroom for long-context activation memory (32K–128K tokens).
+- **Economic Principle**: The 50% communication tax is not an optimization trade-off—it is the price paid for **zero-to-one feasibility** (the difference between crashing at step 0 and training successfully).
 
 <!-- verify
 ```python
