@@ -120,18 +120,26 @@ Final Stage 1 completed all 4 micro-batches, output shape: [8, 16], norm: 1.4273
 
 A fundamental limitation of pipeline parallelism is the **pipeline bubble**: idle time spent by upstream or downstream GPUs during pipeline warm-up and cool-down.
 
-### 1. The Bubble Fraction Identity
+### 1. The Bubble Ratio and Total Runtime Fraction (CS336 Formulation)
 
-Let $p$ be the number of pipeline stages, and $m$ be the number of micro-batches:
-- Non-bubble ideal execution time: $t_{\text{ideal}} = 2m \cdot t_{\text{stage}}$ (1 forward + 1 backward per micro-batch).
-- Total idle bubble slots: Upstream and downstream stages idle for $(p - 1)$ forward slots and $(p - 1)$ backward slots:
-  $$t_{\text{bubble}} = 2(p - 1) \cdot t_{\text{stage}}$$
-- The exact pipeline bubble fraction of total execution time is:
-  $$F = \frac{t_{\text{bubble}}}{t_{\text{ideal}} + t_{\text{bubble}}} = \frac{2(p - 1)}{2m + 2(p - 1)} = \frac{p - 1}{m + p - 1} \approx \frac{p - 1}{m} \quad (\text{for } m \gg p)$$
+In the GPipe schedule (Huang et al., 2019), training divides the batch into $m$ micro-batches (CS336 diagram illustrates $n_{\text{micro}} = 4$ across $n_{\text{stages}} = 4$):
+- Workers send off the first micro-batch and start computing the second.
+- Forward passes $F_{0,0} \dots F_{3,3}$ propagate across stages, followed by an idle bubble, backward passes $B_{3,3} \dots B_{0,0}$, and parameter updates.
 
-Numerical scaling of the bubble fraction:
-- At $p = 4$: Bubble overhead is $42.9\%$ ($m = 4$), $15.8\%$ ($m = 16$), and $8.6\%$ ($m = 32$).
-- At $p = 8$: Bubble overhead is $46.7\%$ ($m = 8$), $17.9\%$ ($m = 32$), and $9.9\%$ ($m = 64$).
+Let $p$ be the number of pipeline stages ($n_{\text{stages}}$), and $m$ be the number of micro-batches ($n_{\text{micro}}$):
+- Non-bubble useful compute time: $t_{\text{useful}} = 2m \cdot t_{\text{stage}}$ (1 forward + 1 backward per micro-batch).
+- Total idle bubble slots across stages: $t_{\text{bubble}} = 2(p - 1) \cdot t_{\text{stage}}$.
+
+CS336 establishes two distinct mathematical metrics:
+1. **Ratio of Bubble Time to Useful Compute**:
+   $$\text{Ratio} = \frac{t_{\text{bubble}}}{t_{\text{useful}}} = \frac{2(p - 1) \cdot t_{\text{stage}}}{2m \cdot t_{\text{stage}}} = \mathbf{\frac{n_{\text{stages}} - 1}{n_{\text{micro}}}} = \mathbf{\frac{p - 1}{m}}$$
+   *(As the slide notes: "The ratio of bubble time to useful compute is (n_stages - 1) / n_micro so we need a big batch size!").*
+2. **Fraction of Total Wall-Clock Runtime**:
+   $$F = \frac{t_{\text{bubble}}}{t_{\text{useful}} + t_{\text{bubble}}} = \frac{2(p - 1)}{2m + 2(p - 1)} = \mathbf{\frac{p - 1}{m + p - 1}} \approx \frac{p - 1}{m} \quad (\text{for } m \gg p)$$
+
+Numerical scaling across cluster sizes:
+- At $p = 4$: Ratio $(p-1)/m$ is $0.75$ ($m = 4$), $0.188$ ($m = 16$), and $0.094$ ($m = 32$), representing $42.9\%$, $15.8\%$, and $8.6\%$ of total runtime.
+- At $p = 8$: Ratio $(p-1)/m$ is $0.875$ ($m = 8$), $0.219$ ($m = 32$), and $0.109$ ($m = 64$), representing $46.7\%$, $17.9\%$, and $9.9\%$ of total runtime.
 
 ### 2. GPipe vs 1F1B: The Same Bubble, Divergent Memory
 
@@ -144,6 +152,21 @@ A critical architectural fact is that **GPipe and 1F1B share the identical bubbl
 To reduce the bubble fraction without blowing up batch size $m$, Megatron-LM assigns $v$ virtual stages per GPU (e.g., GPU 0 owns Layer 0 and Layer 4 in an 8-layer model):
 $$F_{\text{interleaved}} \approx \frac{p - 1}{v \cdot m}$$
 Setting $v = 2$ at $p = 8, m = 32$ reduces bubble overhead from $17.9\%$ to $9.8\%$, at the expense of doubling point-to-point network communication frequency.
+
+---
+
+## Why Pipeline Parallel? (The Two Structural Advantages of PP)
+
+Despite the pipeline bubble ("Pipelines seem terrible. Why do we do it?"), Pipeline Parallelism provides two structural advantages over DDP and FSDP:
+
+1. **Pipelines Save Memory (Compared to DDP)**:
+   In Naïve DDP, every GPU holds full model parameters ($2\Psi$) and full optimizer states ($12\Psi$). Pipeline Parallelism partitions layers sequentially across $p$ stages, shrinking static weight memory per GPU to $\frac{2\Psi}{p}$ and optimizer states to $\frac{12\Psi}{p}$.
+2. **Pipelines Have Superior Communication Properties (Compared to FSDP)**:
+   In FSDP (FDSP [sic]), communication requires $3\times \text{\# params}$ across cluster-wide All-Gathers and Reduce-Scatters. In Pipeline Parallelism:
+   - Transmission volume **depends strictly on activations ($b \times s \times h$)**, where $b$ is micro-batch size, $s$ is sequence length, and $h$ is hidden dimension.
+   - Traffic is strictly **point-to-point (P2P)** between adjacent ranks ($r \to r+1$), eliminating cluster-wide collective barriers.
+3. **Interconnect Affinity**:
+   "Generally, we will use pipelines on slower network links (i.e. inter-node) as a way to get better memory-wise scaling." While Tensor Parallelism is confined to intra-node NVLink, Pipeline Parallelism comfortably scales across inter-node InfiniBand or Ethernet fabrics.
 
 ---
 
