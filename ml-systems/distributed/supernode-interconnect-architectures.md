@@ -177,9 +177,9 @@ The divergence of AI supernode architectures reflects distinct engineering bound
 |---|---|---|---|
 | **Huawei CloudMatrix 384** | Trades electrical power and optical transceivers for a flat 384-NPU Scale-Up domain | System power (~559 kW) and liquid cooling complexity | Abundant grid power and domestic optical manufacturing |
 | **NVIDIA GB200 NVL72** | Trades Scale-Up domain size (72 GPUs) for zero transceiver power and maximum silicon efficiency | 2-meter physical passive copper reach limit | TSMC advanced packaging and market-leading tensor compute density |
-| **Google TPU v4–TPU7x** | Trades network bisection flexibility for low-cost, switchless direct Torus routing | $N/4\times$ All-to-All traffic amplification on large MoE rings | XLA compiler co-design and OCS optical circuit switching |
+| **Google TPU v4–TPU7x** | Trades network bisection flexibility for low-cost, switchless direct Torus routing | All-to-All traffic amplification on large rings ($\frac{N^2}{4(N-1)}\times \approx \frac{N}{4}\times$) | XLA compiler co-design and OCS optical circuit switching |
 
-Despite their divergent starting points, all three architectures are converging toward the same physical imperative: **maximizing the non-blocking Scale-Up domain while minimizing network diameter**, whether through multi-rack optical crossbars (Huawei), dense copper packaging (NVIDIA), or low-diameter high-radix topologies (low-diameter topologies (such as reported Boardfly)).
+Despite their divergent starting points, all three architectures are converging toward the same physical imperative: **maximizing the non-blocking Scale-Up domain while minimizing network diameter**, whether through multi-rack optical crossbars (Huawei), dense copper packaging (NVIDIA), or low-diameter high-radix topologies (such as reported Boardfly).
 
 ---
 
