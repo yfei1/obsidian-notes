@@ -108,34 +108,27 @@ Compressed:    Token u_t (dim d) ──► Down-proj W_down (dim d_latent) ─�
 
 ### 3. Training Objectives & Load Balancing
 
-Because top-$k$ selection is a non-differentiable step function, four primary solutions evolved:
+Because top-$k$ selection is a non-differentiable step function, routing mechanisms evolved across five formulations:
 
-```
-Non-Differentiable Router Gate Solutions:
-1. Reinforcement Learning (Policy Gradient) ──► High variance, slow convergence.
-2. Stochastic Perturbation (Noisy Top-K)    ──► Logit += ε * Softplus(x W_noise); adds exploration noise.
-3. Auxiliary Load Balancing Loss (V1/V2)    ──► L_aux = α_1 L_ExpBal + α_2 L_DevBal (Per-Expert + Per-Device).
-4. Dual Safety Architecture (V3)            ──► Primary: Dynamic Bias b_i; Secondary: Sequence-Wise L_Bal.
-```
-
-1. **Stochastic Perturbation (Noisy Top-$K$, Shazeer 2017)**:
+1. **Reinforcement Learning (Policy Gradient)**: Early discrete routing formulated token assignment as a multi-armed bandit or reinforcement learning task, but suffered from high variance and slow convergence.
+2. **Stochastic Perturbation (Noisy Top-$K$, Shazeer 2017)**:
    $$\text{Logit}_i(x) = (x W_g)_i + \epsilon \cdot \text{Softplus}\big((x W_{\text{noise}})_i\big), \quad \epsilon \sim \mathcal{N}(0, 1)$$
    Injects noise during early training to force exploration, preventing premature routing collapse.
-2. **Heuristic Auxiliary Load Balancing Loss (*Switch Transformer, Fedus et al. 2022*)**:
+3. **Heuristic Auxiliary Load Balancing Loss (*Switch Transformer, Fedus et al. 2022*)**:
    $$\mathcal{L}_{\text{aux}} = \alpha \cdot N \sum_{i=1}^N f_i \cdot P_i, \quad f_i = \frac{1}{T} \sum_{x \in \mathcal{B}} \mathbf{1}\{\text{argmax } p(x) = i\}, \quad P_i = \frac{1}{T} \sum_{x \in \mathcal{B}} p_i(x)$$
    - **$f_i$ (Fraction of tokens dispatched to expert $i$)**: Discrete fraction of tokens assigned to expert $i$, acting as a scalar multiplier ($f \in \mathbb{R}^N$).
    - **$P_i$ (Fraction of router probability allocated for expert $i$)**: Column-wise mean of router Softmax probabilities ($P_i = \frac{1}{T} \sum p_i(x)$), yielding a differentiable scalar ($P \in \mathbb{R}^N$).
    - **Scaled Dot-Product Minimization**: Perfectly uniform balance ($f_i = P_i = 1/N$) minimizes loss to $\alpha \cdot N \cdot \sum (1/N^2) = \alpha$. Total collapse ($f_1 = P_1 = 1$) incurs a penalty of $\alpha N$ ($N\times$ larger).
    - **Surrogate Gradient**: Gradient descent $\nabla_{W_g} \mathcal{L}_{\text{aux}} \propto f_i \nabla P_i$ downweights router probabilities with a force proportional to actual crowdedness $f_i$.
 
-3. **Hierarchical Multi-Level Balancing (*DeepSeek-V1/V2*)**:
+4. **Hierarchical Multi-Level Balancing (*DeepSeek-V1/V2*)**:
    In distributed Expert Parallelism, per-expert balance alone does not prevent GPU-level stragglers. DeepSeek-V1/V2 combines **Per-Expert** and **Per-Device** balance losses:
    $$\mathcal{L}_{\text{ExpBal}} = \alpha_1 \sum_{i=1}^{N'} f_i P_i, \quad f_i = \frac{N'}{K' T} \sum_{t=1}^T \mathbf{1}(\text{Token } t \text{ selects Expert } i), \quad P_i = \frac{1}{T} \sum_{t=1}^T s_{i,t}$$
    $$\mathcal{L}_{\text{DevBal}} = \alpha_2 \sum_{i=1}^D f_i' P_i', \quad f_i' = \frac{1}{|\mathcal{E}_i|} \sum_{j \in \mathcal{E}_i} f_j, \quad P_i' = \sum_{j \in \mathcal{E}_i} P_j$$
    - **$f_i'$ and $P_i'$**: The actual token fraction and probability allocated to Device (GPU) $i$ hosting expert subset $\mathcal{E}_i$.
    - **Why Both Levels?**: $\mathcal{L}_{\text{DevBal}}$ prevents whole GPUs from becoming communication stragglers during All-to-All transfers, while $\mathcal{L}_{\text{ExpBal}}$ prevents single-expert collapse within a GPU. Computing $P_i' = P.\text{view}(D, -1).\text{sum}(-1)$ costs $< 1\mu s$ with zero memory copy.
 
-4. **DeepSeek-V3 Dual Safety Architecture (Dynamic Bias + Sequence-Wise Safety Valve, arXiv:2412.19437)**:
+5. **DeepSeek-V3 Dual Safety Architecture (Dynamic Bias + Sequence-Wise Safety Valve, arXiv:2412.19437)**:
    - **Primary Macro Balancing (Auxiliary-Loss-Free Dynamic Bias $b_i$)**:
      $$s_{i,t} = \text{Sigmoid}(u_t^T e_i), \quad \tilde{s}_{i,t} = s_{i,t} + b_i, \quad g_{i,t}' = \begin{cases} s_{i,t}, & \tilde{s}_{i,t} \in \text{Topk}(\{\tilde{s}_{j,t}\}, K_r) \\ 0, & \text{otherwise} \end{cases}$$
      The bias term is used strictly for routing. After each step, $b_i$ updates via negative feedback: $b_i$ decreases by $\gamma$ if its expert is overloaded, and increases by $\gamma$ if underloaded. The update speed is set to $\mathbf{\gamma = 0.001}$ for the first $14.3\text{T}$ tokens, then decayed to $\mathbf{\gamma = 0.0}$ for the final $500\text{B}$ tokens.
@@ -148,16 +141,7 @@ Non-Differentiable Router Gate Solutions:
 
 ### 4. Downstream Fine-Tuning Dynamics & Overfitting Mitigations
 
-```text
-MoE Fine-Tuning Overfitting Paradox:
-Huge Parameter Capacity (64 Experts) + Small SFT Dataset (1k examples) ──► Memorization Overfitting!
-
-Two Proven Mitigations:
-1. Selective Parameter Fine-Tuning (Zoph 2022, ST-MoE) ──► Freeze routed experts; update Attention & Shared layers.
-2. Large-Scale Diverse SFT (DeepSeek-V2/V3)             ──► Scale SFT corpus to 1.4M+ examples to saturate capacity.
-```
-
-1. **The Overfitting Paradox on Small Downstream Data**: Massive parameter counts across tens or hundreds of experts easily memorize small downstream datasets ($100\%$ train accuracy), degrading validation generalization ($91\%$ vs $95\%$ on dense baselines in SuperGLUE).
+1. **The Overfitting Paradox on Small Downstream Data**: Massive parameter counts across tens or hundreds of experts (e.g. 64 experts evaluated on a small 1k-example SFT dataset) easily memorize training samples ($100\%$ train accuracy), degrading validation generalization ($91\%$ vs $95\%$ on dense baselines in SuperGLUE).
 2. **Selective Parameter Fine-Tuning (*Zoph et al. 2022, ST-MoE*)**: Freeze all $N$ sparse routed experts during fine-tuning, updating only dense parameters (Self-Attention, Shared Experts, LayerNorms). This cuts active trainable parameters by $80\%\text{--}90\%$ and matches full fine-tuning performance without memorization.
 3. **Large-Scale Data SFT (*DeepSeek-V2/V3*)**: For full foundation chat models, scaling SFT data to 1.4M+ diverse multi-turn reasoning and code examples provides sufficient data volume to train all routed experts end-to-end without overfitting.
 4. **Sparse Upcycling (*Komatsuzaki et al. 2022*) & Why Frontier Models Train from Scratch**: Upcycling clones a pretrained dense FFN $N$ times to initialize experts. Because cloned experts start with identical weights, early router differentiation is crippled. Under massive 10T+ token budgets, native MoEs trained from scratch co-evolve specialized representations from Step 0 and achieve strictly lower loss ceilings.
@@ -279,10 +263,12 @@ In MoE architecture design, NVIDIA establishes a core operational rule: **Prefer
 #### Complexity in Composing EP with 3D Parallelism (CS336 Fig. 8)
 
 When scaling MoE across massive clusters, architectures compose across four paradigms:
-1. **Data + Expert Parallelism (DP+EP)**: Gating and All-to-All Dispatch route tokens across DP replicas. DP usually shares replicas with EP splits ($\text{EP} \le \text{DP}$).
+1. **Data + Expert Parallelism (DP+EP)**: Gating and All-to-All Dispatch route tokens across DP replicas. DP usually shares replicas with EP splits ($\text{EP} < \text{DP}$).
 2. **Data + Expert + Tensor Parallelism (DP+EP+TP)**: Combines TP within a node with EP across nodes. However, DP and TP can interact adversely: slicing both tokens and hidden dimensions can fragment local batch sizes, dropping GEMM arithmetic intensity.
 3. **Data + Expert + Pipeline Parallelism (DP+EP+PP)**: Stages layers across PP nodes while sharding experts across EP ranks.
-4. **Expert + Tensor Parallelism (EP+TP)**: Applied in low-concurrency inference where memory bandwidth dominates.
+4. **Expert + Tensor Parallelism (EP+TP)**: Applied when individual expert parameters exceed single-GPU capacity, sharding each expert's FFN across TP ranks within an EP group.
+
+*(Schematic Disclaimer: CS336 Figure 8 notes that for clarity and conciseness, subfigures (b), (c), and (d) omit certain All-to-All, All-Reduce, and Point-to-Point communications, as well as Normalization, Encode, Decode, and Gate modules; they are structural schematics rather than complete communication execution graphs).*
 
 ---
 
