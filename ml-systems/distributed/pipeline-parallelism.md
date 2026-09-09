@@ -155,6 +155,32 @@ Setting $v = 2$ at $p = 8, m = 32$ reduces bubble overhead from $17.9\%$ to $9.8
 
 ---
 
+### 4. Zero Bubble Pipeline Parallelism: Decoupling Activation and Weight Backward
+
+In standard 1F1B schedules, the backward pass treats a layer's backward computation as an atomic block. Zero Bubble Pipeline Parallelism (Qi et al., arXiv:2401.10241, ICLR 2024; CS336 slide "‘Zero bubble’ pipelining") eliminates the pipeline bubble by splitting backpropagation into two distinct phases:
+
+```text
+Forward Pass:     x ──► [ Wx ] ──► z ──► [ σ(z) ] ──► y   (Forward compute F)
+
+Backward Pass:    ∇_y L ──► [ dσ(z)/dz · ∇_y L ] ──► ∇_z L
+                                │
+        ┌───────────────────────┴───────────────────────┐
+        ▼                                               ▼
+1. Activation Backward B:                       2. Weight Backward W:
+   ∇_x L = W^T · ∇_z L                              ∇_W L = ∇_z L · x^T
+   - Sits on the critical path                      - Zero downstream dependencies!
+   - Must communicate upstream immediately!         - "Can be done whenever"
+```
+
+#### The Zero-Bubble Scheduling Mechanism (ZB-H1 & ZB-H2)
+
+Because weight gradient computation $W$ is needed only for `optimizer.step()`, it can be postponed without stalling upstream stages:
+1. **Immediate $B$ Propagation**: A worker evaluates activation backward $B$ and immediately transmits $\nabla_x L$ to the preceding pipeline stage ($r - 1$), minimizing pipeline latency.
+2. **Filling Bubbles with $W$**: The delayed weight gradient computations $W$ are scheduled into the idle bubble time slots of the 1F1B timeline (the handcrafted ZB-H1 and ZB-H2 schedules in CS336 Figure 3).
+3. **Near-Zero Bubble**: By shifting $W$ into the otherwise wasted warm-up and cool-down slots, Zero Bubble pipelining virtually eliminates idle bubble overhead ($F \to 0$) without scaling batch size $m$, achieving near-optimal hardware utilization.
+
+---
+
 ## Why Pipeline Parallel? (The Two Structural Advantages of PP)
 
 Despite the pipeline bubble ("Pipelines seem terrible. Why do we do it?"), Pipeline Parallelism provides two structural advantages over DDP and FSDP:

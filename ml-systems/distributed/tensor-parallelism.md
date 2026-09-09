@@ -144,12 +144,34 @@ To understand backpropagation through sharded tensor layers, distinguish the two
 - **Weight Gradient ("Self-Update Diff", $\nabla_W L = X^T \nabla_Y L$)**: Consumed locally by the optimizer to update the layer's own parameters ($W \leftarrow W - \eta \nabla_W L$). It terminates at the current layer and is never passed backward.
 - **Input Gradient ("Relay Baton", $\nabla_X L = \nabla_Y L \cdot W^T$)**: Because current input $X$ was the previous layer's output ($X = Y_{\text{prev}}$), $\nabla_X L$ serves as the incoming error input for the preceding layer, enabling it to compute its own weight update ($\nabla_{W_{\text{prev}}} L = X_{\text{prev}}^T \nabla_X L$) and continue backpropagation.
 
-Tensor Parallelism exhibits strict mathematical duality between forward and backward propagation:
+Tensor Parallelism exhibits strict mathematical duality between forward and backward propagation (CS336 slide "Tensor parallel – GPUs have submatrices"):
+- Let $f$ be the input communication operator and $g$ be the output communication operator for a 2-layer block $Z = \text{Dropout}(\text{GeLU}(XA)B)$ with column-split $A = [A_1, A_2]$ and row-split $B = [B_1^T, B_2^T]^T$:
+  - **In the forward pass**: $f$ is the Identity operator, and $g$ is an `all_reduce(op=dist.ReduceOp.SUM)`.
+  - **In the backward pass**: $f$ is an `all_reduce(op=dist.ReduceOp.SUM)`, and $g$ is the Identity operator.
 
-| Phase | Column-Parallel Layer ($W_1 = [W_{1,0}, W_{1,1}]$) | Row-Parallel Layer ($W_2 = [W_{2,0}^T, W_{2,1}^T]^T$) | Block Communication |
+| Phase | Column-Parallel Layer ($A = [A_1, A_2]$) | Row-Parallel Layer ($B = [B_1^T, B_2^T]^T$) | Total Block Communication |
 |---|---|---|---|
-| **Forward Pass** | $h_p = X W_{1,p}$ (**Zero comm**, output is sharded) | $Y_p = h_p W_{2,p}$ (Local partial dot-products) | **1 All-Reduce(SUM)** at Row output ($Y = \sum Y_p$) |
-| **Backward Pass** | $\nabla_{W_{1,p}} L = X^T (\nabla_{h_p} L)$ (Local, zero comm)<br>$\nabla_X L = \sum (\nabla_{h_p} L) W_{1,p}^T$ (**All-Reduce(SUM)**) | $\nabla_{W_{2,p}} L = h_p^T (\nabla_Y L)$ (Local, zero comm)<br>$\nabla_{h_p} L = (\nabla_Y L) W_{2,p}^T$ (**Zero comm**, matches local shard) | **1 All-Reduce(SUM)** at Column input ($\nabla_X L$) |
+| **Forward Pass** | $h_p = X A_p$ (**Zero comm**, $f = \text{Identity}$) | $Z_p = h_p B_p$ (Local partial dot-products) | **1 All-Reduce(SUM)** at Row output ($g = \text{All-Reduce}$) |
+| **Backward Pass** | $\nabla_{A_p} L = X^T \nabla_{h_p} L$ (Local, zero comm)<br>$\nabla_X L = \sum (\nabla_{h_p} L) A_p^T$ ($f = \text{All-Reduce}$) | $\nabla_{B_p} L = h_p^T \nabla_Z L$ (Local, zero comm)<br>$\nabla_{h_p} L = (\nabla_Z L) B_p^T$ (**Zero comm**, $g = \text{Identity}$) | **1 All-Reduce(SUM)** at Column input ($f = \text{All-Reduce}$) |
+
+### Sharding Across a Full Transformer Block (CS336 Row vs Column Map)
+
+In a complete Transformer layer (CS336 slide "Row vs Column tensor parallel"), components partition systematically across Attention and MLP blocks:
+
+```text
+Transformer Block Sharding Map:
+1. Columnwise Parallel:
+   - Self-Attention: Q, K, V projection matrices (split attention heads: Q=[Q1, Q2], K=[K1, K2], V=[V1, V2])
+   - MLP: Up-projection (and gate-projection in SwiGLU)
+2. Rowwise Parallel:
+   - Self-Attention: Output projection W_O (sums sharded head outputs back to hidden dim)
+   - MLP: Down-projection W_down (sums intermediate feature activations back to hidden dim)
+3. Replicated Across GPUs:
+   - Normalizations: LayerNorm / RMSNorm (computed on replicated hidden states)
+   - Routing: MoE gating routers and layer biases
+```
+
+Across an entire Transformer block, this optimal pairing requires **exactly 2 All-Reduces in forward** (1 at $W_O$, 1 at $W_{\text{down}}$) and **exactly 2 All-Reduces in backward** (1 before QKV, 1 before gate/up).
 
 ### Why Column-Parallel Backpropagation Produces Partial Sums
 
