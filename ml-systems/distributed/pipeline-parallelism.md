@@ -250,6 +250,9 @@ Pipeline parallelism cannot achieve complete overlap at cluster boundaries:
 4. **Explain: Why is the final pipeline stage's overhead exposed on the critical path?**
    The final stage must evaluate the vocabulary projection and cross-entropy loss before backpropagation can start. Upstream stages cannot begin backward computation until this loss evaluation completes, exposing final-stage compute latency directly on the training critical path.
 
+5. **Decide: Can individual pipeline stages update their weights immediately after computing their local gradients?**
+   In standard synchronous training, stages cannot update immediately due to two constraints: (1) **Micro-batch Accumulation**: All micro-batches must evaluate on identical parameters to avoid weight staleness (PipeDream circumvents this by stashing multiple parameter versions in memory at high VRAM cost); and (2) **Global Gradient Norm Coupling**: `clip_grad_norm_` couples all layers via global sum $\sqrt{\sum \|\nabla W_l\|^2}$. Zero Bubble (Qi et al., ICLR 2024) speculatively bypasses this synchronization barrier via optimistic post-validation with in-place rollback. This grants weight gradients a flexible scheduling window $[\text{after local } B_l, \text{ before optimizer update}]$, allowing $W$ to fill bubble slots without delaying the critical path.
+
 ---
 
 ## See Also
