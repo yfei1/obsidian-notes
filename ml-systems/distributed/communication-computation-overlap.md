@@ -116,7 +116,34 @@ To rigorously predict whether a distributed execution plan is compute-bound or c
 | **Model Parallel (MP / TP)** | $\frac{4 B D F}{Y} + \frac{8 B D F}{Y} = \mathbf{\frac{12 B D F}{Y}}$ | $4 B D + 4 B D = \mathbf{8 B D}$ (Fwd All-Reduce + Bwd All-Reduce on activations) |
 | **Hybrid (FSDP + MP)** | $\frac{4 B D F}{X \cdot Y} + \frac{8 B D F}{X \cdot Y} = \mathbf{\frac{12 B D F}{X Y}}$ | $\left(\frac{4 B D}{X} + \frac{4 D F}{Y}\right) + \left(\frac{8 B D}{X} + \frac{8 D F}{Y}\right)$ |
 
-*(Note: Compute accounts for standard 2 FLOPs/MAC for matrix multiplications: $4BDF$ in forward pass, $8BDF$ in backward pass for weight and activation gradients).*
+#### First-Principles Derivation of Every Table Entry
+
+1. **FLOPs Derivation ($4BDF$ Forward, $8BDF$ Backward)**:
+   - For a 2-layer FFN with input dimension $D$ and intermediate dimension $F$:
+     - Up-projection ($X W_1$, shape $(B, D) \times (D, F)$): requires $2 \cdot B \cdot D \cdot F = 2BDF$ FLOPs.
+     - Down-projection ($H W_2$, shape $(B, F) \times (F, D)$): requires $2 \cdot B \cdot F \cdot D = 2BDF$ FLOPs.
+     - Forward GEMM total: $2BDF + 2BDF = \mathbf{4BDF}$ FLOPs. *(Note: "(ignoring gating einsum)" denotes omitting the third gate projection layer present in SwiGLU architectures to isolate the baseline 2-layer scaling).*
+     - In backward pass, every forward GEMM induces two backward GEMMs (one for activation gradient $\nabla_X = \nabla_Y W^T$, one for weight gradient $\nabla_W = X^T \nabla_Y$). Thus, backward compute is exactly $2 \times \text{Forward} = \mathbf{8BDF}$ FLOPs.
+     - Total per-layer compute: $4BDF + 8BDF = \mathbf{12BDF}$ FLOPs.
+
+2. **DP Communication ($0\text{ Fwd} + 8DF\text{ Bwd}$)**:
+   - Total FFN weights equal $2 \times (D \times F) = 2DF$ parameters ($4DF$ bytes in 16-bit precision).
+   - Forward pass computes on local data shards with zero network transfer ($0$ bytes).
+   - Backward pass performs All-Reduce over weight gradients: Ring/tree All-Reduce transfers $2 \cdot \frac{X-1}{X} \cdot (\text{size}) \to 2 \times 4DF = \mathbf{8DF}$ bytes.
+
+3. **FSDP Communication ($4DF\text{ Fwd} + 8DF\text{ Bwd}$)**:
+   - Forward pass executes an All-Gather to reconstruct $4DF$ bytes of layer weights: transfers $\mathbf{4DF}$ bytes, discarded immediately after forward compute.
+   - Backward pass executes an All-Gather to reconstruct weights for activation gradients ($4DF$ bytes), then a Reduce-Scatter over weight gradients ($4DF$ bytes): $4DF + 4DF = \mathbf{8DF}$ bytes.
+   - Total FSDP communication is $12DF$ bytes ($1.5\times$ the $8DF$ communication of DP).
+
+4. **MP Communication ($4BD\text{ Fwd} + 4BD\text{ Bwd}$)**:
+   - Forward pass shards $W_1$ by column and $W_2$ by row. Row-parallel output requires an All-Reduce on hidden activations of shape $(B, D)$ ($2BD$ bytes): transfers $2 \times 2BD = \mathbf{4BD}$ bytes.
+   - Backward pass requires an All-Reduce of equal size on activation gradients: transfers $2 \times 2BD = \mathbf{4BD}$ bytes.
+
+5. **Hybrid FSDP + MP Communication**:
+   - On a 2D mesh ($X \times Y$), MP acts on local batch size $B/X$ (generating $\frac{4BD}{X}$ and $\frac{8BD}{X}$ activation bytes).
+   - FSDP acts on MP-sharded weights of size $4DF/Y$ (generating $\frac{4DF}{Y}$ and $\frac{8DF}{Y}$ weight bytes).
+   - Adding components yields forward $\left(\frac{4BD}{X} + \frac{4DF}{Y}\right)$ and backward $\left(\frac{8BD}{X} + \frac{8DF}{Y}\right)$ bytes.
 
 ---
 
