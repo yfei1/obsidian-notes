@@ -249,7 +249,7 @@ Output hidden state norm: 9.3716
 
 ### Guideline 4: Prefer Expert Parallelism (EP) Over Tensor Parallelism (TP) for MoE
 
-In MoE architecture design, NVIDIA establishes a core operational rule: **Prefer EP over TP for Expert Layers**.
+In MoE architecture design, NVIDIA establishes Guideline 4: **Prefer EP over TP for Expert Layers** (*"EP is roughly like TP in behavior for MLPs – high bandwidth, reduces activation"*):
 
 | EP Advantage | Architectural Mechanism | Impact on Hardware Performance |
 |---|---|---|
@@ -258,7 +258,7 @@ In MoE architecture design, NVIDIA establishes a core operational rule: **Prefer
 | **Simpler Computation Graph** | Clean stream boundaries | Independent expert branches make it straightforward to overlap All-to-All dispatch with shared expert GEMMs. |
 | **Eliminated Token Permutation** | Native expert mapping | When $\text{EP} = \text{num\_experts}$, each GPU hosts exactly one expert; intra-device token sorting/permutation is eliminated. |
 
-*(Empirical Benchmark: On Mixtral 8x7B, $\text{EP8} \times \text{TP1}$ significantly outperforms $\text{EP4} \times \text{TP2}$).*
+*(Empirical Benchmark & Trade-off Boundary: On Mixtral 8x7B, $\text{EP8} \times \text{TP1}$ significantly outperforms $\text{EP4} \times \text{TP2}$. The slide underscores the core constraint: "But, splitting matmuls can reduce efficiency vs routing activations").*
 
 #### Complexity in Composing EP with 3D Parallelism (CS336 Fig. 8)
 
