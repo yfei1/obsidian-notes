@@ -237,7 +237,7 @@ ZeRO-3 scales static states toward zero ($\frac{16\Psi}{N_d} \to 0$), but operat
 
 ### 3. The 1,920-GPU Throughput Collapse: ZeRO-3 vs 3D Parallelism (PTD-P)
 
-Benchmark data on 175B and 530B models (Smith et al., arXiv:2201.11990; Megatron-Turing NLG 530B) illustrates why pure data-parallel sharding fails at massive cluster scale:
+Benchmark data on 175B and 530B models (Narayanan et al., arXiv:2104.04473, Figure 10) illustrates why pure data-parallel sharding fails at massive cluster scale:
 
 ```text
 Achieved TFLOP/s per GPU across Cluster Scaling:
