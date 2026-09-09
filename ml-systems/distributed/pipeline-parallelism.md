@@ -213,6 +213,7 @@ Despite the presence of pipeline bubbles ("Pipelines seem terrible. Why do we do
    - **Parameter-Count Independence**: The boundary activation volume depends exclusively on micro-batch size $b$, sequence length $s$, and hidden dimension $h$. **It does not scale with the number of layers or parameter count within the stage**. Whether a stage contains 10 layers or 40 layers, the boundary payload remains identical.
 
 3. **Industrial Interconnect Affinity (Rule of Thumb)**:
+   As the CS336 slide concludes: *"Generally, we will use pipelines on slower network links (i.e. inter-node) as a way to get better memory-wise scaling."* While Tensor Parallelism is confined to intra-node NVLink, Pipeline Parallelism comfortably scales across inter-node InfiniBand or Ethernet fabrics:
 
 | Interconnect Level | Hardware Bandwidth | Recommended Parallelism | Physical Rationale |
 |---|---|---|---|
