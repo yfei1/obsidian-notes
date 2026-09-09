@@ -4,7 +4,7 @@
 
 ## TL;DR
 
-Modern AI hardware scaling is fundamentally constrained by the "communication wall"—the stark performance cliff between intra-node bus interconnects (Scale-Up) and inter-node network fabrics (Scale-Out). To satisfy the massive all-to-all bisection bandwidth demands of Mixture of Experts (MoE) architectures, the industry has diverged into three distinct physical interconnect philosophies. NVIDIA GB200 NVL72 prioritizes energy efficiency by binding 72 GPUs across passive copper backplanes with zero transceiver power within a compact 2-meter envelope (~120 kW rack per NVIDIA, ~145 kW system per SemiAnalysis). Huawei CloudMatrix 384 (arXiv:2506.12708) executes an asymmetric trade-off, interconnecting 384 Ascend 910 NPUs and 192 Kunpeng CPUs across 16 racks using 6,912 400G LPO optical transceivers, accepting high system power (~559 kW per SemiAnalysis) to bypass multi-node communication bottlenecks under semiconductor manufacturing constraints. Google TPU (arXiv:2304.01433) departs from discrete packet switch chips entirely, employing reconfigurable Optical Circuit Switches (OCS, consuming <3% of system power) supporting selectable 3D Torus topologies, trading general-purpose network simplicity for compiler-driven spatial layout optimization.
+Modern AI hardware scaling is fundamentally constrained by the "communication wall"—the stark performance cliff between intra-node bus interconnects (Scale-Up) and inter-node network fabrics (Scale-Out). To satisfy the massive all-to-all bisection bandwidth demands of Mixture of Experts (MoE) architectures, the industry has diverged into three distinct physical interconnect philosophies. NVIDIA GB200 NVL72 prioritizes energy efficiency by binding 72 GPUs across passive copper backplanes with zero transceiver power within a compact 2-meter envelope (~120 kW rack per NVIDIA, ~145 kW system per SemiAnalysis). Huawei CloudMatrix 384 (arXiv:2506.12708) executes an asymmetric trade-off, interconnecting 384 Ascend 910C NPUs and 192 Kunpeng CPUs across 16 racks using 6,912 400G LPO optical transceivers, accepting high system power (~559 kW per SemiAnalysis) to bypass multi-node communication bottlenecks under semiconductor manufacturing constraints. Google TPU (arXiv:2304.01433) departs from discrete packet switch chips entirely, employing reconfigurable Optical Circuit Switches (OCS, consuming <3% of system power) supporting selectable 3D Torus topologies, trading general-purpose network simplicity for compiler-driven spatial layout optimization.
 
 ---
 
@@ -51,11 +51,11 @@ To bridge the Scale-Up/Scale-Out divide, contemporary AI hardware architects hav
 | Dimension | Huawei Ascend (CloudMatrix 384, arXiv:2506.12708) | NVIDIA GPU (GB200 NVL72) | Google TPU (v4 / v5p, arXiv:2304.01433) |
 |---|---|---|---|
 | **Core Scaling Strategy** | **System-Level Compensation**: Expand Scale-Up domain to 384 NPUs + 192 CPUs to offset single-chip process limits | **Silicon Density & Passive Efficiency**: Maximize single-chip compute and package tightly within copper reach | **Specialized Architecture & Co-Design**: Eliminates discrete switch chips via direct mesh and optical circuit routing |
-| **Scale-Up Domain Size** | **384 Ascend 910 NPUs** + 192 Kunpeng CPUs (Flat across 16 racks: 12 compute + 4 switch) | **72 Blackwell GPUs** (Single-rack NVLink domain; expands to multi-rack via InfiniBand/RoCE) | **4,096 to 8,960 Chips** (Direct mesh torus domain) |
+| **Scale-Up Domain Size** | **384 Ascend 910C NPUs** + 192 Kunpeng CPUs (Flat across 16 racks: 12 compute + 4 switch) | **72 Blackwell GPUs** (Single-rack NVLink domain; expands to multi-rack via InfiniBand/RoCE) | **4,096 to 8,960 Chips** (Direct mesh torus domain) |
 | **Physical Interconnect Medium** | **All-Optical Interconnect**: 6,912 400G LPO optical transceivers (SemiAnalysis) + optical fiber | **Passive Direct Copper**: ~5,000 internal passive copper twinax cables (NVLink Spine) | **Hybrid Copper + Optical**: Direct short copper between adjacent neighbors; OCS optical fiber inter-rack |
 | **Switch Architecture** | Multi-tier discrete optical/electrical packet switches running Unified Bus (UB) | Discrete NVSwitch chips inside compute tray spine | **No physical packet switch chips**: Direct neighbor links + MEMS Optical Circuit Switches (OCS) |
 | **Network Hardware Power** | **Very High**: Continuous Optical-Electrical-Optical (O-E-O) conversion; total cluster power ~559 kW (SemiAnalysis) | **Near Zero**: Passive copper cables draw zero transceiver power; ~120 kW rack (NVIDIA) to ~145 kW system (SemiAnalysis) | **Low Power**: OCS and optical components consume <3% of system power and <5% of system cost (Jouppi et al., 2023) |
-| **Topology & Latency** | Full-mesh crossbar semantics (<1 µs latency overhead across racks per Huawei technical presentation benchmark) | Single-hop crossbar via NVSwitches (<2m copper limit) | **Optically Reconfigurable Mesh**: Reconfigurable OCS topology supporting selectable twisted 3D Torus |
+| **Topology & Latency** | Full-mesh crossbar semantics (inter-node latency increase <1 µs and bandwidth degradation <3% per arXiv:2506.12708 Table 1) | Single-hop crossbar via NVSwitches (<2m copper limit) | **Optically Reconfigurable Mesh**: Reconfigurable OCS topology supporting selectable twisted 3D Torus |
 | **Software / Compiler Reliance** | Unified Bus (UB) protocol and CANN communication scheduler | NVLink peer memory addressing via standard CUDA/NCCL | **Extreme**: XLA compiler must explicitly map tensor dimensions to physical 3D mesh axes |
 
 ---
@@ -68,15 +68,15 @@ The architecture of Huawei's Ascend supernodes (CloudMatrix 384 and Atlas 950) i
 
 ### The Objective Dilemma: Silicon Density Constraints
 
-Under external trade and semiconductor fabrication restrictions, domestic accelerator silicon (such as the Ascend 910 series) exhibits lower transistor density, raw FP8/BF16 tensor throughput, and HBM memory bandwidth compared to TSMC-packaged NVIDIA Blackwell GPUs:
-- **Chip Multiplier**: To deliver equivalent aggregate cluster compute, system architects must assemble 3–5x more physical chips (e.g., 384 Ascend 910 NPUs to match approximately 72 Blackwell GPUs).
+Under external trade and semiconductor fabrication restrictions, domestic accelerator silicon (such as the Ascend 910C series) exhibits lower transistor density, raw FP8/BF16 tensor throughput, and HBM memory bandwidth compared to TSMC-packaged NVIDIA Blackwell GPUs:
+- **Chip Multiplier (D69)**: To deliver equivalent aggregate cluster compute, system architects must assemble an estimated 3–5x more physical chips (e.g., 384 Ascend 910C NPUs vs 72 Blackwell GPUs, a 5.3x physical count ratio, based on SemiAnalysis dense compute estimates).
 - **The Scale-Out Failure**: Partitioning 384 chips across 48 traditional 8-card servers connected by standard RoCE or InfiniBand networks introduces severe cross-node communication bottlenecks. In MoE all-to-all routing and pipeline stage handoffs, packet serialization and multi-microsecond NIC traversals destroy Model Flops Utilization (MFU).
 
 ### The Architectural Breakthrough: Unifying 384 NPUs into a Single Scale-Up Domain
 
 Huawei bypassed the multi-node scale-out cliff by expanding the Scale-Up boundary beyond the physical chassis:
-- **Unified Bus (UB)**: Rather than restricting bus-level interconnects to a single motherboard or rack, Huawei engineered a proprietary Unified Bus protocol that treats 384 Ascend 910 NPUs and 192 Kunpeng CPUs (arXiv:2506.12708) as a single flat, peer-to-peer memory domain.
-- **Flat Non-Blocking Crossbar**: Spanning 16 physical racks (12 compute racks and 4 optical switch racks), the supernode provides any-to-any peer addressing. Huawei technical benchmarks report inter-rack latency overhead under $1\,\mu\text{s}$ and bandwidth attenuation below $3\%$.
+- **Unified Bus (UB)**: Rather than restricting bus-level interconnects to a single motherboard or rack, Huawei engineered a proprietary Unified Bus protocol that treats 384 Ascend 910C NPUs and 192 Kunpeng CPUs (arXiv:2506.12708) as a single flat, peer-to-peer memory domain.
+- **Flat Non-Blocking Crossbar**: Spanning 16 physical racks (12 compute racks and 4 optical switch racks), the supernode provides any-to-any peer addressing. Reported inter-node latency increase is under $1\,\mu\text{s}$ and bandwidth degradation is below $3\%$ (arXiv:2506.12708 Table 1).
 - **Native Massive MoE Support**: For modern mixture-of-experts workloads, this architecture provides direct all-to-all token dispatch up to EP320, eliminating the hierarchical tiered bottlenecks of traditional multi-tier clusters.
 
 ### The Engineering Tax: Why the Cost is High Electrical Power
@@ -84,12 +84,16 @@ Huawei bypassed the multi-node scale-out cliff by expanding the Scale-Up boundar
 Expanding a high-speed Scale-Up bus across 16 physical racks incurs an immense electrical and facility tax:
 
 1. **The 2-Meter Physical Copper Barrier**:
-   High-speed electrical signaling across passive copper cables (such as PCIe Gen5 or NVLink twinax) experiences exponential signal attenuation, imposing an unyielding physical limit of **1.5 to 2.0 meters**. A cluster of 16 racks spanning tens of meters cannot physically run on copper cabling.
-2. **The Optical Transceiver Power Penalty (O-E-O Conversion)**:
-   Huawei was compelled to build an all-optical supernode fabric utilizing **6,912 400G LPO optical transceivers** (SemiAnalysis) and extensive optical fiber bundles. Unlike passive copper, optical modules actively consume electrical power at every optical-to-electrical and electrical-to-optical (O-E-O) transceiver boundary, radiating tens of kilowatts of heat solely within the network interconnect.
-3. **Macro-System Power Ledger**:
-   - **NVIDIA GB200 NVL72**: By packaging 72 GPUs inside a compact 2-meter envelope with ~5,000 passive copper cables, NVIDIA achieves zero transceiver conversion power, keeping rack power to ~120 kW (NVIDIA official) or ~145 kW (SemiAnalysis system estimate).
-   - **Huawei CloudMatrix 384**: Due to the chip multiplier (384 NPUs) and all-optical switching fabric, total system power reaches approximately **559 kW** (SemiAnalysis estimate)—nearly $4\times$ the consumption of an NVL72 rack, requiring complex full-liquid cooling infrastructure.
+   Passive direct-attach copper (DAC) twinax signaling experiences severe high-frequency attenuation, imposing an unyielding physical reach limit of **1.5 to 2.0 meters** at 100G–200G/lane PAM4 rates. A supernode spanning 16 physical racks cannot run on passive copper.
+2. **Optical Interconnect Power Breakdown (D66)**:
+   Huawei was compelled to build an all-optical supernode fabric utilizing **6,912 400G LPO optical transceivers** (SemiAnalysis). Linear Pluggable Optics (LPO) eliminates DSP retimers to reduce per-module power to 8–12 W, but 6,912 modules still consume **~55–83 kW** solely in the optical interconnect fabric. In the estimated **~559 kW** cluster total (SemiAnalysis), compute hardware (384 Ascend 910C NPUs and 192 Kunpeng CPUs) and liquid cooling dominate the remaining ~475–500 kW.
+3. **Bandwidth Comparison & The 2.3x Gap (D68)**:
+   Each Ascend 910C delivers over 392 GB/s of unidirectional interconnect bandwidth (arXiv:2506.12708). Normalizing both architectures to a consistent unidirectional per-accelerator basis:
+   $$\frac{900\text{ GB/s (NVLink 5.0 per direction)}}{392\text{ GB/s (Ascend 910C per direction)}} \approx \mathbf{2.3\times}$$
+   *(Comparing 392 GB/s against NVIDIA's 1.8 TB/s bidirectional aggregate creates an invalid 4.6x comparison trap).*
+4. **Macro-System Power Ledger**:
+   - **NVIDIA GB200 NVL72**: Packaging 72 GPUs inside a compact 2-meter copper envelope with ~5,000 passive cables achieves zero transceiver conversion power, keeping rack power to ~120 kW (NVIDIA official) or ~145 kW (SemiAnalysis system estimate).
+   - **Huawei CloudMatrix 384**: Due to the chip multiplier (384 NPUs vs 72 GPUs, estimated 3–5x compute multiplier) and optical fabric, total system power reaches approximately **559 kW** (SemiAnalysis estimate)—nearly $4\times$ the consumption of an NVL72 rack, requiring complex full-liquid cooling infrastructure.
 
 > **Strategic Trade-off Summary**: In an operating environment with abundant electrical grid and renewable power capacity, Huawei deliberately traded higher electricity bills and facility cooling overhead (Power) to erase the inter-node network wall (Communication Bottleneck), enabling hundreds of domestic chips to train large-scale frontier models cooperatively.
 
