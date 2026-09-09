@@ -45,6 +45,65 @@ With SP:
 
 ---
 
+### The "Fixed 10" Problem: Activation Memory Under Tensor Parallelism
+
+In standard Tensor Parallelism with tensor parallel size $t$ (without Sequence Parallelism), activation memory per transformer layer does not scale purely as $1/t$:
+
+$$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(10 + \frac{24}{t} + 5 \frac{a \cdot s}{h \cdot t}\right)\text{ elements}}$$
+
+Where:
+- $\frac{24}{t} \cdot s b h$: The matrix multiplication activations inside Attention and MLP, successfully sharded across $t$ GPUs along hidden dimensions.
+- $5 \frac{a s}{h t} \cdot s b h = \frac{5 a b s^2}{t}$: The quadratic attention matrix terms, sharded across $t$ attention head partitions.
+- **The "Fixed 10" ($10 \cdot s b h$)**: Activations from non-tensor-parallel operations that **cannot be sharded across the hidden dimension $h$**:
+  - LayerNorm inputs and outputs: **$4 s b h$**
+  - Dropout masks and activations: **$2 s b h$**
+  - Input buffers to Attention and MLP blocks: **$4 s b h$**
+  - Total unsharded term: $4 + 2 + 4 = \mathbf{10 s b h}$ elements.
+
+As models scale up $t$ (e.g. $t = 8$), the sharded terms shrink ($24/8 = 3$), leaving the fixed $10 s b h$ term to dominate up to **$70\%$ of the remaining activation memory**. Tensor Parallelism alone cannot reduce this memory.
+
+---
+
+### Making Memory Truly Linear: Sequence Parallelism (CS336 & Megatron v2)
+
+Sequence Parallelism (Korthikanti et al., 2022) solves the "fixed 10" by observing that all $10 s b h$ operations are **pointwise operations across the sequence dimension**:
+
+#### Sequence-Level Sharding vs Hidden-Axis Sharding
+- **Hidden-Axis Sharding (TP)**: Slices each token's hidden vector $h$ into $[h/t]$. Because LayerNorm requires the full hidden dimension to compute channel mean and variance ($\mu = \frac{1}{h} \sum x_i$), LayerNorm cannot be sharded along $h$.
+- **Sequence-Level Sharding (SP)**: Slices the sequence of tokens $s$ into $[s/t]$. GPU 0 receives tokens $0 \dots \frac{s}{t}-1$; GPU 1 receives tokens $\frac{s}{t} \dots \frac{2s}{t}-1$. Because LayerNorm and Dropout operate on each token independently, they execute across sequence shards with zero cross-GPU communication.
+
+#### The Alternating Communication Lifecycle ($g$ and $\bar{g}$)
+
+```text
+Transformer Input ──► [SP: LayerNorm] ──► g (All-Gather) ──► [TP: Self-Attention] ──► g_bar (Reduce-Scatter) ──► [SP: Dropout + Residual]
+                  ──► [SP: LayerNorm] ──► g (All-Gather) ──► [TP: MLP Block]      ──► g_bar (Reduce-Scatter) ──► [SP: Dropout + Residual]
+```
+
+1. **Forward Pass**:
+   - Before TP matrix multiplies, operator $g$ (**`All-Gather`**) reconstructs full sequence length $s$ across GPUs.
+   - After TP matrix multiplies, operator $\bar{g}$ (**`Reduce-Scatter`**) sums partial dot-products and scatters the output back along the sequence dimension ($s/t$).
+2. **Backward Pass**:
+   - In backpropagation, the operators are strictly reversed: $g$ becomes **`Reduce-Scatter`**, and $\bar{g}$ becomes **`All-Gather`**.
+3. **Byte-Neutrality**: Because Reduce-Scatter and All-Gather each move $\frac{t-1}{t} S$ bytes, the pair moves $2 \cdot \frac{t-1}{t} S$ bytes—identically matching the communication volume of a single All-Reduce.
+
+---
+
+### Making Activation Memory Fully Scale: The Master Comparison Table
+
+Combining Tensor Parallelism, Sequence Parallelism, and Selective Activation Recomputation completely linearizes activation memory:
+
+| Parallelism Configuration | Activation Memory per Transformer Layer (Elements) | Scaling Behavior |
+|---|---|---|
+| **No Parallelism** | $s b h \left(34 + 5 \frac{a s}{h}\right)$ | Baseline ($O(s^2)$ attention + $34sbh$ linear) |
+| **Tensor Parallel (Baseline)** | $s b h \left(10 + \frac{24}{t} + 5 \frac{a s}{h t}\right)$ | Shards GEMMs, but hits the "fixed 10" floor |
+| **Tensor + Sequence Parallel** | $s b h \left(\frac{34}{t} + 5 \frac{a s}{h t}\right)$ | **Eliminates the fixed 10**: all linear terms scale as $1/t$ |
+| **Tensor Parallel + Selective Recomputation** | $s b h \left(10 + \frac{24}{t}\right)$ | Drops quadratic term via SRAM recomputation; fixed 10 remains |
+| **TP + SP + Selective Recomputation** | $\mathbf{s b h \left(\frac{34}{t}\right)}$ | **Full Linear Scaling**: Both quadratic and fixed terms eliminated! |
+
+*(CS336 Master Table: When TP, SP, and FlashAttention / selective recomputation are unified, activation memory scales strictly linearly with cluster size $t$, enabling training at 32K–128K context lengths).*
+
+---
+
 ## Context Parallelism (CP)
 
 ### The problem it solves

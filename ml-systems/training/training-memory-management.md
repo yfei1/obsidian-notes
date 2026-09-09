@@ -39,15 +39,24 @@ Micro-step 2: [ Forward b=B/4 ] ──► [ Backward & Accumulate Grad ] ──�
 
 ## How It Works
 
-### 1. Activation Memory Formula
+### 1. Transformer Per-Layer Activation Memory Formula (CS336 & Megatron Formulation)
 
-For an $L$-layer model with hidden dimension $D$ processing batch size $B$ in 16-bit precision (**BF16**, 2 bytes/element):
+In transformer training without activation recomputation (storing all forward activations for backpropagation), activation memory per layer scales according to the exact structural breakdown:
 
-$$\text{Activation Elements} = B \cdot D \cdot L \implies \text{Activation Memory} = \mathbf{2 \times B \times D \times L\text{ Bytes}}$$
+$$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(34 + 5 \frac{a \cdot s}{h}\right)\text{ elements}}$$
 
-For a 70B-scale model ($D = 4096, L = 32$) with batch $B = 4096$:
-$$\text{Full-Batch Activation Memory} = 2 \times 4096 \times 4096 \times 32 = \mathbf{1.07\text{ GB per layer group}}$$
-At large batch sizes or long context lengths, activation memory exceeds physical GPU HBM, triggering Out-Of-Memory (OOM) errors.
+Where:
+- $s$: sequence length (tokens per sample)
+- $b$: micro-batch size
+- $h$: hidden dimension size ($d_{\text{model}}$)
+- $a$: number of attention heads
+- In 16-bit precision (BF16), total bytes per layer equals $2 \times \text{elements}$.
+
+#### The Two Distinct Memory Regimes:
+1. **The Linear Term ($34 \cdot s \cdot b \cdot h$)**: Originates from linear projection inputs and outputs across Attention (Q, K, V projections and output projection $W_O$) and MLP blocks (gate, up, and down projections in SwiGLU), plus normalization layer inputs.
+2. **The Quadratic Attention Term ($5 \frac{a \cdot s}{h} \cdot s \cdot b \cdot h = 5 a b s^2$)**: Originates from the quadratic attention matrix operations ($Q K^T$ scores, Softmax probabilities, attention dropout masks, and Value context combinations).
+3. **Dropping the Quadratic Term (FlashAttention & Recomputation)**:
+   As sequence length $s$ expands, the quadratic $5 a b s^2$ term rapidly dwarfs the linear $34 s b h$ term. FlashAttention (Dao et al., 2022) and selective activation checkpointing (Korthikanti et al., 2022) **drop this entire quadratic term via on-the-fly recomputation in SRAM**, reducing activation memory strictly to the linear term.
 
 ---
 

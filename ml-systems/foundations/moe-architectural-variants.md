@@ -262,6 +262,29 @@ Output hidden state norm: 9.3716
 
 ---
 
+### Guideline 4: Prefer Expert Parallelism (EP) Over Tensor Parallelism (TP) for MoE
+
+In MoE architecture design, NVIDIA establishes a core operational rule: **Prefer EP over TP for Expert Layers**.
+
+| EP Advantage | Architectural Mechanism | Impact on Hardware Performance |
+|---|---|---|
+| **Better GEMM Efficiency** | Larger local matrix dimensions | TP slices individual expert matrices into $1/t$ fragments, reducing GEMM tile sizes ($M, N, K$) below Tensor Core saturation. EP keeps expert matrices intact on assigned GPUs, sustaining peak MFU. |
+| **Lower Communication Overhead** | Selective token routing vs unconditional sync | TP forces two All-Reduces per layer across all tokens. EP transmits only actively routed tokens ($k$ tokens per sample) via All-to-All, reducing total bytes moved. |
+| **Simpler Computation Graph** | Clean stream boundaries | Independent expert branches make it straightforward to overlap All-to-All dispatch with shared expert GEMMs. |
+| **Eliminated Token Permutation** | Native expert mapping | When $\text{EP} = \text{num\_experts}$, each GPU hosts exactly one expert; intra-device token sorting/permutation is eliminated. |
+
+*(Empirical Benchmark: On Mixtral 8x7B, $\text{EP8} \times \text{TP1}$ significantly outperforms $\text{EP4} \times \text{TP2}$).*
+
+#### Complexity in Composing EP with 3D Parallelism (CS336 Fig. 8)
+
+When scaling MoE across massive clusters, architectures compose across four paradigms:
+1. **Data + Expert Parallelism (DP+EP)**: Gating and All-to-All Dispatch route tokens across DP replicas. DP usually shares replicas with EP splits ($\text{EP} \le \text{DP}$).
+2. **Data + Expert + Tensor Parallelism (DP+EP+TP)**: Combines TP within a node with EP across nodes. However, DP and TP can interact adversely: slicing both tokens and hidden dimensions can fragment local batch sizes, dropping GEMM arithmetic intensity.
+3. **Data + Expert + Pipeline Parallelism (DP+EP+PP)**: Stages layers across PP nodes while sharding experts across EP ranks.
+4. **Expert + Tensor Parallelism (EP+TP)**: Applied in low-concurrency inference where memory bandwidth dominates.
+
+---
+
 ## Interview Talking Points
 
 1. **Why does DeepSeekMoE isolate Shared Experts from Routed Experts?**
