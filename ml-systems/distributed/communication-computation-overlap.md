@@ -95,6 +95,80 @@ $$\text{Realistic Step Time} = \max(T_{\text{computation}}, T_{\text{communicati
 
 ---
 
+### 5. Theoretical Compute vs. Communication Model (TPU Book Formulation)
+
+To rigorously predict whether a distributed execution plan is compute-bound or communication-bound, the **JAX/TPU Scaling Model** (Roberts et al.) formalizes per-layer compute and communication volumes on a 2D/3D hardware mesh:
+
+#### Parameter Definitions
+- $B$: Global batch size (tokens)
+- $D$: Hidden dimension size ($d_{\text{model}}$)
+- $F$: Feed-forward intermediate dimension (typically $F \approx 4D$)
+- $X$: Mesh dimension allocated to Data / FSDP parallelism
+- $Y$: Mesh dimension allocated to Model / Tensor parallelism (MP)
+- $N$: Total number of chips ($N = X \cdot Y$ on a 2D mesh, or $X \cdot Y \cdot Z$ on a 3D mesh)
+
+#### Per-Layer Compute and Communication Cost Model
+
+| Strategy | Compute per Layer (FLOPs, Fwd + Bwd) | Communication per Layer (Bytes, Fwd + Bwd) |
+|---|---|---|
+| **Data Parallel (DP)** | $\frac{4 B D F}{X} + \frac{8 B D F}{X} = \mathbf{\frac{12 B D F}{X}}$ | $0 + 8 D F = \mathbf{8 D F}$ (Backward gradient All-Reduce) |
+| **Fully Sharded (FSDP)** | $\frac{4 B D F}{X} + \frac{8 B D F}{X} = \mathbf{\frac{12 B D F}{X}}$ | $4 D F + 8 D F = \mathbf{12 D F}$ (Fwd All-Gather + Bwd All-Gather / Reduce-Scatter) |
+| **Model Parallel (MP / TP)** | $\frac{4 B D F}{Y} + \frac{8 B D F}{Y} = \mathbf{\frac{12 B D F}{Y}}$ | $4 B D + 4 B D = \mathbf{8 B D}$ (Fwd All-Reduce + Bwd All-Reduce on activations) |
+| **Hybrid (FSDP + MP)** | $\frac{4 B D F}{X \cdot Y} + \frac{8 B D F}{X \cdot Y} = \mathbf{\frac{12 B D F}{X Y}}$ | $\left(\frac{4 B D}{X} + \frac{4 D F}{Y}\right) + \left(\frac{8 B D}{X} + \frac{8 D F}{Y}\right)$ |
+
+*(Note: Compute accounts for standard 2 FLOPs/MAC for matrix multiplications: $4BDF$ in forward pass, $8BDF$ in backward pass for weight and activation gradients).*
+
+---
+
+### 6. The FLOPS/Comms Scaling Ratio and Batch Size Regimes
+
+The fundamental feasibility of overlapping communication behind computation is governed by the non-dimensional ratio:
+
+$$\mathcal{R} = \frac{T_{\text{computation}}}{T_{\text{communication}}} = \frac{\text{FLOPs} / \text{Hardware Peak FLOPS}}{\text{Bytes} / \text{Interconnect Bandwidth}}$$
+
+When $\mathcal{R} \ge 1.0$, the system is **computation-bound**, meaning communication can theoretically be $100\%$ hidden behind compute. When $\mathcal{R} < 1.0$, the system is **communication-bound**, and GPU compute engines stall waiting for the network.
+
+#### Why Pure MP Cannot Scale with Batch Size
+For Model/Tensor Parallelism (MP), communication scales with activations ($O(B)$), not static weights:
+$$\mathcal{R}_{\text{MP}} \propto \frac{\text{Compute}}{\text{Comms}} = \frac{12 B D F / Y}{8 B D} = \mathbf{\frac{1.5 F}{Y}}$$
+**Batch size $B$ cancels out completely**. Increasing global batch size does not improve the compute-to-communication ratio for pure MP. On high-latency or low-bandwidth interconnects, MP remains stuck below the horizontal $\mathcal{R} = 1.0$ threshold regardless of batch size.
+
+#### Why FSDP Linearizes with Batch Size
+In contrast, FSDP communication scales strictly with model parameters ($O(DF)$), which is independent of batch size:
+$$\mathcal{R}_{\text{FSDP}} \propto \frac{\text{Compute}}{\text{Comms}} = \frac{12 B D F / X}{12 D F} = \mathbf{\frac{B}{X}}$$
+The compute-to-communication ratio scales linearly with local per-chip batch size $B/X$. By increasing global batch size $B$, FSDP can always cross from the communication-bound regime into the compute-bound regime.
+
+#### The Three Operational Regimes on a $4 \times 4 \times 4$ Mesh (CS336 / TPU Book)
+
+On a representative 64-chip ($4 \times 4 \times 4$) torus/mesh topology, the scaling curves establish three distinct operating regimes based on per-chip batch size $B/N$:
+
+```text
+FLOPS Time / Comms Time (Ratio R)
+  ▲
+  │                                    Computation Bound (R >= 1.0)
+1.0 ┼───────────────────────╭───────────────────────────── (FSDP + MP)
+  │                   ╭─────╯                    ╭──────── (FSDP Only)
+  │             ╭─────╯                    ╭─────╯
+  │       ╭─────╯                    ╭─────╯
+  │ ──────┴──────────────────────────┴──────────────────── (MP Only: Flat line R ~ 0.6)
+  │       Regime 1          Regime 2          Regime 3
+0.1 ┼─── No Scheme Works ── Only Hybrid ─── Both Hybrid & FSDP ──► B/N (Per-chip batch)
+  0                      400               850                  2000
+```
+
+1. **Regime 1 ($B/N < 400$) — No Scheme Works**:
+   - Total batch size is too small to provide sufficient arithmetic work.
+   - All parallelization schemes (DP, FSDP, MP, Hybrid) have $\mathcal{R} < 1.0$; the system is strictly communication-bound.
+2. **Regime 2 ($400 \le B/N < 850$) — Only Mixed FSDP + MP Works**:
+   - Pure FSDP remains communication-bound ($\mathcal{R}_{\text{FSDP}} < 1.0$) because inter-node all-gather overhead dominates.
+   - Pure MP remains communication-bound ($\mathcal{R}_{\text{MP}} \approx 0.6$).
+   - **Hybrid FSDP + MP** succeeds ($\mathcal{R} \ge 1.0$) by confining high-frequency MP activation collectives to high-speed intra-node links while sharding weight tensors across slower inter-node mesh dimensions.
+3. **Regime 3 ($B/N \ge 850$) — Both Mixed FSDP + MP and Pure FSDP Work**:
+   - Local batch size is sufficiently massive that pure FSDP's compute volume completely hides its parameter All-Gather and Reduce-Scatter overhead ($\mathcal{R} \ge 1.0$).
+   - Pure FSDP becomes preferable here due to its simpler execution graph and absence of intra-layer tensor slicing.
+
+---
+
 ## Key Trade-offs & Decisions
 
 | Regime | Condition | Bottleneck | System Behavior |
