@@ -39,6 +39,31 @@ Stage 1 — Shard Optimizer States (N=8):
   Per-GPU: 28 (params) + 28 (grads) + 56/8 (opt) = 63 GB
   Reduction: 112 → 63 GB  (~1.8x)
 
+### ZeRO Stage 1 Execution Lifecycle (CS336 4-Step Pipeline)
+
+In ZeRO Stage 1 ($P_{os}$), training executes in four discrete steps that conserve total communication volume while slashing optimizer memory:
+
+```text
+Step 1: Compute local gradients on batch slice B/M (each rank computes a full gradient)
+Step 2: Reduce-Scatter gradients across ranks (costs 1x #params volume)
+        Rank 0 receives summed global gradient strictly for Partition 0: outY[i] = sum(inX[Y*count + i])
+Step 3: Each rank updates only its assigned parameter partition using its local optimizer state
+        Rank 0 updates Partition 0; Rank 1 updates Partition 1 (saving (P-1)/P of optimizer state)
+Step 4: All-Gather updated parameters across all ranks (costs 1x #params volume)
+        Reconstructs full updated parameters on all ranks: out[Y*count + i] = inY[i]
+```
+
+#### Communication Volume Conservation: Why ZeRO-1 Adds Zero Overhead
+
+A common misconception assumes sharding optimizer states adds network traffic. In reality, ZeRO Stage 1 decomposes the single All-Reduce of Naïve DDP into its two constituent halves:
+- **Naïve DDP**: Backward pass issues `All-Reduce(gradients)` ($2 \times \text{\# params}$), then every rank updates full parameters locally.
+- **ZeRO Stage 1**:
+  - Backward pass issues `Reduce-Scatter(gradients)` $\to$ **$1 \times \text{\# params}$**.
+  - Post-update issues `All-Gather(parameters)` $\to$ **$1 \times \text{\# params}$**.
+  - **Total Communication Volume**: $1 \times \text{\# params} + 1 \times \text{\# params} = \mathbf{2 \times \text{\# params}}$!
+
+The communication volume is **100% identical to Naïve DDP**. ZeRO-1 achieves up to a $4\times$ memory reduction at zero communication bandwidth penalty.
+
 Stage 2 — + Shard Gradients (N=8):
   Each GPU keeps gradients only for its assigned partition.
   Per-GPU: 28 (params) + 28/8 (grads) + 56/8 (opt) = 38.5 GB

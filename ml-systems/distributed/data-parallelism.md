@@ -224,9 +224,9 @@ Naïve Data Parallelism exhibits three foundational scaling properties across co
 
 In a cluster of $M$ machines with global batch size $B$:
 - **Compute Scaling**: Each GPU evaluates $\frac{B}{M}$ examples per step, scaling computational throughput linearly with cluster size.
-- **Communication Overhead ($2 \times \text{\# params}$ per batch)**:
+- **Communication Overhead ($2 \times \text{\# parameter elements}$, or $\approx 4N\text{ bytes}$ in BF16 per batch)**:
   - Forward pass requires **0 bytes** of communication.
-  - Backward pass synchronizes gradients via Ring All-Reduce, which requires two full cycles across the logical ring (Scatter-Reduce + All-Gather), transferring $2 \cdot \frac{M-1}{M} \times \text{Size} \approx \mathbf{2 \times \text{\# params}}$ per GPU.
+  - Backward pass synchronizes gradients via Ring All-Reduce, which requires two full cycles across the logical ring (Scatter-Reduce + All-Gather), transferring $2 \cdot \frac{M-1}{M} \times \text{Size} \approx \mathbf{2 \times \text{\# parameter elements}}$ ($\approx 4N\text{ bytes}$ for 2-byte BF16) per GPU.
 - **The Batch Dimension Contraction**:
   In backpropagation, the weight gradient is computed as $\nabla_W L = X^T \cdot (\nabla_Y L)$. The matrix multiplication contracts the inner batch dimension $B$:
   $$[D_{in} \times B] \times [B \times D_{out}] \implies [D_{in} \times D_{out}]$$
@@ -244,7 +244,7 @@ Naïve Data Parallelism provides **zero memory scaling**: every GPU must store f
 | **Copy 4** | **Adam First Moment ($m$)** | 4 bytes (FP32) | Exponential moving average of past gradients |
 | **Copy 5** | **Adam Second Moment ($v$)** | 4 bytes (FP32) | Exponential moving average of squared gradients |
 | **Total Static Footprint** | **Full Mixed Precision** | **16 bytes / param** | **$8\times$ baseline BF16 weights (5 physical copies)** |
-| *Alternative (In-Place)* | *Without Master Weights* | *12 bytes / param* | *$6\times$ baseline BF16 weights (4 physical copies)* |
+| *Alternative (No Master)* | *Pure BF16 / In-Place Adam* | *12 bytes / param* | *$6\times$ baseline BF16 weights (4 physical copies; risks update underflow)* |
 
 *(Motivation for ZeRO / FSDP: Because all 5 copies are replicated identically across every GPU in Naïve DP, sharding optimizer states, gradients, and parameters across workers eliminates this redundancy at zero mathematical cost; see [[ml-systems/distributed/zero-fsdp-memory-optimization]]).*
 
