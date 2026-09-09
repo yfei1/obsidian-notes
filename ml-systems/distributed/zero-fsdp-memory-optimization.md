@@ -215,6 +215,50 @@ print(f"Stage 3:  {stage3:.1f} GB")
 
 ---
 
+---
+
+## Scaling Boundaries: Why ZeRO 1/2 Don't Scale Memory and ZeRO-3 Throughput Collapses
+
+CS336 highlights two fundamental scaling boundaries inherent to pure data-parallel memory sharding:
+
+### 1. Why ZeRO Stages 1 and 2 "Don't Let You Scale Memory"
+
+True memory scaling implies that per-GPU memory decreases asymptotically toward zero as cluster size expands ($N_d \to \infty$). However, ZeRO Stages 1 and 2 hit rigid non-zero mathematical floors:
+- **ZeRO-1 Asymptotic Limit**:
+  $$\lim_{N_d \to \infty} \left(2\Psi + 2\Psi + \frac{K\Psi}{N_d}\right) = \mathbf{4\Psi \text{ bytes (Parameters + Gradients retained)}}$$
+- **ZeRO-2 Asymptotic Limit**:
+  $$\lim_{N_d \to \infty} \left(2\Psi + \frac{(2 + K)\Psi}{N_d}\right) = \mathbf{2\Psi \text{ bytes (Parameters retained)}}$$
+
+For a 70B parameter model in BF16, un-sharded parameters alone require **$2\Psi = 140\text{ GB}$**. Whether a cluster provisions 64, 1,024, or 10,000 GPUs, ZeRO-2 can never reduce static memory below 140 GB per GPU. On standard 80 GB GPUs, ZeRO-1 and ZeRO-2 remain mathematically incapable of executing the workload.
+
+### 2. The Activation Memory Blind Spot of ZeRO-3
+
+ZeRO-3 scales static states toward zero ($\frac{16\Psi}{N_d} \to 0$), but operates exclusively on model parameters, gradients, and optimizer states. It provides **zero reduction for dynamic activation memory** ($2BDL$ bytes saved during the forward pass). At long context lengths (32K–128K tokens), activation memory dominates VRAM, leaving ZeRO-3 vulnerable to out-of-memory errors unless paired with Activation Checkpointing or Sequence Parallelism.
+
+### 3. The 1,920-GPU Throughput Collapse: ZeRO-3 vs 3D Parallelism (PTD-P)
+
+Benchmark data on 175B and 530B models (Smith et al., arXiv:2201.11990; Megatron-Turing NLG 530B) illustrates why pure data-parallel sharding fails at massive cluster scale:
+
+```text
+Achieved TFLOP/s per GPU across Cluster Scaling:
+  TFLOP/s
+   200 ┬
+       │  ■──────■──────────────────■──────■  PTD-P 530B (~160 TFLOP/s flat)
+   150 ┼─ ▲──────▲──────────────────▲───────  PTD-P 175B (~145 TFLOP/s flat)
+       │  ●
+   100 ┼───\──────◆                           ZeRO-3 530B: Drops 140 ──► 50 TFLOP/s!
+       │    \──────\──────◆
+    50 ┼─────\──────●──────\────────●         ZeRO-3 175B: Collapses 145 ──► 45 TFLOP/s!
+       │      \             \
+     0 ┴───────┴─────────────┴─────────────┴
+              768           1152          1536          1920 GPUs
+```
+
+- **Why ZeRO-3 Collapses**: At 1,920 GPUs, issuing layer-by-layer All-Gathers across thousands of nodes saturates inter-rack network bisection bandwidth. Network packet serialization and straggler skew destroy compute efficiency, causing achieved throughput to plummet from ~150 to **~50 TFLOP/s per GPU** (a ~67% MFU collapse).
+- **Why PTD-P (Pipeline + Tensor + Data) Remains Flat**: 3D Parallelism confines high-frequency All-Reduces within single-node NVLink domains (TP), uses low-volume P2P activation transfers across stages (PP), and reserves inter-node networks strictly for gradient synchronization (DP), sustaining a flat **~160 TFLOP/s per GPU** out to thousands of accelerators.
+
+---
+
 ## ZeRO vs FSDP
 
 Conceptually identical — shard everything, all-gather before compute, reduce-scatter after. Competing implementations from different organizations.
