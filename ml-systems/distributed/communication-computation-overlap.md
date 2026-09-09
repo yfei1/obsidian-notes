@@ -157,8 +157,8 @@ When $\mathcal{R} \ge 1.0$, the system is **computation-bound**, meaning communi
 
 #### Methodological Connection: Intra-Chip Roofline vs. Inter-Chip Distributed Scaling
 While structurally analogous to the classical Roofline model (see [[ml-systems/gpu/arithmetic-intensity-and-roofline]]), the two models govern fundamentally distinct physical boundaries:
-- **Classical Roofline (Intra-Chip, SM $\leftrightarrow$ HBM)**: Evaluates arithmetic intensity (FLOPs / Byte of HBM traffic) against hardware machine balance ($\text{Peak FLOPS} / \text{HBM Bandwidth} = \mathbf{295.4\text{ FLOPs/Byte}}$ on H100). The denominator represents **local memory bus traffic**, with a hardware-dependent knee threshold.
-- **Distributed Scaling Model (Inter-Chip, GPU $\leftrightarrow$ GPU Interconnect)**: Evaluates the **dimensionless ratio of two physical latencies** ($\mathcal{R} = T_{\text{comp}} / T_{\text{comm}}$) against the universal synchronization threshold **$1.0$**. The denominator represents **inter-GPU network collective traffic**.
+- **Classical Roofline (Intra-Chip, SM $\leftrightarrow$ HBM)**: Evaluates arithmetic intensity (FLOPs / Byte of HBM traffic) against hardware machine balance ($\text{Peak FLOPS} / \text{HBM Bandwidth} = \mathbf{295.4\text{ FLOPs/Byte}}$ on H100 Tensor Cores; the vector CUDA core ridge is $\mathbf{20.0\text{ FLOPs/Byte}}$). The denominator represents **local memory bus traffic**, with a hardware-dependent knee threshold.
+- **Distributed Scaling Model (Inter-Chip, GPU $\leftrightarrow$ GPU Interconnect)**: Evaluates the **dimensionless ratio of two physical durations** ($\mathcal{R} = T_{\text{comp}} / T_{\text{comm}}$) against the universal synchronization threshold **$1.0$**. The denominator represents **inter-GPU network collective traffic**.
 - **The Methodological Analogy**: Both evaluate the identical first-principles question—*"Does arithmetic compute time dominate data movement time?"*—across two successive physical tiers of the memory/interconnect hierarchy.
 
 #### Why Pure MP Cannot Scale with Batch Size
