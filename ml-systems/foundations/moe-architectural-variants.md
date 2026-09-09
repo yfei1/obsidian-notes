@@ -89,13 +89,13 @@ $$\mathbf{h}_t = \sum_{i=1}^{K_s} \text{FFN}_i^{\text{shared}}(\mathbf{u}_t) + \
 #### B. Empirical Ablations (DeepSeekMoE Iso-FLOPs Benchmarks)
 In DeepSeekMoE Figure 3 (*arXiv:2401.06066*), under identical total parameter and active FLOP budgets, isolating 1 shared expert and splitting routed experts (63 routed + 1 shared) boosts TriviaQA normalized accuracy from 0.61 to 1.0 (over 60% relative gain) and NaturalQuestions from 0.56 to 1.0 compared to baseline GShard (16 routed, 0 shared).
 
-#### C. LatentMoE: Hardware-Aware Communication Compression (*Nemotron*)
-In distributed Expert Parallelism, All-to-All network communication of full $d$-dimensional tokens accounts for 40%–60% of step time. LatentMoE compresses the communication boundary:
+#### C. Low-Rank Communication Compression in Expert Parallelism (Projection-Compressed Routing)
+In distributed Expert Parallelism, All-to-All network communication of full $d$-dimensional tokens accounts for 40%–60% of step time. Architectures exploring low-rank communication compression reduce the boundary dimension:
 
 ```
-Standard MoE vs LatentMoE Distributed Flow:
+Standard MoE vs Low-Rank Compressed Flow:
 Standard MoE:  Token u_t (dim d) ──► All-to-All Dispatch (dim d) ──► FFN_i (d x d_exp x d) ──► All-to-All Combine (dim d) ──► Output
-LatentMoE:     Token u_t (dim d) ──► Down-proj W_down (dim d_latent) ──► All-to-All (dim d_latent) ──► Latent FFN ──► Up-proj ──► Output
+Compressed:    Token u_t (dim d) ──► Down-proj W_down (dim d_latent) ──► All-to-All (dim d_latent) ──► Latent FFN ──► Up-proj ──► Output
 ```
 
 1. **Compressed Network Wire**: Sender GPUs project tokens locally via $W_{\text{down}} \in \mathbb{R}^{d \times d_{\text{latent}}}$ ($d_{\text{latent}} = d/4$) before dispatch. The All-to-All collective transmits compact latent vectors, cutting network bandwidth and communication latency by 75%.
@@ -135,13 +135,14 @@ Non-Differentiable Router Gate Solutions:
    - **$f_i'$ and $P_i'$**: The actual token fraction and probability allocated to Device (GPU) $i$ hosting expert subset $\mathcal{E}_i$.
    - **Why Both Levels?**: $\mathcal{L}_{\text{DevBal}}$ prevents whole GPUs from becoming communication stragglers during All-to-All transfers, while $\mathcal{L}_{\text{ExpBal}}$ prevents single-expert collapse within a GPU. Computing $P_i' = P.\text{view}(D, -1).\text{sum}(-1)$ costs $< 1\mu s$ with zero memory copy.
 
-4. **DeepSeek-V3 Dual Safety Architecture (Dynamic Bias + Sequence-Wise Safety Valve)**:
-   - **Primary Macro Balancing (Dynamic Bias $b_i$)**:
+4. **DeepSeek-V3 Dual Safety Architecture (Dynamic Bias + Sequence-Wise Safety Valve, arXiv:2412.19437)**:
+   - **Primary Macro Balancing (Auxiliary-Loss-Free Dynamic Bias $b_i$)**:
      $$s_{i,t} = \text{Sigmoid}(u_t^T e_i), \quad \tilde{s}_{i,t} = s_{i,t} + b_i, \quad g_{i,t}' = \begin{cases} s_{i,t}, & \tilde{s}_{i,t} \in \text{Topk}(\{\tilde{s}_{j,t}\}, K_r) \\ 0, & \text{otherwise} \end{cases}$$
-     After each step, $b_i$ updates via local closed-loop negative feedback: $b_i \leftarrow b_i + \gamma \big(\frac{K_r T / N_r - C_i}{T}\big)$. This eliminates gradient conflict with the primary language modeling loss.
+     The bias term is used strictly for routing. After each step, $b_i$ updates via negative feedback: $b_i$ decreases by $\gamma$ if its expert is overloaded, and increases by $\gamma$ if underloaded. The update speed is set to $\mathbf{\gamma = 0.001}$ for the first $14.3\text{T}$ tokens, then decayed to $\mathbf{\gamma = 0.0}$ for the final $500\text{B}$ tokens.
+     - **Node-Limited Routing ($M = 4$)**: Each token selects $K_r = 8$ experts from $N_r = 256$, but routing is constrained to at most $\mathbf{M = 4}$ physical nodes, bounding cross-node All-to-All network traffic.
    - **Secondary Micro Safety Valve (Sequence-Wise Auxiliary Loss, Eq 17-20)**:
      $$\mathcal{L}_{\text{Bal}} = \alpha \sum_{i=1}^{N_r} f_i P_i, \quad f_i = \frac{N_r}{K_r T} \sum_{t=1}^T \mathbf{1}(\text{Topk}), \quad s_{i,t}' = \frac{s_{i,t}}{\sum s_{j,t}}, \quad P_i = \frac{1}{T} \sum_{t=1}^T s_{i,t}'$$
-     Unlike V1/V2, $\mathcal{L}_{\text{Bal}}$ is computed **purely within each local sequence ($T=\text{SeqLen}$)** on the local GPU with an ultra-weak weight ($\alpha \approx 10^{-4}$), requiring **zero cross-GPU All-Reduce communication** while preventing single-sequence hotspot clustering.
+     Computed strictly within each local sequence ($T = \text{SeqLen}$) with an "extremely small" weight $\mathbf{\alpha = 0.0001}$ (just to avoid extreme imbalance within any single sequence), requiring **zero cross-GPU All-Reduce communication** (V3 completely eliminates DeepSeek-V2's Device-Level Balance Loss).
 
 ---
 
