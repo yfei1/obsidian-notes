@@ -51,7 +51,15 @@ In standard Tensor Parallelism with tensor parallel size $t$ (without Sequence P
 
 $$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(10 + \frac{24}{t} + 5 \frac{a \cdot s}{h \cdot t}\right)\text{ elements}}$$
 
-Where:
+Where (CS336 Variable Glossary):
+- $a$: number of attention heads
+- $b$: micro-batch size
+- $h$: hidden dimension size ($d_{\text{model}}$)
+- $L$: number of transformer layers
+- $p$: pipeline parallel size
+- $s$: sequence length (tokens per sample)
+- $t$: tensor parallel size
+- $v$: vocabulary size
 - $\frac{24}{t} \cdot s b h$: The matrix multiplication activations inside Attention and MLP, successfully sharded across $t$ GPUs along hidden dimensions.
 - $5 \frac{a s}{h t} \cdot s b h = \frac{5 a b s^2}{t}$: The quadratic attention matrix terms, sharded across $t$ attention head partitions.
 - **The "Fixed 10" ($10 \cdot s b h$)**: Activations from non-tensor-parallel operations that **cannot be sharded across the hidden dimension $h$**:

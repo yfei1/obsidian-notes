@@ -45,11 +45,15 @@ In transformer training without activation recomputation (storing all forward ac
 
 $$\text{Activation Memory per Layer} = \mathbf{s \cdot b \cdot h \cdot \left(34 + 5 \frac{a \cdot s}{h}\right)\text{ elements}}$$
 
-Where:
-- $s$: sequence length (tokens per sample)
+Where (CS336 Variable Glossary):
+- $a$: number of attention heads
 - $b$: micro-batch size
 - $h$: hidden dimension size ($d_{\text{model}}$)
-- $a$: number of attention heads
+- $L$: number of transformer layers
+- $p$: pipeline parallel size
+- $s$: sequence length (tokens per sample)
+- $t$: tensor parallel size
+- $v$: vocabulary size
 - In 16-bit precision (BF16), total bytes per layer equals $2 \times \text{elements}$.
 
 #### The Two Distinct Memory Regimes:
