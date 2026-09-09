@@ -70,6 +70,34 @@ Stage 2 — + Shard Gradients (N=8):
   Reduction: 112 → 38.5 GB  (~2.9x)
   → Reduce-Scatter replaces All-Reduce
 
+### ZeRO Stage 2 Execution Lifecycle (Incremental Reduce & Immediate Deallocation)
+
+ZeRO Stage 2 ($P_{os+g}$) eliminates gradient memory redundancy by coupling backward graph traversal with immediate communication:
+
+```text
+Step 1: Everyone incrementally goes backward on the computation graph
+  Step 1a: After computing a layer's gradients, immediately reduce to send to the assigned owner rank
+           Example: Layer l parameters belong to Rank 2 (root). All ranks reduce gradients to Rank 2:
+           out[i] = sum(inX[i])
+  Step 1b: Once gradients are not needed in the backward graph, immediately free them from non-owners!
+Step 2: Each machine updates its assigned parameter partition using its sharded gradient + optimizer state
+Step 3: All-Gather the updated parameters across all ranks to restore the full model: out[Y*count + i] = inY[i]
+```
+
+#### Why ZeRO-2 is Also Communication-Free (Conserves 2x #params)
+
+ZeRO Stage 2 achieves deeper memory reduction without paying any network bandwidth penalty:
+- **Gradient Communication in Backward**: Reducing each layer's gradients to its owner rank incrementally across layers constitutes a distributed `Reduce-Scatter` over the full model, moving exactly $\frac{P-1}{P} \times \text{\# params}$ ($1\times \text{\# params}$ asymptotically).
+- **Parameter Communication Post-Step**: Reconstructing full model weights for the next forward pass requires an `All-Gather`, moving exactly $\frac{P-1}{P} \times \text{\# params}$ ($1\times \text{\# params}$ asymptotically).
+- **Total Communication Volume**: $\frac{P-1}{P} + \frac{P-1}{P} = 2 \cdot \frac{P-1}{P} \times \text{\# params}$ ($1.75\times$ at $P=8$; asymptotic $1\times + 1\times = \mathbf{2 \times \text{\# params}}$).
+
+#### The Memory Payoff of Step 1b: Eliminating Concurrent Gradient Storage
+
+In Naïve DDP and ZeRO-1, every GPU stores a full copy of all model gradients ($2\Psi$ bytes in BF16) throughout backpropagation. ZeRO-2's breakthrough is **immediate deallocation (Step 1b)**:
+1. As backpropagation traverses from Layer $L$ to Layer 1, each rank calculates a layer's local gradient, immediately transmits it to the owning rank via `Reduce`, and **frees the memory immediately**.
+2. Non-owning ranks never accumulate gradients in VRAM; the owning rank retains only its assigned $\frac{1}{M}$ partition.
+3. Peak gradient memory per GPU drops from $2\Psi$ to $\frac{2\Psi}{M}$ (plus a single-layer working buffer), reducing static memory from 31.4 GB to **16.6 GB** (for $\Psi = 7.5\text{B}, N_d = 64$).
+
 Stage 3 — + Shard Parameters (N=8):
   No GPU holds the full model at rest.
   Per-GPU: (28 + 28 + 56) / 8 = 14 GB
