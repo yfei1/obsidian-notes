@@ -145,6 +145,8 @@ Update Step:   Update Weights(local shard only using sharded optimizer states)
 
 #### 2. The Full-Blooded FSDP Stream Overlap (Zhao et al., arXiv:2304.11277)
 
+CS336 presents the production asynchronous streaming timeline (slide title "Actual picture of how FDSP [sic] / ZeRO stage 3 works"):
+
 In production FSDP, multi-stream asynchronous pipelining hides communication latency behind compute:
 
 ```text
@@ -157,7 +159,10 @@ Timeline:    ◄─── All-Gathers overlap forward compute ───►      
 ```
 
 - **Incremental Computation & Immediate Deallocation**: Parameters and gradients are requested just-in-time and freed immediately after layer compute (`Free Full Weights`).
-- **Asynchronous Prefetching Overlap**: While the GPU Compute Stream evaluates `FWD(i)` on Tensor Cores, the background GPU Communication Stream concurrently issues `AG(i+1)` to prefetch the next layer's weights over the network fabric, completely masking parameter communication latency.
+- **Asynchronous Prefetching Overlap**: While the GPU Compute Stream evaluates `FWD(i)` on Tensor Cores, the background GPU Communication Stream concurrently issues `AG(i+1)` to prefetch the next layer's weights over the network fabric, completely masking parameter communication latency ("The all-gathers happen all at once while forward happens, masking the comm cost").
+- **Shared Weight Reuse in Units (D87)**: The slide formalizes the mathematical motivation for overlapping:
+  $$\text{Overlapping communication and computation: } (W_1 W_0 + W_2 W_0)x = y$$
+  When consecutive operations share a common gathered shard $W_0$, a single All-Gather collective serves multiple matrix multiplications before deallocation, amortizing the collective cost across multiple compute operations.
 
 #### 3. The Communication Tax: Why ZeRO-3 Costs Exactly 1.5x More Communication
 
