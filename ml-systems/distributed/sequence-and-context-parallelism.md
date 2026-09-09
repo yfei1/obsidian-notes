@@ -121,13 +121,15 @@ A foundational architectural distinction governs normalization and dropout param
      if config.sequence_parallel and getattr(param, "sequence_parallel", False):  # :452
          # Retains historical alias _allreduce_layernorm_grads (:491)
      ```
-4. **The 2048x Memory-to-Communication Asymmetry (DERIVED)**:
-   For a standard configuration with $h = s = 8192, b = 1$:
-   - **Parameter Gradient All-Reduce Cost**: Synchronizing both LayerNorms per block ($2 \times (\gamma + \beta) = 4h$ scalars) transfers $4 \times 8192 = 32{,}768$ elements. In FP32 accumulation precision, this equals $32{,}768 \times 4\text{ Bytes} = \mathbf{128\text{ KB}}$ per step. Crucially, this volume depends exclusively on $h$ and is **completely independent of sequence length $s$ and batch size $b$**.
-   - **Activation Memory Eliminated by SP**: Sharding LayerNorm input activations ($4 s b h$ Bytes) eliminates $4 \times 8192 \times 1 \times 8192\text{ Bytes} \approx \mathbf{0.268\text{ GB}}$ ($256\text{ MiB}$) of activation storage per layer.
-   - **Asymmetry Ratio**:
-     $$\frac{\text{Activation Memory Saved}}{\text{Parameter Gradient Communication Incurred}} = \frac{268{,}435{,}456\text{ Bytes}}{131{,}072\text{ Bytes}} = \mathbf{2048\times}$$
-   This quantifies the fundamental economic payoff of Sequence Parallelism: paying a tiny, constant $128\text{ KB}$ parameter-gradient synchronization over fast intra-node NVLink to eliminate $0.27\text{ GB}$ of activation memory that would otherwise scale aggressively with $s \cdot b$.
+4. **The 2048x Memory-to-Communication Asymmetry & Coalescing (DERIVED)**:
+   - **Single Coalesced Collective per Step**: To eliminate collective latency overhead, `finalize_model_grads.py` flattens all LayerNorm parameter gradients across all $L$ layers via `_flatten_dense_tensors` and executes **exactly one unified All-Reduce per step across the entire model** (rather than per-layer collectives).
+   - **Asymmetry at $h = s = 8192, b = 1, t = 8$**:
+     - *Activation wire volume per layer*: $8 \cdot \frac{t-1}{t} s b h = 8 \cdot \frac{7}{8} \cdot (134.2\text{ MB}) = \mathbf{939.5\text{ MB}}$, identically matching vanilla TP.
+     - *LN parameter gradient wire volume per layer*: $2 \cdot \frac{t-1}{t} \cdot (16h\text{ B}) = \frac{7}{4} \cdot 128\text{ KB} = \mathbf{224\text{ KB}}$ per layer.
+     - *Overhead ratio*: $\frac{224\text{ KB}}{939.5\text{ MB}} = \mathbf{0.024\%}$ (万分之二点四).
+     - *Activation memory eliminated*: Sharding LayerNorm inputs ($4 s b h$ B) saves $268{,}435{,}456\text{ B} \approx \mathbf{0.268\text{ GB}}$ ($256\text{ MiB}$) per layer.
+     - *Memory-to-Communication Asymmetry*: $\frac{268{,}435{,}456\text{ B}}{131{,}072\text{ B}} = \mathbf{2048\times}$!
+   This demonstrates why SP is an overwhelmingly winning trade-off: paying 1 global coalesced All-Reduce with $0.024\%$ extra network volume to eliminate $0.27\text{ GB}$ of activation memory per layer.
 
 ---
 
