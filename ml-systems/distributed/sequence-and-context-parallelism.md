@@ -108,7 +108,7 @@ Combining Tensor Parallelism, Sequence Parallelism, and Selective Activation Rec
 | **Tensor Parallel + Selective Recomputation** | $s b h \left(10 + \frac{24}{t}\right)$ | Drops quadratic term via SRAM recomputation; fixed 10 remains |
 | **TP + SP + Selective Recomputation** | $\mathbf{s b h \left(\frac{34}{t}\right)}$ | **Full Linear Scaling**: Both quadratic and fixed terms eliminated! |
 
-*(CS336 Master Table: When TP, SP, and FlashAttention / selective recomputation are unified, activation memory scales strictly linearly with cluster size $t$, enabling training at 32K–128K context lengths).*
+*(CS336 Master Table Boundary Note: With the quadratic term eliminated, per-GPU activation memory equals $\mathbf{\frac{34 s b h}{t}}$—strictly linear in sequence length $s$ and inversely proportional to $t$. Because TP/SP collectives execute on the compute critical path, $t$ is physically bounded by the intra-node NVLink domain ($t \le 8$ on standard HGX, or up to 72 on GB200 NVL72). When context length $s$ expands beyond what single-node NVLink can support, clusters cannot simply increase $t$ across nodes due to the 18x InfiniBand bandwidth cliff; instead, they must transition to Context Parallelism (CP / Ring Attention) to shard the sequence dimension $s$ across nodes).*
 
 ---
 
