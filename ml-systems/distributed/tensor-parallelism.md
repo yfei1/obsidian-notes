@@ -277,3 +277,4 @@ The `weight_loader` method attached to each parameter (by `ColumnParallelLinear`
 - [[ml-systems/foundations/transformer-model-internals]] — Decoder layer structure, Attention, MLP, and RMSNorm components
 - [[ml-systems/foundations/attention-mechanics]] — Multi-head attention head sharding and QKV projection mechanics
 - [[ml-systems/distributed/pipeline-parallelism]] — Inter-layer pipeline stage partitioning compared against intra-layer tensor parallel weight slicing
+- [[ml-systems/distributed/supernode-interconnect-architectures]] — Scale-up domain boundaries and optical vs copper physical interconnect limits

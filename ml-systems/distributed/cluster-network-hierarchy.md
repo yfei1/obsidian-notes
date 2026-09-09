@@ -279,3 +279,4 @@ The physical interconnect hierarchy dictates how 3D parallelism strategies parti
 - [[ml-systems/gpu/gpu-architecture-fundamentals]] — GPU Streaming Multiprocessors, warp scheduling, and memory hierarchy
 - [[ml-systems/distributed/data-parallelism]] — Canonical DDP execution pipeline, gradient all-reduce mechanics, and parameter synchronization invariance
 - [[ml-systems/distributed/pipeline-parallelism]] — Inter-node pipeline stage activation transfers and P2P communication bandwidth
+- [[ml-systems/distributed/supernode-interconnect-architectures]] — Scale-up supernode physical architectures: Ascend CloudMatrix 384, NVIDIA NVL72, and Google TPU 3D Torus

@@ -297,3 +297,4 @@ While coalescing maximizes single-instruction bus efficiency, it does not provid
 - [[ml-systems/foundations/flashattention-mechanics]] — SRAM tiling, Online Softmax recurrence, and backward recomputation.
 - [[ml-systems/gpu/thread-block-clusters-dsmem-and-tmem]] — Thread Block Clusters, Distributed Shared Memory (DSMEM), and Blackwell TMEM.
 - [[ml-systems/distributed/cluster-network-hierarchy]] — Scale-out cluster hierarchy (NVLink, InfiniBand, Ethernet) and NCCL SM kernel occupancy
+- [[ml-systems/distributed/supernode-interconnect-architectures]] — Physical supernode interconnects: copper backplanes, optical transceivers, and OCS switching

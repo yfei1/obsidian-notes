@@ -184,3 +184,4 @@ Pipeline parallelism cannot achieve complete overlap at cluster boundaries:
 - [[ml-systems/distributed/communication-computation-overlap]] — Overlapping communication with compute streams in distributed training
 - [[ml-systems/training/training-memory-management]] — Managing activation memory scaling ($O(m)$ in GPipe vs $O(p)$ in 1F1B)
 - [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — How pipeline bubble overhead constrains model aspect ratio (depth vs width)
+- [[ml-systems/distributed/supernode-interconnect-architectures]] — Supernode cluster architectures and optical crossbar vs 3D Torus bisection topologies

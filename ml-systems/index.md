@@ -82,6 +82,7 @@ Read after GPU section.
 8. [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier interconnect hierarchy (NVLink, InfiniBand, Ethernet), 18x bandwidth gap, RDMA vs NVLink memory semantics, and NCCL kernel mechanics
 9. [[ml-systems/distributed/data-parallelism]] — Canonical DDP execution pipeline, batch sharding, gradient all-reduce vs weight averaging, and AdamW non-linearity
 10. [[ml-systems/distributed/pipeline-parallelism]] — Pipeline Parallelism execution mechanics, micro-batch scheduling, and bubble fraction derivations
+11. [[ml-systems/distributed/supernode-interconnect-architectures]] — Scale-up supernode physical architectures: Ascend CloudMatrix 384, NVIDIA NVL72, and Google TPU 3D Torus
 
 ### 5. Inference — Engine, KV Cache, Serving
 
