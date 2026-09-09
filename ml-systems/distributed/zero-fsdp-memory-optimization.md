@@ -19,6 +19,7 @@ In the foundational ZeRO paper (Rajbhandari et al., 2020) and CS336 formulation,
 - Baseline precision: 16-bit mixed precision (2 B for BF16 parameters, 2 B for BF16 gradients).
 
 ### Formulation A: 16-Bit Mixed-Precision (CS336 & DeepSpeed $\Psi$ Model: 2+2+12 B)
+*(CS336 Slide 15 — "Core idea: split up the expensive parts (state) and use the reduce-scatter equivalence.")*
 
 | ZeRO Stage | Sharded Components | Memory Consumed per GPU Formula | Numerical Footprint ($\Psi = 7.5\text{B}, N_d = 64, K = 12$) | Reduction Factor |
 |---|---|---|---|---|
