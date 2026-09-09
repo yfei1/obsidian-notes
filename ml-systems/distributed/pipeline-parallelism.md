@@ -191,9 +191,12 @@ Backward Pass:    ∇_y L ──► [ dσ(z)/dz · ∇_y L ] ──► ∇_z L
 #### The Zero-Bubble Scheduling Mechanism (ZB-H1 & ZB-H2)
 
 Because weight gradient computation $W$ is needed only for `optimizer.step()`, it can be postponed without stalling upstream stages:
-1. **Immediate $B$ Propagation**: A worker evaluates activation backward $B$ and immediately transmits $\nabla_x L$ to the preceding pipeline stage ($r - 1$), minimizing pipeline latency.
-2. **Filling Bubbles with $W$**: The delayed weight gradient computations $W$ are scheduled into the idle bubble time slots of the 1F1B timeline (the handcrafted ZB-H1 and ZB-H2 schedules in CS336 Figure 3).
-3. **Near-Zero Bubble**: By shifting $W$ into the otherwise wasted warm-up and cool-down slots, Zero Bubble pipelining virtually eliminates idle bubble overhead ($F \to 0$) without scaling batch size $m$, achieving near-optimal hardware utilization.
+1. **Immediate $B$ Propagation**: A worker evaluates activation backward $B$ and immediately transmits $\nabla_x L$ to the preceding pipeline stage ($r - 1$), minimizing pipeline latency on the critical path.
+2. **Scheduling Window for $W$**: Unlike activation backward $B$ on the critical path, weight gradient $W_l$ has no downstream stage dependencies. Its valid execution window is strictly bounded: **$[\text{after local } B_l, \text{ before } \text{optimizer.step()}]$** (in practice, multiple $W$ passes are scheduled at the iteration tail).
+3. **Bypassing Optimizer Synchronization (Qi et al., Section 4)**: In standard frameworks, executing `optimizer.step()` is bound by two constraints:
+   - *Micro-batch Accumulation*: Standard synchronous training requires accumulating gradients across all micro-batches before updating weights (asynchronous frameworks like PipeDream trade memory for earlier updates via parameter versioning / weight stashing).
+   - *Global Gradient Clipping*: All layers are coupled via global norm calculation $\sqrt{\sum \|\nabla W\|^2}$. Zero Bubble specifically bypasses this synchronization barrier via an optimistic **post-validation strategy** paired with in-place optimizer rollback (Section 4, Figure 4), relying on the empirical fact that clipping and NaN/Inf anomalies trigger rarely.
+4. **Filling Bubbles with $W$**: By shifting delayed $W$ computations into the otherwise wasted warm-up and cool-down bubble slots (schedules ZB-H1 and ZB-H2 in CS336 Figure 3), Zero Bubble pipelining virtually eliminates idle bubble overhead ($F \to 0$) without scaling batch size $m$.
 
 ---
 
