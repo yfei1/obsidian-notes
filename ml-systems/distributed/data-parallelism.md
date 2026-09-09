@@ -232,21 +232,24 @@ In a cluster of $M$ machines with global batch size $B$:
   $$[D_{in} \times B] \times [B \times D_{out}] \implies [D_{in} \times D_{out}]$$
   Regardless of whether $B = 1$ or $B = 100{,}000$, the communicated gradient tensor size is rigidly pinned at $2 \times \text{\# params}$. Because compute time scales linearly with batch size ($T_{\text{comp}} \propto \frac{B}{M}$) while communication volume is constant, large batches allow computation to easily dominate and hide communication latency under backward overlap.
 
-### 2. Memory Breakdown: The 5 Copies and 16 Bytes per Parameter
+### 2. Memory Breakdown: The 5 Copies and 16 Bytes per Parameter (CS336 Formulation)
 
-Naïve Data Parallelism provides **zero memory scaling**: every GPU must store full model states, creating severe VRAM bottlenecks for large models:
+Naïve Data Parallelism provides **zero memory scaling**: every GPU must store full model and optimizer states, creating severe VRAM bottlenecks for large models. As the CS336 slide establishes: *"We need 5 copies of weights and 16 bytes per param!"*:
 
 | Tensor Copy | Component | Precision & Size | Purpose |
 |---|---|---|---|
 | **Copy 1** | **Model Parameters ($W$)** | 2 bytes (BF16) | High-speed forward and backward compute |
 | **Copy 2** | **Parameter Gradients ($g$)** | 2 bytes (BF16) | Transmitted across workers via All-Reduce |
-| **Copy 3** | **FP32 Master Weights ($W_{\text{master}}$)** | 4 bytes (FP32) | High-precision accumulator preventing underflow |
-| **Copy 4** | **Adam First Moment ($m$)** | 4 bytes (FP32) | Exponential moving average of past gradients |
-| **Copy 5** | **Adam Second Moment ($v$)** | 4 bytes (FP32) | Exponential moving average of squared gradients |
+| **Copy 3** | **FP32 Master Weights ($W_{\text{master}}$)** | 4 bytes (FP32) | *"The thing you accumulate into in SGD"*; high-precision accumulator preventing underflow |
+| **Copy 4** | **Adam First Moment ($m$)** | 4 (or 2) bytes | Exponential moving average of past gradients |
+| **Copy 5** | **Adam Second Moment ($v$)** | 4 (or 2) bytes | Exponential moving average of squared gradients |
 | **Total Static Footprint** | **Full Mixed Precision** | **16 bytes / param** | **$8\times$ baseline BF16 weights (5 physical copies)** |
-| *Alternative (No Master)* | *Pure BF16 / In-Place Adam* | *12 bytes / param* | *$6\times$ baseline BF16 weights (4 physical copies; risks update underflow)* |
+| **Slide Route (BF16 Moments)** | *FP32 Master + BF16 Moments* | **12 bytes / param** | *CITED (Slide 14): $2 + 2 + 4 + 2 + 2 = 12$ bytes (5 copies; retains master, risks moment precision loss)* |
+| **Alternative (No Master)** | *Pure BF16 Weights + FP32 Moments* | **12 bytes / param** | *DERIVED: $2 + 2 + 0 + 4 + 4 = 12$ bytes (4 copies; retains FP32 moments, risks weight update underflow)* |
 
-*(Motivation for ZeRO / FSDP: Because all 5 copies are replicated identically across every GPU in Naïve DP, sharding optimizer states, gradients, and parameters across workers eliminates this redundancy at zero mathematical cost; see [[ml-systems/distributed/zero-fsdp-memory-optimization]]).*
+*(ZeRO Alignment Note: The last three copies constitute the **Optimizer State** ($4 + 4 + 4 = \mathbf{12\text{ Bytes}}$), exactly matching the $K=12$ parameter multiplier in ZeRO-1/ZeRO-2 memory sharding; see [[ml-systems/distributed/zero-fsdp-memory-optimization]]).*
+
+*(Motivation for ZeRO / FSDP: Because all 5 copies are replicated identically across every GPU in Naïve DP, sharding optimizer states, gradients, and parameters across workers eliminates this redundancy at zero mathematical cost).*
 
 ---
 
