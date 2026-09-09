@@ -149,6 +149,24 @@ Tensor Parallelism exhibits strict mathematical duality between forward and back
   - **In the forward pass**: $f$ is the Identity operator, and $g$ is an `all_reduce(op=dist.ReduceOp.SUM)`.
   - **In the backward pass**: $f$ is an `all_reduce(op=dist.ReduceOp.SUM)`, and $g$ is the Identity operator.
 
+#### Production Implementation in Megatron-LM (`mappings.py`)
+In NVIDIA Megatron-LM (`megatron/core/tensor_parallel/mappings.py`), $f$ and $g$ are implemented as explicit `torch.autograd.Function` primitives that hook backward passes:
+1. **Operator $f$ (`_CopyToModelParallelRegion`, :205)**:
+   - `forward` (:214–217): Returns `input_` directly (Identity, zero communication).
+   - `backward` (:220–222): Intercepts incoming upstream gradient and calls `_reduce(grad_output, ctx.group)` (All-Reduce).
+   - Public API: `copy_to_tensor_model_parallel_region()` (:496).
+2. **Operator $g$ (`_ReduceFromModelParallelRegion`, :225)**:
+   - `forward` (:234–236): Calls `_reduce(input_, group)` (All-Reduce across partial sums).
+   - `backward` (:239–241): Returns `grad_output` directly (Identity, zero communication).
+   - Public API: `reduce_from_tensor_model_parallel_region()` (:502).
+3. **Companion Sequence-Parallel Operators**: The same module defines `_ScatterToModelParallelRegion` (:244), `_GatherFromModelParallelRegion` (:264), and their sequence-parallel variants (:284, :304), which implement the alternating $g$ (`All-Gather`) and $\bar{g}$ (`Reduce-Scatter`) lifecycle in Sequence Parallelism (see [[ml-systems/distributed/sequence-and-context-parallelism]]).
+
+#### The Silent Gradient Truncation Failure Mode
+If operator $f$ is omitted, the system **does not crash or throw a runtime exception**:
+- PyTorch autograd executes without warning, and training loss may even initially decrease.
+- However, each rank passes only its local partial gradient $\nabla X_i = \nabla Y_i A_i^T$ upstream, omitting cross-GPU components ($\sum_{j \ne i} \nabla Y_j A_j^T$).
+- Upstream layers (e.g. LayerNorm) receive silently truncated gradients, causing optimization to diverge silently from true mathematical gradients.
+
 | Phase | Column-Parallel Layer ($A = [A_1, A_2]$) | Row-Parallel Layer ($B = [B_1^T, B_2^T]^T$) | Total Block Communication |
 |---|---|---|---|
 | **Forward Pass** | $h_p = X A_p$ (**Zero comm**, $f = \text{Identity}$) | $Z_p = h_p B_p$ (Local partial dot-products) | **1 All-Reduce(SUM)** at Row output ($g = \text{All-Reduce}$) |
