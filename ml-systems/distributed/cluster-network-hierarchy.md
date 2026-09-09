@@ -115,6 +115,7 @@ Rank 3 [after all-reduce]: tensor([ 6., 10., 14., 18.])
 Rank 1 [after all-reduce]: tensor([ 6., 10., 14., 18.])
 Rank 2 [after all-reduce]: tensor([ 6., 10., 14., 18.])
 ```
+*(Code Fidelity & Self-Containment Note: CS336 Slide 5 defines `device=cuda_if_available(rank)` with right-truncated comment `# Both input and ...`; here `cuda_if_available` is inlined as a self-contained ternary expression `f"cuda:{rank}" if torch.cuda.is_available() else "cpu"` to allow standalone execution. The slide's top docstring line is partially occluded by a function signature tooltip).*
 
 ---
 
