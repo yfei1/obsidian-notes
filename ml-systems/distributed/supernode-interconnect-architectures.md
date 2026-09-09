@@ -125,7 +125,7 @@ The fatal constraint of high-speed copper is high-frequency signal attenuation:
 
 ## 5. Google TPU: 3D Torus, Cartesian Meshes, and the MoE Bisection Penalty
 
-Google's TPU architecture (v4, v5p, v7, and v8i) adopts an orthogonal philosophy: eliminating centralized packet switch chips in favor of direct-neighbor mesh routing and compiler-orchestrated spatial mapping.
+Google's TPU architecture (v4, v5p, v6e Trillium, and TPU7x Ironwood) adopts an orthogonal philosophy: eliminating centralized packet switch chips in favor of direct-neighbor mesh routing and compiler-orchestrated spatial mapping.
 
 ### The 3D Torus Topology: Switchless Interconnect
 
@@ -152,21 +152,20 @@ To prevent multi-hop communication stalls, Google's XLA and GSPMD compilers lock
 While the 3D Torus excels on dense workloads, Mixture of Experts (MoE) exposes its structural limitation:
 
 1. **Dense All-Reduce Invariance**: Ring All-Reduce transfers constant $2S$ byte volume per node regardless of ring length $N$. On dense models, Torus matches the bandwidth efficiency of fat-tree networks at a fraction of the hardware cost.
-2. **MoE All-to-All Amplification**: In an All-to-All collective across $N$ nodes, every node sends distinct data to every other node. On a bidirectional ring of length $N$, the average distance traversed by a message is:
-   $$\text{Average Hops} = \frac{N}{4}$$
-   Because intermediate nodes must repeatedly forward transit traffic, the total network bandwidth consumed across all links scales as:
-   $$\text{Total Transferred Volume} = N \cdot S \cdot \frac{N}{4}$$
-   The network suffers an **$\frac{N}{4}\times$ traffic amplification penalty** relative to a single-hop crossbar (NVSwitch / Fat-Tree):
-   - At $N = 4$: Average hops = 1.0 (amplification = $1.0\times$, matches GPU).
-   - At $N = 16$: Average hops = 4.0 (**$4\times$ network traffic amplification**).
-   - At $N = 64$: Average hops = 16.0 (**$16\times$ network traffic amplification**).
+2. **MoE All-to-All Amplification (D72)**: In an All-to-All collective across $N$ nodes, every node sends distinct data to every other node. Summing shortest-path distances across all $N(N-1)$ ordered pairs on a bidirectional ring yields the exact average hop distance:
+   $$\text{Exact Average Hops} = \frac{N^2}{4(N - 1)} \approx \frac{N}{4} \quad (\text{asymptotic limit for large } N)$$
+   Because intermediate nodes must repeatedly forward transit traffic, the total link volume traversed scales by the average hop count relative to a single-hop crossbar (NVSwitch / Fat-Tree):
+   - At $N = 4$: Exact hops = $\frac{16}{12} \approx 1.33$ ($1.33\times$ amplification; $N/4$ understates by 33%).
+   - At $N = 8$: Exact hops = $\frac{64}{28} \approx 2.29$ ($2.29\times$ amplification; $N/4$ understates by 14%).
+   - At $N = 16$: Exact hops = $\frac{256}{60} \approx 4.27$ ($4.27\times$ amplification).
+   - At $N = 64$: Exact hops = $\frac{4096}{252} \approx 16.25$ ($16.25\times$ amplification).
 
-### Google's Triple Mitigation and the TPU 8i Transition
+### Google's Triple Mitigation and the Low-Diameter Transition
 
-To prevent MoE All-to-All from overwhelming the Torus fabric, Google executed three engineering countermeasures:
-1. **EP Ring Clamping**: Google equips chips with large HBM capacity (192 GB in TPU v7) to host 4–8 experts per device, strictly capping the physical EP ring size to $N \le 8$ (bounding amplification to $\le 2\times$).
-2. **Brute-Force Physical Bandwidth**: TPU v7 (Trillium) scales physical ICI bandwidth to 9.6 Tbps (1.2 TB/s) per chip, flushing multi-hop transit queues at line rate.
-3. **The TPU 8i Topological Pivot**: For online inference where low batch sizes prevent multi-hop latency overlap, Google abandoned pure 3D Torus in TPU 8i, adopting **Boardfly**—a low-diameter, high-radix Dragonfly-like topology that caps worst-case hops to 7, paired with hardware Collective Acceleration Engines (CAE).
+To prevent MoE All-to-All from overwhelming the Torus fabric, Google developed three architectural countermeasures:
+1. **EP Ring Clamping**: Packing 4–8 experts per device (leveraging estimated 192 GB HBM in TPU7x Ironwood per SemiAnalysis, D75) strictly bounds the physical EP ring to $N \le 8$, containing amplification to $\le 2.29\times$.
+2. **Physical Bandwidth Scaling**: TPU7x Ironwood targets estimated 9.6 Tbps (1.2 TB/s) ICI bandwidth (SemiAnalysis, D75), flushing multi-hop queues at line rate.
+3. **The Low-Diameter Inference Pivot (D74)**: In low-batch online inference where multi-hop transit latency cannot be hidden under compute, industry architecture reports (SemiAnalysis, 2024) disclose that Google's next-generation inference clusters transition away from pure Torus toward a low-diameter, high-radix Dragonfly-class topology (reported as "Boardfly" with a 7-hop diameter bound), offloading collective routing to hardware Collective Acceleration Engines (CAE).
 
 ---
 
@@ -178,9 +177,9 @@ The divergence of AI supernode architectures reflects distinct engineering bound
 |---|---|---|---|
 | **Huawei CloudMatrix 384** | Trades electrical power and optical transceivers for a flat 384-NPU Scale-Up domain | System power (~559 kW) and liquid cooling complexity | Abundant grid power and domestic optical manufacturing |
 | **NVIDIA GB200 NVL72** | Trades Scale-Up domain size (72 GPUs) for zero transceiver power and maximum silicon efficiency | 2-meter physical passive copper reach limit | TSMC advanced packaging and market-leading tensor compute density |
-| **Google TPU v4–v7** | Trades network bisection flexibility for low-cost, switchless direct Torus routing | $N/4\times$ All-to-All traffic amplification on large MoE rings | XLA compiler co-design and OCS optical circuit switching |
+| **Google TPU v4–TPU7x** | Trades network bisection flexibility for low-cost, switchless direct Torus routing | $N/4\times$ All-to-All traffic amplification on large MoE rings | XLA compiler co-design and OCS optical circuit switching |
 
-Despite their divergent starting points, all three architectures are converging toward the same physical imperative: **maximizing the non-blocking Scale-Up domain while minimizing network diameter**, whether through multi-rack optical crossbars (Huawei), dense copper packaging (NVIDIA), or low-diameter high-radix topologies (Google Boardfly).
+Despite their divergent starting points, all three architectures are converging toward the same physical imperative: **maximizing the non-blocking Scale-Up domain while minimizing network diameter**, whether through multi-rack optical crossbars (Huawei), dense copper packaging (NVIDIA), or low-diameter high-radix topologies (low-diameter topologies (such as reported Boardfly)).
 
 ---
 
