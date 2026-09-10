@@ -207,7 +207,7 @@ vLLM and SGLang are **inference-only** engines. They do not perform backward pas
 
 ## Architecture-Aware Parallelism: PT-MoE
 
-Parallel Track MoE (PT-MoE) is a model architecture redesign for server models ([Apple Foundation Models 2025 Update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates)) that removes sequential layer dependencies. Multiple independent small transformers ("tracks") process tokens concurrently within track blocks, synchronizing only at block boundaries. This eliminates intra-block inter-GPU waiting and significantly reduces synchronization overhead compared to sequential pipeline stages, cutting collective stalls by 87.5% (from 96 to 12). Within each track, TP and EP still apply for MoE layers.
+Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it is a model architecture redesign for server models ([Apple Foundation Models 2025 Update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates)) that removes sequential layer dependencies. Multiple independent small transformers ("tracks") process tokens concurrently within track blocks, synchronizing only at block boundaries. This eliminates intra-block inter-GPU waiting and significantly reduces synchronization overhead compared to sequential pipeline stages, cutting collective stalls by 87.5% (from 96 to 12). Within each track, TP and EP still apply for MoE layers.
 
 For the complete 150B architecture reference (8-track layout, 4-layer FFN and 8-layer attention cycles, local sliding window vs Global NoPE, Hybridnorm v2, and vLLM serving integration), see the canonical note:
 [[ml-systems/foundations/pt-moe-architecture]].
