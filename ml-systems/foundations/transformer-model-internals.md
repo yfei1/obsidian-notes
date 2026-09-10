@@ -292,9 +292,9 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/inference/llm-inference-engines]]
 - [[ml-systems/distributed/parallelism-strategies]]
 - [[ml-systems/inference/prefix-caching]]
-- [[ml-systems/vllm/vllm-weight-loading]] — how checkpoint tensors map to `named_parameters()` via `load_weights()`
+- [[ml-systems/vllm/vllm-weight-loading]] — how `named_parameters()` module-tree walk underpins checkpoint-to-parameter name remapping via `load_weights()`
 - [[ml-systems/gpu/gpu-memory-hierarchy]]
-- [[ml-systems/gpu/pytorch-module-hooks]]
+- [[ml-systems/gpu/pytorch-module-hooks]] — hooks attach to the `nn.Module` hierarchy; the `__call__` dispatch chain determines execution order across layers
 - [[ml-systems/foundations/norms-and-regularization]] — L1/L2 norm theory, Ridge vs Lasso, why RMS beats mean(|x|)
 - [[ml-systems/foundations/mixture-of-experts]] — MoE replaces the dense FFN with router + expert FFNs
 - [[ml-systems/gpu/torch-compile-graph-breaks]] — What patterns break `torch.compile` graphs (empirical test results)

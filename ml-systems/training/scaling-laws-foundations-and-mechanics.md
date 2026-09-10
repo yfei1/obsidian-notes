@@ -58,6 +58,7 @@ Perplexity: PPL = exp(L) ──► 36.6 ──► 16.4 (Candidate uncertainty ha
 Per-token accuracy: 90% ──► 95% ──► 98%
 Full sequence pass: 0.52% ──► 7.69% (15x gain!) ──► 36.4% (71x gain!)
 ```
+*(Evaluation Note: Multipliers 15x and 71x are evaluated from exact powers $p^{50}$ [$14.93\times$ and $70.66\times$], not by dividing rounded percentages).*
 
 A minor $0.8$ decrease in test loss cuts the next-token perplexity search space by over $50\%$. In multi-step autoregressive generation (math reasoning, code generation), token-level accuracy compounding $\prod_{i=1}^T p_i$ transforms smooth power-law loss curves into sharp, non-linear S-curve capability jumps.
 
