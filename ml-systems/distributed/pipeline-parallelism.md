@@ -134,6 +134,20 @@ When the first micro-batch enters the pipeline:
 - Near the end of the step, GPU 0 completes its backward pass and idles while GPU 3 drains final gradients (cool-down phase).
 This idle waiting time is the **pipeline bubble**.
 
+```text
+Naive Execution (No Micro-batching): only 1 GPU active at a time (75% idle!)
+  GPU 0: [F0][  ][  ][  ][  ][  ][B0][  ]
+  GPU 1: [  ][F1][  ][  ][  ][B1][  ][  ]
+  GPU 2: [  ][  ][F2][  ][B2][  ][  ][  ]
+  GPU 3: [  ][  ][  ][F3/B3][  ][  ][  ]
+
+GPipe Execution (m=4 Micro-batches amortize startup bubble):
+  GPU 0: [F0][F1][F2][F3][  ][B3][B2][B1][B0]
+  GPU 1: [  ][F0][F1][F2][F3][B3][B2][B1][  ]
+  GPU 2: [  ][  ][F0][F1][F2][F3][B3][B2][  ][  ]
+  GPU 3: [  ][  ][  ][F0][F1][F2/B2][F3/B3][  ][  ]
+```
+
 #### Non-Bubble Compute vs Idle Bubble Slots
 Let $p$ be the number of pipeline stages ($n_{\text{stages}}$), $m$ be the number of micro-batches ($n_{\text{micro}}$), and $t_{\text{stage}}$ be the execution latency of one micro-batch per stage:
 - **Useful Compute Time**: $T_{\text{useful}} = 2m \cdot t_{\text{stage}}$ ($m$ forward + $m$ backward passes per stage).
@@ -222,6 +236,9 @@ Despite the presence of pipeline bubbles ("Pipelines seem terrible. Why do we do
 |---|---|---|---|
 | **Intra-Node (Host)** | Ultra-High: **450 GB/s/dir (H100) / 900 GB/s/dir (B200)** (900 GB/s / 1.8 TB/s bidirectional aggregate per GPU) | **TP / FSDP** | Global All-Reduce and layer-by-layer parameter All-Gathers require NVLink bandwidth to overlap compute. |
 | **Inter-Node (Cluster)** | Lower: **50 GB/s/dir per NIC** (400 Gbps NDR InfiniBand / RoCE) | **PP / DP** | Point-to-point boundary activations ($b \times s \times h$) easily fit inside slower inter-node links without saturating bandwidth. |
+
+4. **Inference Pipeline Dynamics (No Backward Bubble)**:
+   In autoregressive inference serving, pipeline bubbles behave fundamentally differently: because inference requires no backward pass, downstream stages receive subsequent token activations as soon as the upstream stage finishes, continuously keeping all stages occupied with minimal bubble idle time.
 
 ---
 

@@ -23,16 +23,8 @@ Standard LLM parallelization organizes along three fundamental physical axes (CS
 *(Specialized extensions: Expert Parallelism (EP) shards MoE experts across GPUs; Context Parallelism (CP) distributes long-sequence attention).*
 ### The 3D Parallelism Transmission Matrix: What Actually Travels on the Wire
 
-Across standard DP, TP, and PP, **model weights never cross the network**; **ZeRO-3 / FSDP is the sole exception**, transmitting full weights via All-Gather to break VRAM limits:
-
-| Strategy | Forward Transmission | Backward Transmission | Weights Communicated? | Interconnect Requirement |
-|---|---|---|---|---|
-| **Data Parallelism (DP)** | **Zero (0 B)** (local data slice) | **Weight Gradients $\nabla_W L$** (`All-Reduce(AVG)`) | **No** | InfiniBand / RoCE (overlapped) |
-| **Pipeline Parallelism (PP)** | **Boundary Activations $Y$** (`P2P send/recv`) | **Boundary Gradients $\nabla_Y L$** (`P2P send/recv`) | **No** | InfiniBand / Ethernet (tolerant) |
-| **Tensor Parallelism (TP)** | **Activation Partial Sums** (`All-Reduce(SUM)`) | **Input Gradient Partial Sums** (`All-Reduce(SUM)`) | **No** | **NVLink mandatory** (900 GB/s) |
-| **Fully Sharded (FSDP)** | **Full Model Weights $W$** (`All-Gather`) | **Weights $W$ + Grads $\nabla_W L$** (`AG + RS`) | **YES** | Multi-Rail IB / NVLink |
-
-*(Full pipelines: DP in [[ml-systems/distributed/data-parallelism]], PP in [[ml-systems/distributed/pipeline-parallelism]], TP in [[ml-systems/distributed/tensor-parallelism]], FSDP in [[ml-systems/distributed/zero-fsdp-memory-optimization]]).*
+For the exhaustive operator-level communication ledger cross-tabulating payload sizes ($S$) and wire volumes ($V_{\text{wire}}$) across DP, TP, SP, PP, FSDP, and EP (including the explicit "Weights on the Wire" accounting), see the canonical reference:
+[[ml-systems/distributed/distributed-communication-matrix]].
 
 ---
 
@@ -84,48 +76,11 @@ Full details — naming conventions, all four pairing designs with worked Qwen3-
 
 ### PP: How Layers Map to GPU Stages
 
-Split model layers across GPUs sequentially.
+Pipeline Parallelism partitions layers sequentially across $p$ stages, communicating boundary activations $[B_{\text{micro}}, S, H]$ via point-to-point links (see full 32-layer stage mapping, naive vs GPipe bubble schedules, and inference dynamics in [[ml-systems/distributed/pipeline-parallelism]]):
 
-```
-32-layer model on 4 GPUs:
-  GPU-0: layers  0-7   (stage 0)
-  GPU-1: layers  8-15  (stage 1)
-  GPU-2: layers 16-23  (stage 2)
-  GPU-3: layers 24-31  (stage 3)
-
-Forward pass:
-  Input → GPU-0 computes layers 0-7 → sends activations to GPU-1
-        → GPU-1 computes layers 8-15 → sends activations to GPU-2
-        → GPU-2 computes layers 16-23 → sends activations to GPU-3
-        → GPU-3 computes layers 24-31 → output
-```
-
-### Why PP Wastes GPU Time — and How Micro-Batches Fix It
-
-```
-Naive approach: only 1 GPU active at a time (75% idle!)
-
-  GPU-0: [F0][ ][ ][ ][ ][ ][B0][ ]
-  GPU-1: [ ][F1][ ][ ][ ][B1][ ][ ]
-  GPU-2: [ ][ ][F2][ ][B2][ ][ ][ ]
-  GPU-3: [ ][ ][ ][F3/B3][ ][ ][ ]
-
-GPipe fix: split batch into micro-batches (smaller sub-batches that
-flow through the pipeline one after another) to fill the bubble:
-
-  GPU-0: [F0][F1][F2][F3][ ][B3][B2][B1][B0]
-  GPU-1: [ ][F0][F1][F2][F3][B3][B2][B1][ ]
-  GPU-2: [ ][ ][F0][F1][F2][F3][B3][B2][ ][ ]
-  GPU-3: [ ][ ][ ][F0][F1][F2/B2][F3/B3][ ][ ][ ]
-
-Bubble fraction = (p-1)/(p-1+m), where p = number of pipeline stages and m = number of micro-batches — more micro-batches amortize the fixed (p-1) idle slots at pipeline startup and teardown.
-```
-
-### Why PP Uses InfiniBand (Not NVLink) and Behaves Differently in Inference
-
-- Transfers only **activations** (the intermediate feature tensors passed between layers) between stages, not weights, so works over InfiniBand across nodes — activation tensors are `[micro_batch, seq_len, hidden_dim]`, far smaller than the weight matrices TP synchronizes.
-- Standard pairing: **TP within a node + PP across nodes**, because TP needs NVLink (~900 GB/s) and PP only needs InfiniBand (~50 GB/s for activation transfers).
-- In inference, the pipeline bubble is negligible: no backward pass means each stage receives the next request's activations as soon as it finishes the current one, keeping all stages occupied.
+- **Standard Interconnect Pairing**: **TP within a node + PP across nodes**, because TP requires intra-node NVLink (~900 GB/s) and PP tolerates inter-node InfiniBand (~50 GB/s).
+- **Bubble Amortization**: Bubble ratio scales as $r = \frac{p-1}{m}$ ($F = \frac{p-1}{m+p-1}$), amortized across $m$ micro-batches.
+- **Inference Advantage**: In autoregressive decode, pipeline bubbles are minimal because the absence of backward passes allows downstream stages to continuously process incoming token activations.
 
 ---
 
@@ -252,7 +207,7 @@ vLLM and SGLang are **inference-only** engines. They do not perform backward pas
 
 ## Architecture-Aware Parallelism: PT-MoE
 
-Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it's a model architecture redesign that removes the sequential layer dependencies that cause the PP bubble. Published in the [2025 Foundation Models update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates).
+Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it's a model architecture redesign for server models (in contrast to on-device models that use a 5:3 depth ratio and KV sharing to cut 37.5% KV cache) that removes sequential layer dependencies. Published in the [Apple Foundation Models 2025 update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates).
 
 ### Why Sequential Layers Force a Pipeline Bubble
 
@@ -278,10 +233,10 @@ PT-MoE (parallel tracks — no bubble):
   GPU-1: [Track B]  ─┤→ Merge → next block
   GPU-2: [Track C]  ─┘
   All GPUs compute simultaneously; synchronization only at merge points.
-  Each track has its own set of MoE layers.
+  Each track block additionally has its own set of MoE layers.
 ```
 
-The bubble shrinks to near-zero because the blocking condition — "wait for the previous stage's activations" — no longer exists within a block. Within each track, TP and EP still apply for the MoE layers.
+Synchronization overhead is significantly reduced because the blocking condition — "wait for the previous stage's activations" — no longer exists within a block. Within each track, TP and EP still apply for the MoE layers.
 
 ---
 
