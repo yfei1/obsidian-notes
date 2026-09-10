@@ -23,23 +23,22 @@ Standard LLM parallelization organizes along three fundamental physical axes (CS
 *(Specialized extensions: Expert Parallelism (EP) shards MoE experts across GPUs; Context Parallelism (CP) distributes long-sequence attention).*
 ### The 3D Parallelism Transmission Matrix: What Actually Travels on the Wire
 
-A universal rule across standard distributed strategies is that **model weights are never communicated across the network**:
+Across standard DP, TP, and PP, **model weights never cross the network**; **ZeRO-3 / FSDP is the sole exception**, transmitting full weights via All-Gather to break VRAM limits:
 
 | Strategy | Forward Transmission | Backward Transmission | Weights Communicated? | Interconnect Requirement |
 |---|---|---|---|---|
 | **Data Parallelism (DP)** | **Zero (0 B)** (local data slice) | **Weight Gradients $\nabla_W L$** (`All-Reduce(AVG)`) | **No** | InfiniBand / RoCE (overlapped) |
 | **Pipeline Parallelism (PP)** | **Boundary Activations $Y$** (`P2P send/recv`) | **Boundary Gradients $\nabla_Y L$** (`P2P send/recv`) | **No** | InfiniBand / Ethernet (tolerant) |
 | **Tensor Parallelism (TP)** | **Activation Partial Sums** (`All-Reduce(SUM)`) | **Input Gradient Partial Sums** (`All-Reduce(SUM)`) | **No** | **NVLink mandatory** (900 GB/s) |
+| **Fully Sharded (FSDP)** | **Full Model Weights $W$** (`All-Gather`) | **Weights $W$ + Grads $\nabla_W L$** (`AG + RS`) | **YES** | Multi-Rail IB / NVLink |
 
-*(Full execution pipelines: DP in [[ml-systems/distributed/data-parallelism]], PP in [[ml-systems/distributed/pipeline-parallelism]], TP in [[ml-systems/distributed/tensor-parallelism]]).*
+*(Full pipelines: DP in [[ml-systems/distributed/data-parallelism]], PP in [[ml-systems/distributed/pipeline-parallelism]], TP in [[ml-systems/distributed/tensor-parallelism]], FSDP in [[ml-systems/distributed/zero-fsdp-memory-optimization]]).*
 
 ---
 
 ## 1. Data Parallelism (DP)
 
-Every GPU holds an identical replica of model weights and evaluates a disjoint slice of the global batch. Communication occurs strictly in backpropagation, where parameter gradients are averaged via `dist.all_reduce(op=dist.ReduceOp.AVG)` prior to `optimizer.step()`. Because gradient transfers asynchronously overlap with backward computation, DP achieves near-linear scaling across inter-node networks.
-
-Full execution pipeline, batch sharding, and AdamW gradient vs weight averaging derivations: [[ml-systems/distributed/data-parallelism]]
+Every GPU holds an identical replica of model weights and evaluates a disjoint slice of the global batch, asynchronously averaging parameter gradients via `dist.all_reduce(op=dist.ReduceOp.AVG)` during backpropagation (see full execution derivations in [[ml-systems/distributed/data-parallelism]]).
 
 ### Why TP is Necessary Despite DP: The Three Physical Walls
 
