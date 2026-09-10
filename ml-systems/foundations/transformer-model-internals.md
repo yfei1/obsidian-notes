@@ -307,10 +307,7 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/foundations/lora-mechanics]]
 - [[ml-systems/inference/lora-vllm-serving]]
 - [[ml-systems/vllm/vllm-torch-compile-decorator]]
-- [[ml-systems/vllm/vllm-weight-loading]] — how `named_parameters()` module-tree walk underpins checkpoint-to-parameter name remapping
-- [[ml-systems/gpu/pytorch-module-hooks]] — hooks attach to the `nn.Module` hierarchy described here; `__call__` dispatch chain determines when they fire
 - [[ml-systems/inference/cuda-graph-inference-optimization]] — transformer layer kernels (linear, MLP, attention) are recorded into CUDA graphs during decode to eliminate Python dispatch overhead
-- [[ml-systems/gpu/pytorch-module-hooks]] — hooks attach to the `nn.Module` hierarchy that transformer layers are built from; the `__call__` dispatch pattern applies at every layer
 - [[ml-systems/inference/kv-cache-kernel-and-addressing]] — kernel-level implementation of the KV cache write that occurs at each transformer layer during prefill and decode
 - [[ml-systems/training/scaling-laws]] — how many of these parameters to build, and how many tokens to train them on: `C ≈ 6ND` and the `D ≈ 20N` compute-optimal rule
 - [[ml-systems/training/cross-entropy-and-bpb]] — what the training loss over this model's output softmax actually measures, in bits
@@ -319,3 +316,4 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — architectural aspect ratio conventions (d_model/L ~ 100-130) and MHA head dimension scaling
 - [[ml-systems/training/output-softmax-z-loss]] — output vocabulary Softmax numerical stability and Z-loss regularization (contrast with QK-Norm)
 - [[ml-systems/foundations/attention-as-soft-addressing]] — first-principles Soft RAM memory model, Q/K/V decoupling, and 4L^2d attention FLOP counting
+- [[ml-systems/training/scaling-laws-foundations-and-mechanics]] — scaling law foundations, PAC generalization bounds, and empirical power laws

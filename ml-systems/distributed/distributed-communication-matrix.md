@@ -261,3 +261,4 @@ Byte-neutral identity:     True
 - [[ml-systems/foundations/moe-architectural-variants]] — Expert Parallelism (EP) All-to-All dispatch and combine dynamics
 - [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier interconnect bandwidths (NVLink, InfiniBand, Ethernet)
 - [[ml-systems/distributed/communication-computation-overlap]] — Overlapping communication with compute streams in distributed training
+- [[ml-systems/training/scaling-laws-foundations-and-mechanics]] — Empirical power-law scaling, non-parametric convergence rates, and compute allocations

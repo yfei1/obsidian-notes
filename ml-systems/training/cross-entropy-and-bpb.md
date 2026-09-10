@@ -290,7 +290,7 @@ All three are the same measurement wearing different denominators. Papers switch
 ---
 
 ## See Also
-
+- [[ml-systems/training/scaling-laws-foundations-and-mechanics]] — empirical power-law scaling of cross-entropy loss, log-log linearity, and token-level error compounding
 - [[ml-systems/training/scaling-laws]] — uses BPB as the y-axis when plotting loss against compute; the compute-optimal frontier is drawn in this unit
 - [[ml-systems/foundations/norms-and-regularization]] — the other family of scalar objectives added to this loss during training
 - [[ml-systems/foundations/transformer-model-internals]] — the softmax over the vocabulary that produces the predicted distribution `Q`
