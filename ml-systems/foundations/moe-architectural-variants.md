@@ -232,7 +232,6 @@ Output hidden state norm: 9.3716
 ---
 
 ## Key Trade-offs & Decisions
-
 | Dimension | Coarse MoE (GShard / Mixtral) | Fine-Grained + Shared (DeepSeekMoE) | Expert Choice Routing |
 |---|---|---|---|
 | **Routing Entity** | Token chooses Top-2 of 16 | Token chooses Top-7 of 63 + 1 Shared | Expert chooses Top-$C$ tokens |
@@ -248,7 +247,6 @@ Output hidden state norm: 9.3716
 ---
 
 ### Guideline 4: Prefer Expert Parallelism (EP) Over Tensor Parallelism (TP) for MoE
-
 In MoE architecture design, NVIDIA establishes Guideline 4: **Prefer EP over TP for Expert Layers** (*"EP is roughly like TP in behavior for MLPs – high bandwidth, reduces activation"*):
 
 | EP Advantage | Architectural Mechanism | Impact on Hardware Performance |
@@ -257,7 +255,6 @@ In MoE architecture design, NVIDIA establishes Guideline 4: **Prefer EP over TP 
 | **Lower Communication Overhead** | Selective token routing vs unconditional sync | TP forces two All-Reduces per layer across all tokens. EP transmits only actively routed tokens ($k$ tokens per sample) via All-to-All, reducing total bytes moved. |
 | **Simpler Computation Graph** | Clean stream boundaries | Independent expert branches make it straightforward to overlap All-to-All dispatch with shared expert GEMMs. |
 | **Eliminated Token Permutation** | Native expert mapping | When $\text{EP} = \text{num\_experts}$, each GPU hosts exactly one expert; intra-device token sorting/permutation is eliminated. |
-
 *(Empirical Benchmark & Trade-off Boundary: On Mixtral 8x7B, $\text{EP8} \times \text{TP1}$ significantly outperforms $\text{EP4} \times \text{TP2}$. The slide underscores the core constraint: "But, splitting matmuls can reduce efficiency vs routing activations").*
 
 #### Complexity in Composing EP with 3D Parallelism (CS336 Fig. 8)
@@ -269,9 +266,7 @@ When scaling MoE across massive clusters, architectures compose across four para
 4. **Expert + Tensor Parallelism (EP+TP)**: Applied when individual expert parameters exceed single-GPU capacity, sharding each expert's FFN across TP ranks within an EP group.
 
 *(Schematic Disclaimer: CS336 Figure 8 notes that for clarity and conciseness, subfigures (b), (c), and (d) omit certain All-to-All, All-Reduce, and Point-to-Point communications, as well as Normalization, Encode, Decode, and Gate modules; they are structural schematics rather than complete communication execution graphs).*
-
 ---
-
 ## Interview Talking Points
 
 1. **Why does DeepSeekMoE isolate Shared Experts from Routed Experts?**
@@ -301,3 +296,4 @@ When scaling MoE across massive clusters, architectures compose across four para
 - [[ml-systems/distributed/parallelism-strategies]] — Expert Parallelism (EP), Tensor Parallelism (TP), and All-to-All communication
 - [[ml-systems/vllm/fused-moe-vllm-implementation]] — vLLM Triton fused MoE kernel dispatch and memory optimization
 - [[ml-systems/distributed/communication-computation-overlap]] — multi-stream CUDA overlap for All-to-All and local GEMM
+- [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting (logical payload $S$ vs wire volume $V_{\text{wire}}$)

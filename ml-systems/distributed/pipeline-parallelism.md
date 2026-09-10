@@ -225,7 +225,7 @@ Despite the presence of pipeline bubbles ("Pipelines seem terrible. Why do we do
 2. **Pipelines Have Superior Communication Properties (Compared to FDSP [sic] / FSDP)**:
    - **FSDP Communication Burden**: FSDP requires $3\times \text{\#params}$ across cluster-wide All-Gathers and Reduce-Scatters. Any network straggler stalls the entire collective synchronization barrier.
    - **Point-to-Point (P2P) Topology**: In Pipeline Parallelism, communication occurs strictly between adjacent stages ($r \to r+1$). There are zero global collective barriers; stage workers communicate asynchronously via `dist.send` and `dist.recv`.
-   - **Small Activation Volume ($b \times s \times h$)**: The transmitted payload is strictly the boundary activation tensor:
+   - **Small Activation Volume ($b \times s \times h$)**: The transmitted payload is strictly the boundary activation tensor of shape $[b, s, h]$ (i.e. `[micro_batch, seq_len, hidden_dim]`):
      $$\text{Volume per Transfer} = \mathbf{2 \times b \times s \times h\text{ Bytes (in BF16)}}$$
    - **Parameter-Count Independence**: The boundary activation volume depends exclusively on micro-batch size $b$, sequence length $s$, and hidden dimension $h$. **It does not scale with the number of layers or parameter count within the stage**. Whether a stage contains 10 layers or 40 layers, the boundary payload remains identical.
 
@@ -283,3 +283,4 @@ Pipeline parallelism cannot achieve complete overlap at cluster boundaries:
 - [[ml-systems/training/training-memory-management]] — Managing activation memory scaling ($O(m)$ in GPipe vs $O(p)$ in 1F1B)
 - [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — How pipeline bubble overhead constrains model aspect ratio (depth vs width)
 - [[ml-systems/distributed/supernode-interconnect-architectures]] — Supernode cluster architectures and optical crossbar vs 3D Torus bisection topologies
+- [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting (logical payload $S$ vs wire volume $V_{\text{wire}}$)

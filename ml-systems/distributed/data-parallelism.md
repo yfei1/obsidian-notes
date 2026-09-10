@@ -278,3 +278,4 @@ Naïve Data Parallelism provides **zero memory scaling**: every GPU must store f
 - [[ml-systems/training/first-order-optimizers]] — Mathematical derivations and implementation of SGD, Adam, and AdamW with decoupled weight decay
 - [[ml-systems/distributed/communication-computation-overlap]] — Overlapping gradient all-reduce transfers with backward layer execution
 - [[ml-systems/distributed/pipeline-parallelism]] — Pipeline stage partitioning and micro-batch pipelining compared against data parallel worker replication
+- [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting (logical payload $S$ vs wire volume $V_{\text{wire}}$)

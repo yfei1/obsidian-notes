@@ -212,3 +212,4 @@ SP and CP are composable: SP reduces LayerNorm activation memory, CP distributes
 - [[ml-systems/distributed/tensor-parallelism]] — SP is always paired with TP; understanding the All-Reduce ↔ All-Gather/Reduce-Scatter swap requires TP context
 - [[ml-systems/gpu/gpu-memory-hierarchy]] — memory pressure at long sequences motivates both SP and CP
 - [[ml-systems/distributed/parallelism-strategies]] — overview of all parallelism strategies; SP and CP in context of TP, PP, DP
+- [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting (logical payload $S$ vs wire volume $V_{\text{wire}}$)

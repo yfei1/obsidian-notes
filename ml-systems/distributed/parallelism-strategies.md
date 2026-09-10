@@ -224,7 +224,7 @@ Standard PP (sequential dependency — has pipeline bubble):
 PT-MoE replaces sequential layers with parallel **tracks** — independent small transformers that process the same input simultaneously and merge at block boundaries. Because tracks share no activations mid-block, there is no inter-GPU dependency until the merge point — each GPU starts computing immediately.
 
 ```
-PT-MoE (parallel tracks — no bubble):
+PT-MoE (parallel tracks — reduced synchronization overhead):
   Input → [Track A: small transformer] ──→ Merge → next block → Output
         → [Track B: small transformer] ──→ ↑
         → [Track C: small transformer] ──→ ↑
@@ -260,7 +260,7 @@ Synchronization overhead is significantly reduced because the blocking condition
 
 9. **"When do you compose strategies?"** — Standard recipe: TP within a node (NVLink), PP across nodes (InfiniBand handles activation-only transfers), DP for replicas, ZeRO-1/2 on top of DP to cut optimizer memory. For MoE, add EP alongside TP within a node. SP comes free with TP. CP only when sequences exceed ~64K tokens.
 
-10. **"What's PT-MoE?"** — Not a new parallelism strategy. Redesigns the model into independent parallel tracks instead of sequential layers, eliminating the PP bubble because tracks share no activations until the merge point. TP and EP still apply within each track.
+10. **"What's PT-MoE?"** — Not a new parallelism strategy. Redesigns the model into independent parallel tracks instead of sequential layers, significantly reducing synchronization overhead because tracks share no activations until the merge point. TP and EP still apply within each track.
 ---
 
 ## See Also

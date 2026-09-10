@@ -297,3 +297,4 @@ vLLM and SGLang don't support ZeRO/FSDP for this reason: there's nothing to shar
 - [[ml-systems/training/training-memory-management]] — activation memory scaling (2BDL) and micro-batch memory reduction
 - [[ml-systems/distributed/data-parallelism]] — Standard DDP baseline before ZeRO sharding, full parameter replication, and gradient all-reduce mechanics
 - [[ml-systems/distributed/pipeline-parallelism]] — Pipeline Parallelism layer partitioning compared against ZeRO parameter sharding
+- [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting (logical payload $S$ vs wire volume $V_{\text{wire}}$)

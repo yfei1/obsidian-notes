@@ -228,9 +228,7 @@ For vocabulary $V=152{,}064, H=4096$ with $TP=2$: GPU 0 holds vocab range $[0:76
 
 Input tokens are replicated on all TP ranks. Each rank looks up only the tokens that fall within its assigned vocabulary range:
 
-- Rank $p$ checks if token ID $\in [\text{start}_p, \text{end}_p)$.
-- If hit: look up the row, scale/embed.
-- If miss: write zeros of shape $[H]$.
+- Rank $p$ checks if token ID $\in [\text{start}_p, \text{end}_p)$: look up the row if hit, or write zeros of shape $[H]$ if miss.
 - After local lookup: `all_reduce(SUM)` across TP ranks to assemble the complete hidden state embedding.
 
 ### LM Head Sharding: all_reduce vs all_gather
@@ -299,3 +297,4 @@ The `weight_loader` method attached to each parameter (by `ColumnParallelLinear`
 - [[ml-systems/foundations/attention-mechanics]] — Multi-head attention head sharding and QKV projection mechanics
 - [[ml-systems/distributed/pipeline-parallelism]] — Inter-layer pipeline stage partitioning compared against intra-layer tensor parallel weight slicing
 - [[ml-systems/distributed/supernode-interconnect-architectures]] — Scale-up domain boundaries and optical vs copper physical interconnect limits
+- [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting (logical payload $S$ vs wire volume $V_{\text{wire}}$)

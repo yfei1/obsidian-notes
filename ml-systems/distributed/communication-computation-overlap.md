@@ -238,3 +238,4 @@ FLOPS Time / Comms Time (Ratio R)
 - [[ml-systems/distributed/cluster-network-hierarchy]] — Three-tier cluster interconnect hierarchy, NCCL channel kernel launch, and CPU-off-data-path RDMA transports
 - [[ml-systems/distributed/data-parallelism]] — Gradient all-reduce synchronization in DDP and backward compute overlap
 - [[ml-systems/distributed/pipeline-parallelism]] — Overlapping point-to-point activation transfers across pipeline stages with compute streams
+- [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting (logical payload $S$ vs wire volume $V_{\text{wire}}$)
