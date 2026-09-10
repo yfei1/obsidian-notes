@@ -297,3 +297,4 @@ The correct reading of `D ≈ 20N`: it is the answer to "what is the best model 
 - [[ml-systems/training/training-memory-management]] — how activation checkpointing increases step compute from 6ND to 8ND
 - [[ml-systems/foundations/transformer-sizing-and-aspect-ratio]] — how systems constraints force d_model/L ~ 100-130 despite Kaplan scaling law aspect-ratio indifference
 - [[ml-systems/foundations/attention-as-soft-addressing]] — step-by-step 2MNK derivation of 4L^2d forward attention FLOPs matching 12LS^2d training formulas
+- [[ml-systems/training/scaling-laws-foundations-and-mechanics]] — Statistical foundations (PAC bounds, non-parametric density estimation), joint scaling formulations, data mixture dynamics, and training system mechanics
