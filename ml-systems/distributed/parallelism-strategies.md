@@ -207,36 +207,10 @@ vLLM and SGLang are **inference-only** engines. They do not perform backward pas
 
 ## Architecture-Aware Parallelism: PT-MoE
 
-Parallel Track MoE (PT-MoE) is **not a new parallelism strategy** — it's a model architecture redesign for server models (in contrast to on-device models that use a 5:3 depth ratio and KV sharing to cut 37.5% KV cache) that removes sequential layer dependencies. Published in the [Apple Foundation Models 2025 update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates).
+Parallel Track MoE (PT-MoE) is a model architecture redesign for server models ([Apple Foundation Models 2025 Update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates)) that removes sequential layer dependencies. Multiple independent small transformers ("tracks") process tokens concurrently within track blocks, synchronizing only at block boundaries. This eliminates intra-block inter-GPU waiting and significantly reduces synchronization overhead compared to sequential pipeline stages, cutting collective stalls by 87.5% (from 96 to 12). Within each track, TP and EP still apply for MoE layers.
 
-### Why Sequential Layers Force a Pipeline Bubble
-
-The PP bubble exists because of a data dependency: layer N+1 cannot start until layer N produces its output activations. With 4 pipeline stages, the first 3 stages sit idle while stage 0 processes its first micro-batch — that idle gap is the bubble. Micro-batches reduce but cannot eliminate it, because the dependency chain is architectural, not a scheduling artifact.
-
-```
-Standard PP (sequential dependency — has pipeline bubble):
-  GPU-0: [layers 0-7]  → must wait → GPU-1: [layers 8-15] → must wait → ...
-  GPUs sit idle waiting for activations from the previous stage.
-```
-
-### PT-MoE: Parallel Tracks Remove the Dependency Chain
-
-PT-MoE replaces sequential layers with parallel **tracks** — independent small transformers that process the same input simultaneously and merge at block boundaries. Because tracks share no activations mid-block, there is no inter-GPU dependency until the merge point — each GPU starts computing immediately.
-
-```
-PT-MoE (parallel tracks — reduced synchronization overhead):
-  Input → [Track A: small transformer] ──→ Merge → next block → Output
-        → [Track B: small transformer] ──→ ↑
-        → [Track C: small transformer] ──→ ↑
-
-  GPU-0: [Track A]  ─┐
-  GPU-1: [Track B]  ─┤→ Merge → next block
-  GPU-2: [Track C]  ─┘
-  All GPUs compute simultaneously; synchronization only at merge points.
-  Each track block additionally has its own set of MoE layers.
-```
-
-Synchronization overhead is significantly reduced because the blocking condition — "wait for the previous stage's activations" — no longer exists within a block. Within each track, TP and EP still apply for the MoE layers.
+For the complete 150B architecture reference (8-track layout, 4-layer FFN and 8-layer attention cycles, local sliding window vs Global NoPE, Hybridnorm v2, and vLLM serving integration), see the canonical note:
+[[ml-systems/foundations/pt-moe-architecture]].
 
 ---
 

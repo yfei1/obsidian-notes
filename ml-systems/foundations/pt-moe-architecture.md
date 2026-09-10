@@ -12,8 +12,14 @@ Parallel Track MoE (PT-MoE) runs 8 independent small transformers ("tracks") in 
 
 ---
 
-## Why Parallel Tracks?
+## Why Parallel Tracks? (AFM 2025 Server Model Architecture)
 
+Published in the [Apple Foundation Models 2025 Update](https://machinelearning.apple.com/research/apple-foundation-models-2025-updates), the Parallel Track Mixture-of-Experts (PT-MoE) design specifically targets server-scale models (in contrast to on-device models that employ a 5:3 depth ratio and KV sharing to reduce KV cache by 37.5%).
+
+### 1. Removing the Sequential Layer Dependency Chain (The Pipeline Parallelism Bubble)
+In standard distributed training and inference, layers are structured sequentially. In Pipeline Parallelism (PP), this forces an architectural bubble: layer $N+1$ cannot start until layer $N$ finishes and transmits activations. While micro-batching (1F1B / GPipe) mitigates this idle time, the dependency chain is architectural. PT-MoE fundamentally breaks this dependency: multiple smaller transformers ("tracks") process tokens concurrently, with synchronization applied strictly at the input and output boundaries of each track block. Each track block additionally hosts its own set of MoE layers, significantly reducing synchronization overhead compared to sequential pipeline stages.
+
+### 2. Eliminating Tensor Parallel Stalls (96 Stalls $\to$ 12 Syncs)
 **Standard TP stalls every GPU 96 times per forward pass.** Each decoder layer requires two all-reduces — one after attention's `o_proj`, one after FFN's `down_proj` — because each projection is split across GPUs and must reconstruct the full activation before the next layer can start. Every all-reduce is a blocking collective: all 8 GPUs wait until the slowest finishes. With 48 layers that's 96 stalls per pass, and at decode time (one token per step) those stalls dominate latency.
 
 PT eliminates 84 of those stalls by running all 8 GPUs independently for 4 layers, then syncing once: **12 sync points** total. The per-sync cost is identical (one all-reduce over 8 GPUs), but it fires 8× less often — GPUs spend those 84 recovered steps computing instead of waiting. See [[ml-systems/distributed/parallelism-strategies]] for TP sync mechanics.
@@ -92,39 +98,10 @@ Each track has **independent weights** — Track 0's layers differ from Track 1'
 
 Two independent cycling patterns determine each layer's behavior:
 
-### FFN Pattern (4-element cycle)
-
-```
-ffn_layer_types = ["dense", "dense", "dense", "sparse"]
-
-Layer  0: dense      ← pattern[0 % 4]
-Layer  1: dense
-Layer  2: dense
-Layer  3: MoE        ← pattern[3 % 4]
-Layer  4: dense      ← cycle restarts
-...
-Layer 47: MoE
-
-Total across 48 layers: 36 dense + 12 MoE
-```
-
-### Attention Pattern (8-element cycle)
-
-```
-attention_layer_types = ["local", "local", "local", "local",
-                         "local", "local", "local", "global_nope"]
-
-Layer  0: local      ← pattern[0 % 8]
-Layer  1: local
-...
-Layer  6: local
-Layer  7: global_nope ← pattern[7 % 8]
-Layer  8: local       ← cycle restarts
-...
-Layer 47: global_nope
-
-Total across 48 layers: 42 local + 6 global_nope
-```
+| Cycle Pattern | Repeating Sequence | Total across 48 Layers | Layer Index Trigger & Segment Alignment |
+|---|---|---|---|
+| **FFN Pattern (4-cycle)** | `["dense", "dense", "dense", "sparse"]` | 36 Dense + 12 MoE | MoE fires at layer $l$ where $l \pmod 4 == 3$. |
+| **Attention Pattern (8-cycle)** | `["local", "local", "local", "local", "local", "local", "local", "global_nope"]` | 42 Local + 6 Global NoPE | Global NoPE fires at layer $l$ where $l \pmod 8 == 7$. |
 
 The 4-layer segment boundary and the 8-layer attention cycle are independent. Segment 0 (layers 0–3) is all-local. Segment 1 (layers 4–7) has 3 local + 1 global_nope. Even segments are all-local; odd segments end with global_nope.
 
