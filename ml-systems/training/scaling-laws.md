@@ -30,46 +30,38 @@ The middle row wins on loss. The two outer rows waste the budget in opposite dir
 
 ## The Compute Identity: C ≈ 6ND
 
-### 2D Matrix Multiplication FLOP Derivation: (B, D) @ (D, K)
+### 2D Matrix Multiplication FLOP Derivation: (B, d_in) @ (d_in, d_out)
 
-Multiplying activation matrix $X \in \mathbb{R}^{B \times D}$ by weight matrix $W \in \mathbb{R}^{D \times K}$ produces output $Y \in \mathbb{R}^{B \times K}$:
+Multiplying activation matrix $X \in \mathbb{R}^{B \times d_{\text{in}}}$ by weight matrix $W \in \mathbb{R}^{d_{\text{in}} \times d_{\text{out}}}$ produces output $Y \in \mathbb{R}^{B \times d_{\text{out}}}$:
 
-$$Y[i, k] = \sum_{j=1}^D X[i, j] \cdot W[j, k]$$
+$$Y[i, k] = \sum_{j=1}^{d_{\text{in}}} X[i, j] \cdot W[j, k]$$
 
-- The computation iterates over all $(i, j, k)$ triples across three nested loops: $i \in [1, B]$, $j \in [1, D]$, and $k \in [1, K]$.
+- The computation iterates over all $(i, j, k)$ triples across three nested loops: $i \in [1, B]$, $j \in [1, d_{\text{in}}]$, and $k \in [1, d_{\text{out}}]$.
 - Every $(i, j, k)$ triple executes **1 multiplication** ($X[i, j] \cdot W[j, k]$) and **1 addition** (accumulating into $Y[i, k]$).
 - In hardware arithmetic, 1 multiply + 1 add = **1 Fused Multiply-Add (2 FLOPs)**.
-- Total triples $= B \times D \times K \implies \text{Total FLOPs} = \mathbf{2 \times B \times D \times K}$.
+- Total triples $= B \times d_{\text{in}} \times d_{\text{out}} \implies \text{Total FLOPs} = \mathbf{2 \times B \times d_{\text{in}} \times d_{\text{out}}}$.
 
 Grouping the terms reveals why the rule holds across the entire transformer:
 
-$$\text{Forward FLOPs} = 2 \times B \times (D \times K) = \mathbf{2 \times (\text{number of tokens } B) \times (\text{layer parameters } D \times K)}$$
+$$\text{Forward FLOPs} = 2 \times B \times (d_{\text{in}} \times d_{\text{out}}) = \mathbf{2 \times (\text{number of tokens } B) \times (\text{layer parameters } d_{\text{in}} \times d_{\text{out}})}$$
 
-Summing across all weight matrices in the model gives the universal forward-pass cost:
+Summing across all weight matrices in the model gives the universal forward-pass cost ($D$ denotes total dataset tokens, distinct from layer dimension $d_{\text{in}}$):
 
 $$\text{Forward Compute} = \mathbf{2 \times (\text{total tokens } D) \times (\text{model parameters } N)} = \mathbf{2ND\text{ FLOPs}}$$
 
 ### Forward vs. Backward Pass Matrix Identity
 
-Given upstream loss gradient $G = \nabla_Y \mathcal{L} \in \mathbb{R}^{B \times K}$:
+Given upstream loss gradient $G = \nabla_Y \mathcal{L} \in \mathbb{R}^{B \times d_{\text{out}}}$:
 
-1. **Forward Pass**:
-   $$Y = X @ W \implies (B, D) @ (D, K) \to \mathbf{2BDK\text{ FLOPs}}$$
-2. **Backward Pass — Gradient w.r.t. Input ($\\nabla_X \mathcal{L}$)** (backpropagated to previous layer):
-   $$\nabla_X \mathcal{L} = G @ W^T \implies (B, K) @ (K, D) \to \mathbf{2BDK\text{ FLOPs}}$$
-3. **Backward Pass — Gradient w.r.t. Weights ($\\nabla_W \mathcal{L}$)** (used by optimizer):
-   $$\nabla_W \mathcal{L} = X^T @ G \implies (D, B) @ (B, K) \to \mathbf{2BDK\text{ FLOPs}}$$
+1. **Forward Pass**: $Y = X @ W \implies (B, d_{\text{in}}) @ (d_{\text{in}}, d_{\text{out}}) \to \mathbf{2 B \cdot d_{\text{in}} \cdot d_{\text{out}}\text{ FLOPs}}$
+2. **Backward Pass — Input Gradient ($\nabla_X \mathcal{L}$)**: $G @ W^T \implies (B, d_{\text{out}}) @ (d_{\text{out}}, d_{\text{in}}) \to \mathbf{2 B \cdot d_{\text{in}} \cdot d_{\text{out}}\text{ FLOPs}}$
+3. **Backward Pass — Weight Gradient ($\nabla_W \mathcal{L}$)**: $X^T @ G \implies (d_{\text{in}}, B) @ (B, d_{\text{out}}) \to \mathbf{2 B \cdot d_{\text{in}} \cdot d_{\text{out}}\text{ FLOPs}}$
 
-```
-forward:   2ND FLOPs    (computes output activations: 2BDK)
-backward:  4ND FLOPs    (grad w.r.t. input: 2BDK, grad w.r.t. weight: 2BDK)
-           ─────────
-total:     6ND FLOPs
-```
+$$\text{Forward: } C_{\text{fwd}} = \mathbf{2ND\text{ FLOPs}}, \quad \text{Backward: } C_{\text{bwd}} = \mathbf{4ND\text{ FLOPs}}, \quad \text{Total: } C_{\text{total}} \approx \mathbf{6ND\text{ FLOPs}}$$
 
-The backward pass costs exactly twice the forward pass ($4ND = 2ND + 2ND$) because backpropagation must compute two separate matrix derivatives ($\\nabla_X$ and $\\nabla_W$) where the forward pass computed one output matrix.
+The backward pass costs exactly twice the forward pass ($4ND = 2ND + 2ND$) because backpropagation computes two separate matrix derivatives ($\nabla_X$ and $\nabla_W$) where forward computed one output matrix.
 
-*(Note: Exact arithmetic counting has one fewer addition per output element ($2BDK - BD$ FLOPs), differing by only $0.012\%$ at $D=4096$, which makes the standard $2ND$ forward and $6ND$ total training approximations universal at scale).*
+*(Note: Exact arithmetic counting has one fewer addition per output element ($2 B \cdot d_{\text{in}} \cdot d_{\text{out}} - B \cdot d_{\text{out}}$ FLOPs), differing by only $\frac{1}{2 d_{\text{in}}} \approx 0.012\%$ at $d_{\text{in}}=4096$, which makes standard $2ND$ and $6ND$ total training approximations universal at scale).*
 
 ### Why Optimizer FLOPs are Omitted ($O(N)$ vs. $O(NB)$)
 
@@ -172,7 +164,20 @@ Run the sweep at several budgets — `3e18`, `1.8e20`, `3e21` — and each budge
 
 Connecting the minima gives the **compute-optimal frontier** — the dashed line. Fitting it yields `N* ∝ C^0.5` and `D* ∝ C^0.5`. Both exponents being `0.5` is the load-bearing result: it means `D*/N*` stays roughly **constant at ~20** across budget scales, rather than drifting as models get bigger. Extrapolating the fitted frontier is how a lab forecasts the loss of a run it has not yet paid for.
 
-**Kaplan et al. (2020) got a different answer**: `N* ∝ C^0.73`, implying compute should go mostly into parameters and only weakly into data. Hoffmann et al. (2022) — Chinchilla — re-ran the sweep and got `0.5`, attributing the earlier exponent largely to learning-rate-schedule artifacts at small budgets, where the schedule was not re-tuned per run. The practical consequence was large: models built on the Kaplan exponent, such as the 175B GPT-3 on ~300B tokens (`D/N ≈ 1.7`), sit far up the left arm of their own IsoFLOP curve. <!-- source: Kaplan et al. 2020 "Scaling Laws for Neural Language Models"; Hoffmann et al. 2022 "Training Compute-Optimal Large Language Models" -->
+### Chinchilla's Three Methodological Approaches (Hoffmann et al., Table 2)
+
+DeepMind (arXiv:2203.15556) resolved Kaplan's bias by evaluating three independent approaches across 400+ runs:
+
+| Approach | Methodology | Exponent $a$ ($N \propto C^a$) | Exponent $b$ ($D \propto C^b$) | Key Property |
+|---|---|---|---|---|
+| **1. Curve Minima** | Minimum envelope across training curves | **$0.50$** | **$0.50$** | Pure empirical envelope |
+| **2. IsoFLOP Minima** | Minima across fixed-compute slices | **$0.49$** | **$0.51$** | Sweeps U-shaped IsoFLOP curves |
+| **3. Parametric Fit** | L-BFGS fit of $L(N, D) = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta}$ | **$0.46$** | **$0.54$** | Gives $\alpha=0.34, \beta=0.28, E=1.69$ |
+| *Kaplan et al. (2020)* | *Table 2 comparison (suboptimal LR schedule)* | *$0.73$* | *$0.27$* | *Early-truncated LR schedule + excluded embeddings* |
+
+- **Approach 3 Exponents**: Evaluating $\min_{N, D} L(N, D)$ s.t. $6ND = C$ analytically yields $a = \frac{\beta}{\alpha+\beta} = \frac{0.28}{0.62} \approx 0.46$ and $b = \frac{\alpha}{\alpha+\beta} = \frac{0.34}{0.62} \approx 0.54$. *(Symbol Disambiguation: $\beta = 0.28$ is the empirical data exponent, distinct from Hölder smoothness $\beta$).*
+- **Cross-Dataset Robustness (Table A2)**: Near-equal scaling holds across distributions: C4 ($a=0.50, b=0.50$) and GitHub code ($a=0.53, b=0.47$).
+- **The $D \approx 20N$ Rule (DERIVED)**: Chinchilla's headline model trains $70\text{B}$ parameters ($N = 7 \times 10^{10}$) on $1.4\text{T}$ tokens ($D = 1.4 \times 10^{12}$). The ratio evaluates to $\frac{1.4 \times 10^{12}}{7 \times 10^{10}} = \mathbf{20.0\text{ tokens/parameter}}$.
 
 ---
 
