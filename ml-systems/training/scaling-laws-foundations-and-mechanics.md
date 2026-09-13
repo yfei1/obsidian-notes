@@ -169,3 +169,4 @@ In single-pass pretraining over trillion-token datasets:
 - [[ml-systems/distributed/parallelism-strategies]] — 3D parallelism taxonomy (DP, TP, PP, EP, SP, and CP)
 - [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting ledger
 - [[ml-systems/distributed/communication-computation-overlap]] — Compute-communication overlap ratios and the TPU Book model
+- [[ml-systems/training/tensor-programs-and-mup]] — Maximal Update Parametrization (muP), MiniCPM 5-point parameterization recipe, and token-optimal batch size scaling
