@@ -156,7 +156,7 @@ Production recipes resolve this tension via **Staged Batch Ramping**: starting a
 An alternative industrial scaling philosophy bypasses $\mu P$ entirely, opting to retain standard PyTorch parameterization (SP) and directly estimate optimal hyperparameters via empirical power laws fit to small-scale grid searches.
 
 ### Compute-Conditioned Formulation (arXiv:2401.02954 Section 3 Eq. 1)
-DeepSeek conducted 2D grid searches over batch size and learning rate across compute budgets ranging from $10^{17}$ to $2 \times 10^{19}$ FLOPs. Fitting power-law trajectories to near-optimal models (generalization error within 0.25% of the minimum) yielded:
+DeepSeek conducted 2D grid searches over batch size and learning rate across compute budgets ranging from $10^{17}$ to $2 \times 10^{19}$ FLOPs. Fitting power-law trajectories to near-optimal models (defined in Figure 3 caption as models whose generalization error exceeded the minimum by no more than 0.25%) yielded:
 
 $$\eta_{\text{opt}} = 0.3118 \cdot C^{-0.1250}, \quad B_{\text{opt}} = 0.2920 \cdot C^{0.3271}$$
 
@@ -175,7 +175,7 @@ Extrapolating these laws over 4 orders of magnitude ($10^{20} \to 10^{24}$ FLOPs
 | Dimension | OpenAI Kaplan (arXiv:2001.08361) | MiniCPM (arXiv:2404.06395) | DeepSeek LLM (arXiv:2401.02954) |
 | :--- | :--- | :--- | :--- |
 | **Independent Variable** | Target Loss $L$ | Target Loss $L$ | **Training FLOPs $C$** |
-| **Learning Rate Policy** | Drift leftward ($N \propto C^{0.73}$) | **$\mu P$ Fixed ($\text{LR}^*_{\text{base}} \approx 0.01$)** | Empirical Extrapolation ($\eta \propto C^{-0.125}$) |
+| **Learning Rate Policy** | Standard Parametrization (SP, re-tuned per size) | **$\mu P$ Invariant (base $\text{LR}^* \approx 0.01$)** | Empirical Extrapolation ($\eta \propto C^{-0.125}$) |
 | **Batch Size Law** | $B_{\text{crit}} \approx \frac{2 \times 10^8}{L^{4.76}}$ | $bs = \frac{1.21 \times 10^9}{L^{6.24}}$ | $B_{\text{opt}} = 0.2920 \cdot C^{0.3271}$ |
 | **Hardware Premise** | Unlimited GPUs (Step Minimization) | Fixed Cluster (Token Quantity Minimization) | Fixed Cluster (Pre-lookup Table by $C$) |
 
