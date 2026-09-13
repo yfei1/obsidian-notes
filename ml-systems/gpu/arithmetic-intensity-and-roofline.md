@@ -292,3 +292,5 @@ When fused into a single Triton kernel:
 - [[ml-systems/foundations/gqa-mqa-attention-variants]] — arithmetic intensity derivations in attention prefill vs decode and GQA memory savings
 - [[ml-systems/foundations/attention-as-soft-addressing]] — Roofline model execution regimes and A100 memory wall in prefill vs decode
 - [[ml-systems/foundations/linear-and-efficient-attention]] — factorized linear attention, kernel feature maps, and state-space duality
+- [[ml-systems/inference/speculative-decoding-mechanics]] — Speculative decoding turning memory-bound decode into compute-bound verification
+- [[ml-systems/inference/ptq-quantization-and-structured-pruning]] — Post-training quantization (GPTQ, AWQ) reducing weight read bytes in decode

@@ -317,3 +317,4 @@ The elegance: ColumnParallel requires zero communication (each GPU independently
 - [[ml-systems/training/output-softmax-z-loss]] — output vocabulary Softmax numerical stability and Z-loss regularization (contrast with QK-Norm)
 - [[ml-systems/foundations/attention-as-soft-addressing]] — first-principles Soft RAM memory model, Q/K/V decoupling, and 4L^2d attention FLOP counting
 - [[ml-systems/training/scaling-laws-foundations-and-mechanics]] — scaling law foundations, PAC generalization bounds, and empirical power laws
+- [[ml-systems/inference/ptq-quantization-and-structured-pruning]] — Post-training quantization (GPTQ, AWQ) and Minitron structured pruning

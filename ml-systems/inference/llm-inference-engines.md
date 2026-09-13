@@ -356,3 +356,5 @@ Exception: TensorRT-LLM (Nvidia) writes the scheduler in C++. Faster by ~1ms, bu
 - [[ml-systems/foundations/gqa-mqa-attention-variants]] — GQA, MQA, and MLA attention head variants and KV cache bandwidth bottlenecks
 - [[ml-systems/foundations/attention-as-soft-addressing]] — autoregressive decoding matrix slicing, transient Q vs persistent K/V lifecycle
 - [[ml-systems/foundations/linear-and-efficient-attention]] — factorized linear attention, kernel feature maps, and state-space duality
+- [[ml-systems/inference/speculative-decoding-mechanics]] — Runtime speculative decoding acceleration and parallel verification
+- [[ml-systems/inference/ptq-quantization-and-structured-pruning]] — Post-training quantization (GPTQ, AWQ, QAT) and structured pruning (Minitron)

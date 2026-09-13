@@ -273,3 +273,4 @@ For the complete 150B architecture reference (8-track layout, 4-layer FFN and 8-
 - [[ml-systems/distributed/pipeline-parallelism]] — Pipeline Parallelism execution mechanics, micro-batch scheduling, and bubble fraction derivations
 - [[ml-systems/distributed/supernode-interconnect-architectures]] — Hardware supernode architectures and physical interconnect media across AI clusters
 - [[ml-systems/training/scaling-laws-foundations-and-mechanics]] — Empirical power-law scaling, non-parametric convergence rates, and compute allocations
+- [[ml-systems/inference/speculative-decoding-mechanics]] — Runtime speculative decoding acceleration and rejection sampling

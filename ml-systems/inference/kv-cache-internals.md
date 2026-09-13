@@ -297,3 +297,4 @@ Because the cache reads from layers (Phase 6 in [[ml-systems/distributed/vllm-di
 - [[ml-systems/gpu/pt-moe-4norm-fusion-deep-research]]
 - [[ml-systems/gpu/pt-moe-decode-kernel-launch-analysis]]
 - [[ml-systems/gpu/pt-moe-gpu-memory-and-fusion-savings]]
+- [[ml-systems/inference/speculative-decoding-mechanics]] — Speculative decoding KV cache verification mechanics and rejection sampling
