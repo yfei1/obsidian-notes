@@ -86,7 +86,7 @@ The target model runs a single parallel forward pass and outputs exact target di
   - $\text{"可能"}: \max(0, 0.85 - 0.04) = 0.81$
   - $\text{"无限"}: \max(0, 0.05 - 0.15) = 0.00$
   Sample replacement token $x_2$ from normalized $\max(0, p_2 - q_2) \implies \mathbf{x_2 = \text{"可能"}}$.
-- **Outcome**: A single forward pass on the 70B model produced **2 verified tokens ("充满可能")**, doubling decoding efficiency while discarding the draft model's third-token hallucination.
+- **Outcome**: A single forward pass on the 70B target model verified **2 tokens ("充满可能")**, achieving a 2x serial call reduction in this step, while discarding subsequent draft candidates upon the second-token rejection.
 
 ---
 
