@@ -8,7 +8,7 @@
 
 ## TL;DR
 
-MoE models decouple parameter capacity from per-token floating-point execution, splitting classical dense scaling laws into a multi-dimensional frontier across activated parameters, total parameters, and expert sparsity. Moonshot AI's Kimi K2 established that under fixed activated parameters (constant FLOPs), increasing expert sparsity ($\text{total\_experts} / \text{activated\_experts}$) consistently drives validation loss down, with sparsity 48 reducing training FLOPs by $1.69\times$, $1.39\times$, and $1.15\times$ compared to sparsity 8, 16, and 32 to achieve a validation loss of 1.5. To balance infrastructure routing overhead, Kimi K2 adopted sparsity 48 (activating 8 out of 384 routed experts alongside 1 shared expert). Concurrently, Tencent Hunyuan-Large extended Chinchilla IsoFLOP quadratic fitting to MoE activated parameters on small-scale budgets ($10^{18}\text{--}10^{20}$ FLOPs), cleanly extrapolating across five orders of magnitude to predict an optimal activated allocation of 58.1B at $C_{\min} \approx 3.11 \times 10^{24}$ FLOPs, with Hunyuan-Large selecting 52B activated parameters (389B total) exploiting the flatness around the quadratic minimum.
+MoE models decouple parameter capacity from per-token floating-point execution, splitting classical dense scaling laws into a multi-dimensional frontier across activated parameters, total parameters, and expert sparsity. Moonshot AI's Kimi K2 established that under fixed activated parameters (constant FLOPs), increasing expert sparsity ($\text{total\_experts} / \text{activated\_experts}$) consistently drives validation loss down, with sparsity 48 reducing training FLOPs by $1.69\times$, $1.39\times$, and $1.15\times$ compared to sparsity 8, 16, and 32 to achieve a validation loss of 1.5. To balance infrastructure routing overhead, Kimi K2 adopted sparsity 48 (activating 8 out of 384 routed experts alongside 1 shared expert). Concurrently, Tencent Hunyuan-Large extended Chinchilla IsoFLOP quadratic fitting to MoE activated parameters on small-scale budgets ($10^{18}\text{--}10^{20}$ FLOPs), cleanly extrapolating across five orders of magnitude to predict an optimal activated allocation of 58.1B at $C_{\min} \approx 3.11 \times 10^{24}$ FLOPs (extrapolating ~4.5 orders of magnitude from small budgets $5.0 \times 10^{18}\text{--}9.5 \times 10^{19}$ FLOPs), with Hunyuan-Large selecting 52B activated parameters (389B total) exploiting the flatness around the quadratic minimum.
 
 ---
 
@@ -58,10 +58,10 @@ Across carefully controlled experiments fixing activated parameters (8 routed ex
 3. **The Infrastructure Boundary**: While Sparsity 64 yields marginal additional gains, increasing expert counts compounds distributed All-to-All dispatch communication and memory fragmentation. Kimi K2 selected **Sparsity 48** ($K=8$ out of $E=384$) to optimize performance against infrastructure complexity.
 4. **Optimizer Architecture**: While the sparsity scaling law was derived using Muon, Kimi K2's production training deployed **MuonClip** (Muon combined with a novel QK-clip technique to eliminate training instability).
 
-### Attention Head Scaling (Kimi K2 Figure 6)
+### Attention Head Scaling (Kimi K2 Figure 6 & §2.3)
 In parallel scaling analysis, Kimi K2 evaluated attention topology across compute budgets from $1.2 \times 10^{20}$ to $9.0 \times 10^{20}$ FLOPs:
-- Comparing baseline models (where number of attention heads equals number of layers) against counterparts with **doubled attention heads**;
-- Doubling attention heads yielded a consistent validation loss reduction of **$0.5\%\text{--}1.2\%$** across all training token scales.
+- **The Empirical Scaling Benefit**: Comparing baseline models (where attention heads equal layer count) against counterparts with doubled attention heads, doubling heads yielded a consistent validation loss reduction of **$0.5\%\text{--}1.2\%$** across all training token scales.
+- **The Deliberate Inference Trade-off (§2.3 & Table 2)**: Despite proving that doubling heads reduces loss, Kimi K2 **deliberately cut its attention heads to 64** (down from 128 in DeepSeek-V3, a 50% reduction in Table 2): *"To reduce computational overhead during inference, we cut the number of attention heads to 64, as opposed to 128 in DeepSeek-V3."* Paralleling Hunyuan's 58.1B $\to$ 52B choice, production teams intentionally deviate from scaling law optima to minimize serving FLOPs and KV cache pressure.
 
 ---
 
@@ -88,7 +88,7 @@ Training Loss                                Activated Params
 2. **Batch-Adjusted Compute Invariant**: The x-axis plots minimum compute $C_{\min} = C / (1 + B / B_{\text{crit}}(L))$ (Eq. 3), discounting compute for batch size inflation relative to critical batch size. Fitting the power-law relation:
    $$N_{\text{opt}} = N_c \cdot C_{\min}^\alpha \quad (N_c = 5.9 \times 10^{-3}, \alpha = 0.5305)$$
    Along the data axis (Figure 4), fitting yields $D_{\text{opt}} = D_c \cdot C_{\min}^\beta$ ($D_c = 3.2, \beta = 0.50$).
-3. **Prediction vs. Final Architecture (58.1B vs. 52B)**: Inverting the scaling formula at target compute $C_{\min} \approx 3.11 \times 10^{24}$ FLOPs predicts an optimal activated parameter size of **58.1B** (and $D_{\text{opt}} \approx 5.6\text{T}$ tokens). However, because quadratic loss curves are extremely flat near the minimum (Dubey et al., 2024), Hunyuan-Large intentionally selected **52B activated parameters** (out of 389B total parameters) to streamline deployment while retaining near-optimal loss convergence.
+3. **Prediction vs. Final Architecture (58.1B vs. 52B)**: Inverting the scaling formula at target compute $C_{\min} \approx 3.11 \times 10^{24}$ FLOPs (extrapolating ~4.5 orders of magnitude from the 9.5e19 FLOP upper fit bound, or ~5.8 orders from the 5e18 lower bound) predicts an optimal activated parameter size of **58.1B** (and $D_{\text{opt}} \approx 5.6\text{T}$ tokens). However, because quadratic loss curves are extremely flat near the minimum (Dubey et al., 2024), Hunyuan-Large intentionally selected **52B activated parameters** (out of 389B total parameters) to streamline deployment while retaining near-optimal loss convergence.
 
 ---
 
@@ -119,7 +119,7 @@ expert_sparsity = total_routed_experts / activated_routed_experts  # 384 / 8 = 4
 print(f"Expert Count Sparsity: {expert_sparsity:.1f}x (384 / 8)")
 
 # 2. Parameter Ratio Accounting
-# Total params = 1000B (1T), Activated params = 32B
+# Abstract rounded params: 1000B (1T), 32B activated -> ratio 31.25x (Table 2 exact: 1.04T / 32.6B -> ratio 31.9x)
 P_total = 1000.0  # Billion
 P_act = 32.0      # Billion
 
