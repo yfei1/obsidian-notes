@@ -28,7 +28,7 @@ In standard Transformer implementations (PyTorch defaults):
 Maximal Update Parametrization ($\mu P$, Yang et al., 2022) resolves hyperparameter drift by enforcing that every layer's forward activations and backward update disturbances remain $\Theta(1)$ invariants in the infinite-width limit ($d_m \to \infty$).
 
 ### Theoretical Scaling Rules (Yang & Hu Table 3 & Table 8)
-For a Transformer parameterized relative to a base model shape with dimension $d_{base}$:
+Defining all scaling multipliers relative to a base model shape with dimension $d_{base}$ preserves **parametrization backward compatibility** (Yang & Hu, 2022): when evaluated at the base shape ($d_m = d_{base}$), all multipliers collapse to 1, ensuring that the codebase behaves identically to standard parameterization and loss trajectories before and after the switch to $\mu P$ match exactly. For an expanded Transformer with width $d_m$:
 1. **Hidden Matrix Adam Learning Rates**:
    $$\eta_{\text{matrix}} = \frac{\eta_{\text{base}}}{d_m / d_{base}}$$
 2. **Output Projection (LM Head)**: Rescales both the output multiplier and its Adam learning rate by $1 / (d_m / d_{base})$.
