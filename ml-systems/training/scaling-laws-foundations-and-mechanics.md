@@ -90,7 +90,7 @@ Kaplan et al. concluded that compute should scale primarily into parameters ($N 
   Where $G = \left(\frac{\alpha A}{\beta B}\right)^{\frac{1}{\alpha + \beta}}$, $a = \frac{\beta}{\alpha+\beta} = \frac{0.28}{0.62} \approx \mathbf{0.4516 \to 0.46}$, and $b = \frac{\alpha}{\alpha+\beta} = \frac{0.34}{0.62} \approx \mathbf{0.5484 \to 0.54}$ (~0.008 delta from 2-decimal rounding).
 - **Cross-Dataset Robustness (Table A2)**: Equal scaling holds across datasets: C4 ($a=0.50, b=0.50$) and GitHub code ($a=0.53, b=0.47$).
 - **The $D \approx 20N$ Anchor (DERIVED)**: Chinchilla trains a 70B parameter model ($7 \times 10^{10}$) on 1.4T tokens ($1.4 \times 10^{12}$), yielding $\frac{1.4 \times 10^{12}}{7 \times 10^{10}} = \mathbf{20.0\text{ tokens/parameter}}$.
-- **Inference Over-Training**: Production systems (LLaMA-3 8B on 15T tokens, $1875\text{ tokens/param}$, $94\times$ past Chinchilla) deliberately overtrain to minimize lifetime serving compute: $C_{\text{lifetime}} \approx 6ND_{\text{train}} + 2N \cdot T_{\text{served}}$.
+- **Inference Over-Training**: Production systems (LLaMA-3 8B on >15T tokens, $\sim 1875\text{ tokens/param}$, $\sim 94\times$ past Chinchilla) deliberately overtrain to minimize lifetime serving compute: $C_{\text{lifetime}} \approx 6ND_{\text{train}} + 2N \cdot T_{\text{served}}$.
 
 ---
 
