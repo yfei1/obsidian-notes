@@ -297,3 +297,4 @@ When scaling MoE across massive clusters, architectures compose across four para
 - [[ml-systems/vllm/fused-moe-vllm-implementation]] — vLLM Triton fused MoE kernel dispatch and memory optimization
 - [[ml-systems/distributed/communication-computation-overlap]] — multi-stream CUDA overlap for All-to-All and local GEMM
 - [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting (logical payload $S$ vs wire volume $V_{\text{wire}}$)
+- [[ml-systems/training/moe-and-sparsity-scaling-laws]] — Sparsity scaling laws (Kimi K2), activated parameter scaling (Hunyuan-Large), and attention head doubling

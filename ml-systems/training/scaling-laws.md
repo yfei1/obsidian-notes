@@ -300,3 +300,4 @@ The correct reading of `D ≈ 20N`: it is the answer to "what is the best model 
 - [[ml-systems/training/scaling-laws-foundations-and-mechanics]] — Statistical foundations (PAC bounds, non-parametric density estimation), joint scaling formulations, data mixture dynamics, and training system mechanics
 - [[ml-systems/training/tensor-programs-and-mup]] — Practical muP hyperparameter transfer and token-optimal batch size scaling
 - [[ml-systems/training/learning-rate-schedules-and-wsd]] — Cosine scheduler limitations, Warmup-Stable-Decay (WSD), and continuous overtraining dynamics
+- [[ml-systems/training/moe-and-sparsity-scaling-laws]] — Sparsity scaling laws (Kimi K2), activated parameter scaling (Hunyuan-Large), and attention head doubling
