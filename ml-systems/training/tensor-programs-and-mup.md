@@ -167,7 +167,7 @@ Extrapolating these laws over 4 orders of magnitude ($10^{20} \to 10^{24}$ FLOPs
 - **DeepSeek 67B**: Figure 3 fitted star at $19.7\text{M}$ tokens; Table 2 actual deployment set to 4608 sequences $\times 4096 = 18.87\text{M}$ tokens, $\text{LR} = 3.2 \times 10^{-4}$.
 
 ### The Critical Trade-off: $\mu P$ Decoupling vs. Empirical Basin Tolerance
-1. **The Questionable LR Fit**: CS336 slide notes *"Learning rate fit looks a bit questionable.."*. The empirical learning rate points in Figure 3(b) exhibit substantial scatter and horizontal banding across discrete grid search steps. In coupled 2D $(BS, \text{LR})$ optimization, learning rate and batch size form an extended diagonal ridge rather than a sharp peak.
+1. **The Questionable LR Fit**: CS336 slide notes *"Learning rate fit looks a bit questionable.."*. The empirical learning rate points in Figure 3(b) exhibit substantial scatter and horizontal banding across discrete grid search steps. Because 2D grid searches evaluate discrete learning rate tiers, the near-optimal points (within 0.25% of minimum error) scatter across discrete horizontal bands rather than collapsing to a single sharp trajectory.
 2. **The Wide Parameter Basin (Figure 2)**: Despite extrapolation noise, DeepSeek successfully converged because the loss surface possesses a broad flat basin: generalization error remains within 0.25% across a wide range of batch sizes and learning rates, providing substantial robustness against modest hyperparameter estimation errors.
 
 ### Three-Way Comparative Synthesis
