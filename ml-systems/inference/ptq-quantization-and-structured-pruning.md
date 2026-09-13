@@ -179,7 +179,7 @@ GPTQ weights: [3. 5.], Output: [8.  5.5], Squared Error: 0.05
 ## Interview Talking Points
 
 1. **How does GPTQ compensate for quantization error without backpropagation?**
-   GPTQ computes the local input activation covariance $H = 2 X^T X$ for each linear layer independently. When a weight column is rounded to INT4, the rounding residual $\Delta w$ is multiplied by the inverse Hessian and subtracted from remaining unquantized weights, zeroing out output error.
+   GPTQ computes the local input activation covariance $H = 2 X^T X$ for each linear layer independently. When a weight column is rounded to INT4, the rounding residual is projected via the inverse Hessian to update remaining unquantized weights, dramatically suppressing output reconstruction error (e.g. 20x error reduction over naive RTN on calibration data).
 2. **Why does AWQ outperform naive mixed-precision quantization?**
    Mixed precision (storing 1% weights in FP16 and 99% in INT4) creates irregular memory layouts that cause thread divergence on Tensor Cores. AWQ applies an equivalent channel-wise transformation $Y = (X S^{-1})(S W)$ that scales sensitive weights to suppress rounding noise while maintaining 100% uniform INT4 execution.
 3. **What is the trade-off between structured pruning (Minitron) and post-training quantization?**
