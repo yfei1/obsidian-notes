@@ -34,7 +34,7 @@ For a Transformer parameterized relative to a base model shape with dimension $d
 2. **Output Projection (LM Head)**: Rescales both the output multiplier and its Adam learning rate by $1 / (d_m / d_{base})$.
 3. **Attention Softmax Scaling**: Replaces the standard Vaswani $1/\sqrt{d}$ attention logit scaling with $1/d$:
    $$\text{Attn}(Q, K) = \text{softmax}\left(\frac{Q K^T}{d}\right) V$$
-   *(Theoretical Justification: Yang & Hu Footnote 7 proves that during training, $Q$ and $K$ become correlated such that $q^T k \sim \Theta(d)$ by the Law of Large Numbers, causing $1/\sqrt{d}$ logits to explode and saturate softmax distributions).*
+   *(Theoretical Justification: Yang & Hu Footnote 7 provides the intuition that during training, $Q$ and $K$ become correlated so $q^T k$ actually scales like $d$ due to the Law of Large Numbers, in contrast to the Central Limit Theorem applying at initialization; see their Section J.2.1 for in-depth discussion).*
 4. **Vector Parameters (LayerNorm, Biases)**: Maintain $\Theta(1)$ constant learning rates and initializations.
 
 ---
