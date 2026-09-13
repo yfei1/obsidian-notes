@@ -226,3 +226,4 @@ L=40 | Unscaled Var: 40.07 (grows as L) | Scaled Var:  1.96 (constant)
 - [[ml-systems/training/scaling-laws-foundations-and-mechanics]] — Statistical sample complexity, empirical power laws, and classical critical batch size foundations
 - [[ml-systems/foundations/transformer-model-internals]] — Attention projection and feed-forward parameter accounting
 - [[ml-systems/training/cross-entropy-and-bpb]] — Evaluation loss definitions and normalization mechanics
+- [[ml-systems/training/learning-rate-schedules-and-wsd]] — Cosine scheduler limitations, Warmup-Stable-Decay (WSD), and continuous overtraining dynamics

@@ -299,3 +299,4 @@ The correct reading of `D ≈ 20N`: it is the answer to "what is the best model 
 - [[ml-systems/foundations/attention-as-soft-addressing]] — step-by-step 2MNK derivation of 4L^2d forward attention FLOPs matching 12LS^2d training formulas
 - [[ml-systems/training/scaling-laws-foundations-and-mechanics]] — Statistical foundations (PAC bounds, non-parametric density estimation), joint scaling formulations, data mixture dynamics, and training system mechanics
 - [[ml-systems/training/tensor-programs-and-mup]] — Practical muP hyperparameter transfer and token-optimal batch size scaling
+- [[ml-systems/training/learning-rate-schedules-and-wsd]] — Cosine scheduler limitations, Warmup-Stable-Decay (WSD), and continuous overtraining dynamics

@@ -170,3 +170,4 @@ In single-pass pretraining over trillion-token datasets:
 - [[ml-systems/distributed/distributed-communication-matrix]] — Full operator-level communication accounting ledger
 - [[ml-systems/distributed/communication-computation-overlap]] — Compute-communication overlap ratios and the TPU Book model
 - [[ml-systems/training/tensor-programs-and-mup]] — Maximal Update Parametrization (muP), MiniCPM 5-point parameterization recipe, and token-optimal batch size scaling
+- [[ml-systems/training/learning-rate-schedules-and-wsd]] — Cosine scheduler limitations, Warmup-Stable-Decay (WSD), and continuous overtraining dynamics
