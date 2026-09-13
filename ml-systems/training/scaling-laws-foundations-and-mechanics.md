@@ -2,7 +2,7 @@
 
 #ml-systems #training #theory #interview-prep
 
-**Scope**: Comprehensive foundations and system mechanics of language model scaling: classical statistical sample complexity bounds (PAC learning and non-parametric density estimation), the geometry of empirical power laws on log-log axes, the Chinchilla compute-optimal allocation framework and historical corrections to Kaplan, data mixture dynamics and multi-epoch bounds, optimizer and architecture offset effects, and training dynamics (critical batch size $B_{\text{crit}}$, $\mu P$ hyperparameter transfer, and evaluation loss semantics).
+**Scope**: Theoretical foundations and systems mechanics of language model scaling: classical statistical sample complexity bounds (PAC learning and non-parametric density estimation), the geometry of empirical power laws on log-log axes, the Chinchilla compute-optimal allocation framework and historical corrections to Kaplan, data mixture dynamics and multi-epoch bounds, optimizer and architecture offset effects, and training dynamics (critical batch size $B_{\text{crit}}$, $\mu P$ hyperparameter transfer, and evaluation loss semantics).
 
 **Prerequisites**: [[ml-systems/training/scaling-laws]] (the $C \approx 6ND$ compute identity and IsoFLOP curves), [[ml-systems/training/cross-entropy-and-bpb]] (negative log-likelihood loss and token-to-byte normalizations), and [[ml-systems/foundations/transformer-model-internals]] (transformer parameter accounting).
 
@@ -23,7 +23,7 @@ $$\epsilon(\hat{h}) \le \min_{h \in \mathcal{H}} \epsilon(h) + 2\sqrt{\frac{1}{m
 
 1. **Approximation Error ($\min_{h \in \mathcal{H}} \epsilon(h)$)**: The lowest achievable error within the chosen hypothesis class $\mathcal{H}$.
 2. **Estimation Error ($2\sqrt{\frac{1}{m}\log\frac{2k}{\delta}}$)**: Derived from Hoeffding's inequality and the union bound, scaling asymptotically at fixed $\delta$ as $O(m^{-1/2})$.
-3. **Failure on Neural Networks**: Continuous floating-point parameters yield an infinite hypothesis space ($k \to \infty$). Even under FP32 machine discretization where $P$ parameters yield $k = 2^{32P}$ states ($\log k = 32P \ln 2$), evaluating a 7B model ($P=7\times 10^9$) on $10^{12}$ tokens yields an estimation bound of $0.394$. The bound is finite but vacuous: it depends solely on raw parameter and token counts, remaining completely blind to data distribution geometry and SGD inductive bias.
+3. **Failure on Neural Networks**: Continuous floating-point parameters yield an infinite hypothesis space ($k \to \infty$). Even under FP32 machine discretization where $P$ parameters yield $k = 2^{32P}$ states ($\log k = 32P \ln 2$), evaluating a 7B model ($P=7\times 10^9$) on $10^{12}$ tokens yields $\sqrt{\frac{\log k}{m}} \approx 0.394$, giving a full estimation bound of $2\sqrt{\frac{\log(2k/\delta)}{m}} \approx \mathbf{0.788}$ (invariant to $\delta \in [0.01, 0.5]$). The bound is finite but vacuous ($>0.5$, looser than random guessing): it depends solely on raw parameter and token counts, remaining completely blind to data distribution geometry and SGD inductive bias.
 
 ### Non-Parametric Density Estimation Rate (Theorem 1.5)
 In generative density estimation, approximating a target distribution $p$ belonging to a $\beta$-order Hölder smoothness class $\mathcal{P}(\beta, L)$ using $n$ samples bounds the worst-case pointwise Mean Squared Error (MSE) at $x_0$ by:
