@@ -123,7 +123,7 @@ $$\mathbb{E}[N] = 1 + \sum_{i=1}^\gamma \alpha^i = \mathbf{\frac{1 - \alpha^{\ga
   $$\mathbb{E}[N] = \frac{1 - 0.75^4}{1 - 0.75} = \frac{1 - 0.3164}{0.25} = \mathbf{2.734\text{ tokens / step}}$$
 
 ### 2. Wall-Clock Speedup Factor (Theorem 3.8)
-To evaluate wall-clock improvement, Leviathan et al. introduce cost coefficient $c = \frac{T(M_q)}{T(M_p)}$ (Definition 3.7: ratio of single-run time of draft model $M_q$ to target model $M_p$, typically $c < 0.05$):
+To evaluate wall-clock improvement, Leviathan et al. introduce cost coefficient $c = \frac{T(M_q)}{T(M_p)}$ (Definition 3.7: ratio of single-run time of draft model $M_q$ to target model $M_p$, in Leviathan et al. experiments $c$ was always less than 0.05):
 
 $$\text{Speedup} = \mathbf{\frac{1 - \alpha^{\gamma+1}}{(1 - \alpha)(\gamma \cdot c + 1)}} = \frac{\mathbb{E}[N]}{\gamma \cdot c + 1}$$
 

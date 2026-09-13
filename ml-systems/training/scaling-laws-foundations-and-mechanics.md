@@ -142,7 +142,7 @@ Under the idealized assumption of a well-conditioned optimization landscape ($\m
 3. **Systems Implementation**: Clusters fix parallel hardware configurations (TP/PP/DP) and increase global batch size dynamically by ramping up Gradient Accumulation Steps (GAS).
 
 ### Maximal Update Parametrization ($\mu P$, Yang & Hu, arXiv:2203.03466)
-Under standard PyTorch parameterization, the optimal learning rate shifts toward zero as network width $d$ expands. $\mu P$ rescales matrix learning rates by $1/d$ and output projections by $1/d$, enabling zero-shot transfer of optimal learning rates from 128-width toy proxies to 100B+ models without grid searches.
+Under standard PyTorch parameterization (SP), the optimal learning rate shifts toward zero as network width $d$ expands. Under Adam optimization, $\mu P$ rescales hidden matrix learning rates relative to a base model shape by $\eta / (\text{fan\_in} / \text{base\_fan\_in})$ and output projections by $1 / (\text{fan\_in} / \text{base\_fan\_in})$ while holding vector learning rates constant, achieving backward compatibility with the base shape and enabling zero-shot transfer of optimal hyperparameters (e.g. tuning on a 40M proxy with e.g. width=124 to outperform published baselines of 6.7B GPT-3 with tuning cost only 7% of pretraining) without sweeping large models.
 
 ### Why Pretraining Pipelines Omit Validation Loss
 In single-pass pretraining over trillion-token datasets:
