@@ -151,7 +151,37 @@ Production recipes resolve this tension via **Staged Batch Ramping**: starting a
 
 ---
 
-## 6. Numerical Verification: Variance Invariant Simulation
+## 6. The Non-$\mu P$ Empirical Strategy: DeepSeek LLM (arXiv:2401.02954)
+
+An alternative industrial scaling philosophy bypasses $\mu P$ entirely, opting to retain standard PyTorch parameterization (SP) and directly estimate optimal hyperparameters via empirical power laws fit to small-scale grid searches.
+
+### Compute-Conditioned Formulation (arXiv:2401.02954 Section 3 Eq. 1)
+DeepSeek conducted 2D grid searches over batch size and learning rate across compute budgets ranging from $10^{17}$ to $2 \times 10^{19}$ FLOPs. Fitting power-law trajectories to near-optimal models (generalization error within 0.25% of the minimum) yielded:
+
+$$\eta_{\text{opt}} = 0.3118 \cdot C^{-0.1250}, \quad B_{\text{opt}} = 0.2920 \cdot C^{0.3271}$$
+
+*(where $C$ is non-embedding training FLOPs, $\eta_{\text{opt}}$ is optimal learning rate, and $B_{\text{opt}}$ is optimal batch size in tokens).*
+
+Extrapolating these laws over 4 orders of magnitude ($10^{20} \to 10^{24}$ FLOPs) determined production hyperparameters:
+- **DeepSeek 7B**: Figure 3 fitted star at $9.2\text{M}$ tokens; Section 2 Table 2 actual deployment set to 2304 sequences $\times 4096 = 9.44\text{M}$ tokens, $\text{LR} = 4.2 \times 10^{-4}$.
+- **DeepSeek 67B**: Figure 3 fitted star at $19.7\text{M}$ tokens; Table 2 actual deployment set to 4608 sequences $\times 4096 = 18.87\text{M}$ tokens, $\text{LR} = 3.2 \times 10^{-4}$.
+
+### The Critical Trade-off: $\mu P$ Decoupling vs. Empirical Basin Tolerance
+1. **The Questionable LR Fit**: CS336 slide notes *"Learning rate fit looks a bit questionable.."*. The empirical learning rate points in Figure 3(b) exhibit substantial scatter and horizontal banding across discrete grid search steps. In coupled 2D $(BS, \text{LR})$ optimization, learning rate and batch size form an extended diagonal ridge rather than a sharp peak.
+2. **The Wide Parameter Basin (Figure 2)**: Despite extrapolation noise, DeepSeek successfully converged because the loss surface possesses a broad flat basin: generalization error remains within 0.25% across a wide range of batch sizes and learning rates, providing substantial robustness against modest hyperparameter estimation errors.
+
+### Three-Way Comparative Synthesis
+
+| Dimension | OpenAI Kaplan (arXiv:2001.08361) | MiniCPM (arXiv:2404.06395) | DeepSeek LLM (arXiv:2401.02954) |
+| :--- | :--- | :--- | :--- |
+| **Independent Variable** | Target Loss $L$ | Target Loss $L$ | **Training FLOPs $C$** |
+| **Learning Rate Policy** | Drift leftward ($N \propto C^{0.73}$) | **$\mu P$ Fixed ($\text{LR}^*_{\text{base}} \approx 0.01$)** | Empirical Extrapolation ($\eta \propto C^{-0.125}$) |
+| **Batch Size Law** | $B_{\text{crit}} \approx \frac{2 \times 10^8}{L^{4.76}}$ | $bs = \frac{1.21 \times 10^9}{L^{6.24}}$ | $B_{\text{opt}} = 0.2920 \cdot C^{0.3271}$ |
+| **Hardware Premise** | Unlimited GPUs (Step Minimization) | Fixed Cluster (Token Quantity Minimization) | Fixed Cluster (Pre-lookup Table by $C$) |
+
+---
+
+## 7. Numerical Verification: Variance Invariant Simulation
 
 ```python
 import numpy as np
