@@ -122,7 +122,7 @@ In empirical scaling studies comparing optimizers (e.g. SGD vs. Adam vs. Muon):
 - Advanced optimizers (e.g. Muon utilizing Newton-Schulz matrix orthogonalization) achieve given loss thresholds with fewer training steps, but cannot alter the fundamental task complexity exponent determined by data distribution geometry.
 
 ### Matrix-Valued Momentum Orthogonalization: The Muon Optimizer (Algorithm 2)
-For matrix-valued parameters, Muon (Jordan et al., 2024; CS336 slide "A few slides on muon..") replaces coordinate-wise second moments with approximate matrix polar decomposition:
+For matrix-valued parameters (2D weights), Muon (Jordan, 2024; Liu et al., arXiv:2502.16982; CS336 slide "A few slides on muon..") replaces coordinate-wise second moments with approximate matrix polar decomposition:
 
 ```text
 Algorithm 2 Muon (Verbatim Pseudocode)
@@ -138,9 +138,9 @@ Require: Learning rate \eta, momentum \mu
 ```
 
 #### Core Mechanisms & Systems Overheads
-1. **Polar Decomposition Invariant**: If momentum matrix $B_t$ has singular value decomposition $B_t = U S V^T$, Newton-Schulz approximately maps $B_t \to U V^T$ (replacing singular values $S$ with identity). This equalizes update step magnitudes across all orthogonal spectral directions without computing expensive $O(d^3)$ SVDs.
-2. **Newton-Schulz 5th-Order Iteration**: Approximates $U V^T$ using exclusively matrix multiplications (GEMMs) executed directly on Tensor Cores within 5 polynomial iterations (slide notes spelling *NewtonSchultz* [sic]).
-3. **Negligible Wall-Clock Overhead**: On an 8xH100 NanoGPT speedrun, Muon executes at **142 ms/step** vs. Adam at **139 ms/step** (MEASURED $142/139 = 1.022$, only 2.2% step overhead), while DistributedShampoo requires 154–179 ms/step and SOAP requires 301 ms/step (*SOAP is under active development. Future versions will significantly improve the wallclock overhead). While Adam flattens near loss ~3.48 at ~9.5 minutes, Muon converges to loss ~3.28 in ~13.5 minutes, reaching target loss faster than DistributedShampoo (~14.5–16 min) and in roughly half the wall-clock time of SOAP* (~25 min).
+1. **Polar Decomposition Equivalence**: Slide text states "NewtonSchultz (approximately) orthogonalizes the matrix $B_t = U S V^T \to U V^T$"; in standard mathematical terms, $U V^T$ represents the orthogonal factor of the polar decomposition of $B_t$, replacing singular values $S$ with identity to equalize update energy across all spectral directions.
+2. **Newton-Schulz 5th-Order Iteration**: `NewtonSchulz5` denotes a 5th-order (quintic) polynomial iteration (rather than 5 iterative steps; spelling *NewtonSchultz* [sic] in slide text). Liu et al. (arXiv:2502.16982) establish that this formulation maps directly to pure matrix multiplications (GEMMs) executed efficiently on GPU Tensor Cores.
+3. **Wall-Clock Benchmarking (NanoGPT Speedrun on 8xH100)**: Muon achieves **142 ms/step** vs. Adam at **139 ms/step** (MEASURED $142/139 = 1.022$, only 2.2% step overhead), while DistributedShampoo requires 154–179 ms/step and SOAP requires 301 ms/step (*SOAP is under active development. Future versions will significantly improve the wallclock overhead). On the unlabelled wall-clock axis, Muon reaches loss $\approx 3.28$ at $t \approx 12.14$, outperforming DistributedShampoo at $t \approx 13.14$ ($U=32$, $1.08\times$ Muon time) and $t \approx 15.26$ ($U=10$, $1.26\times$ Muon time), and halving wall-clock time relative to SOAP* at $t \approx 25.61$ ($2.11\times$ Muon time), while Adam's visible curve ends near loss $\approx 3.484$ at $t \approx 8.71$ before overlapping with DistributedShampoo.
 4. **Architectural Composition**: In production MoE training (e.g. Kimi K2, [[ml-systems/training/moe-and-sparsity-scaling-laws]]), Muon is deployed via **MuonClip** (pairing Muon with a QK-clip technique to eliminate attention training instability).
 
 ### Optimizer Scaling Laws & Hyperparameter Sensitivity (Wen et al., Stanford 2025, arXiv:2509.02046)
