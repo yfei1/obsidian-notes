@@ -38,9 +38,9 @@ Defining all scaling multipliers relative to a base model shape with dimension $
 4. **Vector Parameters (LayerNorm, Biases)**: Maintain $\Theta(1)$ constant learning rates and initializations.
 
 ### The Spectral Condition Framework (Yang, Simon, & Bernstein, arXiv:2310.17813)
-To make $\mu P$ accessible (noted on CS336 slide as "a very accessible 'muP for babies' paper"), Yang, Simon, and Bernstein (2023) unified feature learning under a single spectral principle: *"we show that $\mu P$ is equivalent to scaling the spectral norm of any weight matrix or update like $\sqrt{\text{fan-out}/\text{fan-in}}$"*. This unifies the two core width-scaling assertions across layer width $n_l$ (Screenshot 52):
+To make $\mu P$ accessible (noted on CS336 slide as "a very accessible 'muP for babies' paper"), Yang, Simon, and Bernstein (2023) unified feature learning under a single spectral principle: *"we show that $\mu P$ is equivalent to scaling the spectral norm of any weight matrix or update like $\sqrt{\text{fan-out}/\text{fan-in}}$"* (Section 1). Section 3.4 proves that 1 is the unique maximal scaling: exceeding 1 causes blow-up as width increases. This framework grounds the slide's two core width-scaling assertions (Screenshot 52):
 - **Assertion A1 (Stable Initialization)**: Individual activations at initialization remain $\Theta(1)$, which implies vector Euclidean norm scales as $\|h_l\|_2 = \Theta(\sqrt{n_l})$.
-- **Assertion A2 (Non-Vanishing Feature Updates)**: After one gradient step, the coordinate change in activations $\Delta h_l$ remains $\Theta(1)$, requiring $\|\Delta h_l\|_2 = \Theta(\sqrt{n_l})$ (preventing representation explosion, whereas naive scalings like Neural Tangent Parametrization lose feature learning at large width, §1).
+- **Assertion A2 (Non-Vanishing Feature Updates)**: After one gradient step, the coordinate change in activations $\Delta h_l$ remains $\Theta(1)$, requiring $\|\Delta h_l\|_2 = \Theta(\sqrt{n_l})$ (preventing representation explosion, whereas naive rules like Neural Tangent Parametrization lose feature learning at large width, §1 & §5.3).
 
 #### Step 1: Deriving A1 Initialization via Matrix Concentration (Screenshot 53)
 For a deep linear network $h_l = W_l h_{l-1}$ with $W_l \sim \mathcal{N}(0, \sigma^2 I_{n_l \times n_{l-1}})$:
@@ -58,14 +58,14 @@ Under standard SGD, the rank-one loss-activation outer product update is $\Delta
    $$\|\Delta W_l\|_* = \Theta\left(\frac{\sqrt{n_l}}{\sqrt{n_{l-1}}}\right)$$
 2. Enforcing that the single-step loss improvement scales as $\Delta \ell = \mathcal{O}(1)$ gives:
    $$\Delta \ell \approx \Theta(\langle \Delta W_l, \nabla_{W_l} \ell \rangle) = \Theta(\|\Delta W_l\|_* \|\nabla_{W_l} \ell\|_*) = \Theta(1) \implies \|\nabla_{W_l} \ell\|_* = \Theta\left(\frac{\sqrt{n_{l-1}}}{\sqrt{n_l}}\right)$$
-   *(Note: $\Theta(\|\Delta W_l\|_F \|\nabla_{W_l} \ell\|_F) = \Theta(\|\Delta W_l\|_* \|\nabla_{W_l} \ell\|_*)$ is an asymptotic scaling simplification on the slide; Yang et al. show controlling spectral norm provides superior numerical stability over heuristic Frobenius norm strategies).*
+   *(Note: $\Theta(\|\Delta W_l\|_F \|\nabla_{W_l} \ell\|_F) = \Theta(\|\Delta W_l\|_* \|\nabla_{W_l} \ell\|_*)$ is an asymptotic scaling simplification on the slide; Section 5.4 demonstrates that controlling spectral norm provides superior numerical properties over heuristic Frobenius-norm normalization).*
 3. Substituting the rank-one update $\|\Delta W_l\|_* = \eta_l \|\nabla_{W_l} \ell\|_*$ yields the exact SGD learning rate scaling:
-   $$\eta_l = \mathbf{\Theta\left(\frac{n_l}{n_{l-1}}\right)} \quad (\text{for SGD; under Adam coordinate normalization, this scales as } \Theta\left(\frac{1}{n_{l-1}}\right))$$
+   $$\eta_l = \mathbf{\Theta\left(\frac{n_l}{n_{l-1}}\right)} \quad (\text{for SGD; under Adam coordinate normalization, Section 3.3 derives } \Theta\left(\frac{1}{n_{l-1}}\right))$$
 
 #### Contrast with Standard Parametrization (SP, Screenshot 56 & arXiv:2310.17813 §5.2)
 - **SP Configuration**: Sets initialization $\sigma = \frac{1}{\sqrt{n_{l-1}}}$ and global learning rate $\eta = \Theta(1)$ regardless of width.
 - **Critical Failures**:
-  1. *Adam Learning Rate Collapse*: While SP uses a fixed $\Theta(1)$ learning rate, Adam under $\mu P$ requires scaling hidden weights inversely with fan-in ($\eta \propto 1/n_{l-1}$).
+  1. *Adam Learning Rate Collapse*: While SP uses a fixed $\Theta(1)$ learning rate, Adam under $\mu P$ requires scaling hidden weights inversely with fan-in ($\eta \propto 1/n_{l-1}$, Section 3.3).
   2. *Fan-out Asymmetry*: Whenever fan-out is smaller than fan-in ($n_l < n_{l-1}$), SP's $1/\sqrt{n_{l-1}}$ initialization exceeds the spectral bound $\frac{\sqrt{n_l}}{n_{l-1}}$ (§5.2: *"SP initialization exceeds 1 in any layer with fan-out smaller than fan-in"*), violating Assertion A1.
 
 ---
