@@ -121,9 +121,41 @@ In empirical scaling studies comparing optimizers (e.g. SGD vs. Adam vs. Muon):
 - Different optimizers yield near-parallel scaling trajectories in log-log space; algorithmic improvements manifest as a constant efficiency multiplier shifting the vertical offset $\ln C$.
 - Advanced optimizers (e.g. Muon utilizing Newton-Schulz matrix orthogonalization) achieve given loss thresholds with fewer training steps, but cannot alter the fundamental task complexity exponent determined by data distribution geometry.
 
+### Matrix-Valued Momentum Orthogonalization: The Muon Optimizer (Algorithm 2)
+For matrix-valued parameters, Muon (Jordan et al., 2024; CS336 slide "A few slides on muon..") replaces coordinate-wise second moments with approximate matrix polar decomposition:
+
+```text
+Algorithm 2 Muon (Verbatim Pseudocode)
+Require: Learning rate \eta, momentum \mu
+1: Initialize B_0 <- 0
+2: for t = 1, ... do
+3:    Compute gradient G_t <- \nabla_\theta \mathcal{L}_t(\theta_{t-1})
+4:    B_t <- \mu B_{t-1} + G_t                  # Heavy-ball momentum (no 1-\mu factor, no EMA bias correction)
+5:    O_t <- NewtonSchulz5(B_t)                 # Orthogonalize momentum buffer: B_t = U S V^T -> U V^T
+6:    Update parameters \theta_t <- \theta_{t-1} - \eta O_t
+7: end for
+8: return \theta_t
+```
+
+#### Core Mechanisms & Systems Overheads
+1. **Polar Decomposition Invariant**: If momentum matrix $B_t$ has singular value decomposition $B_t = U S V^T$, Newton-Schulz approximately maps $B_t \to U V^T$ (replacing singular values $S$ with identity). This equalizes update step magnitudes across all orthogonal spectral directions without computing expensive $O(d^3)$ SVDs.
+2. **Newton-Schulz 5th-Order Iteration**: Approximates $U V^T$ using exclusively matrix multiplications (GEMMs) executed directly on Tensor Cores within 5 polynomial iterations (slide notes spelling *NewtonSchultz* [sic]).
+3. **Negligible Wall-Clock Overhead**: On an 8xH100 NanoGPT speedrun, Muon executes at **142 ms/step** vs. Adam at **139 ms/step** (MEASURED $142/139 = 1.022$, only 2.2% step overhead), while DistributedShampoo requires 154–179 ms/step and SOAP requires 301 ms/step (*SOAP is under active development. Future versions will significantly improve the wallclock overhead). Because Muon reduces optimization steps while adding only ~2% per-step overhead, it achieves target validation loss in roughly half the wall-clock time.
+4. **Architectural Composition**: In production MoE training (e.g. Kimi K2, [[ml-systems/training/moe-and-sparsity-scaling-laws]]), Muon is deployed via **MuonClip** (pairing Muon with a QK-clip technique to eliminate attention training instability).
+
+### Optimizer Scaling Laws & Hyperparameter Sensitivity (Wen et al., Stanford 2025, arXiv:2509.02046)
+Systematic benchmarking of pretraining optimizers across compute scales and Chinchilla ratios reveals three critical scaling behaviors:
+1. **Tuning Sensitivity vs. Algorithmic Novelty**: On 130M models, simply tuning AdamW's learning rate (lr=8e-3 vs default 6e-4) produces a $2\times$ training step reduction (from 10,000 to 5,000 steps) to reach loss ~3.59 on C4/EN. Optimizers demand radically distinct hyperparameter settings: optimal weight decay on C4/EN is $\sim 0.1$ for AdamW (achieving loss 3.322), but $\sim 0.6$ for Lion (achieving loss 3.330).
+2. **Scale-Dependent Diminishing Speedup**: Across model sizes, the speedup of alternative optimizers over a well-tuned AdamW baseline decays as model scale expands: at an $8\times$ Chinchilla ratio, Muon and Soap achieve $\sim 1.4\times$ speedup over AdamW at 130M, but this advantage diminishes to $\sim 1.1\times$ at 1.2B.
+3. **Matrix-Based vs. Scalar-Based Optimizers**: Across Chinchilla ratios ($1\times$ to $8\times$ tokens/param, where $1\times = 20$ tokens/param derived from Chinchilla 1.4T/70B), matrix-based optimizers (Muon, Soap, Kron) consistently outperform scalar-based optimizers (AdamW, Mars, NAdamW) on 520M models.
+4. *Evaluation Invariant*: *"Always check scaling with respect to compute and Chinchilla ratios. These are often major confounders to performance!"*
+
+### Attention Architecture Invariance (MiniMax-01, 2025 Figure 6)
+Evaluating pretraining compute-optimal loss envelopes across 70M to 7B parameters using Chinchilla Approach 1 (training curve envelopes), MiniMax-01 demonstrated that Softmax Attention, Lightning Attention (linear attention), and Hybrid-Lightning Attention collapse onto virtually identical compute-loss envelopes across PFLOP/s-days. While linear attention mechanisms provide major inference wall-clock and $O(1)$ KV-state memory advantages, pretraining FLOP efficiency to reach a target loss remains architecture-invariant.
+
 ### Architectural Invariance (Tay et al., arXiv:2207.10551)
 Evaluating inductive biases across compute budgets demonstrates that most architectural modifications (ALBERT, Dynamic Convolutions, Evolved Transformer) match or trail standard Transformer baselines at scale.
-- **Notable Exception**: Sparse Mixture-of-Experts (Switch Transformer) achieves superior scaling by decoupling active FLOPs from total parameters.
+- **Notable Exception**: Sparse Mixture-of-Experts (Switch Transformer, Kimi K2, Hunyuan-Large) achieves superior scaling by decoupling active FLOPs from total parameters (see [[ml-systems/training/moe-and-sparsity-scaling-laws]]).
 - *Lecture Principle*: If an architectural change does not improve scaling law trajectories, it has limited utility in large-scale pretraining.
 
 ### The Upstream vs. Downstream Inversion (Tay et al., arXiv:2109.10686)

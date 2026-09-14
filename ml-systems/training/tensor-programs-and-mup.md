@@ -170,14 +170,23 @@ Extrapolating these laws over 4 orders of magnitude ($10^{20} \to 10^{24}$ FLOPs
 1. **The Questionable LR Fit**: CS336 slide notes *"Learning rate fit looks a bit questionable.."*. The empirical learning rate points in Figure 3(b) exhibit substantial scatter and horizontal banding across discrete grid search steps. Because 2D grid searches evaluate discrete learning rate tiers, the near-optimal points (within 0.25% of minimum error) scatter across discrete horizontal bands rather than collapsing to a single sharp trajectory.
 2. **The Wide Parameter Basin (Figure 2 & 3)**: Despite extrapolation noise, DeepSeek successfully converged because the loss surface possesses a broad flat basin: Figure 2 demonstrates qualitatively that generalization error remains stable across a wide parameter space of batch sizes and learning rates, while Figure 3 defines near-optimal models as those exceeding the minimum by no more than 0.25%, providing substantial empirical tolerance against estimation errors.
 
-### Three-Way Comparative Synthesis
+### StepFun: Orthogonal Disentanglement via $(N, D)$ Joint Scaling (Step Law, 2024)
+StepFun evaluated multi-dimensional grid searches over $(BS, \text{LR})$, proving that cross-entropy loss forms an orthogonally **convex bowl surface** (CS336 slide "Observation 1: loss over batch/LR are convex"). Rather than projecting variables onto a 1D compute proxy $C$ or target loss $L$, Step Law explicitly disentangles optimal hyperparameters jointly across model parameters $N$ and dataset tokens $D$:
+1. **Batch Size Depends on Data, Not Model Size**: Across models from 59M to 1B parameters, optimal batch size collapses onto a unified trajectory:
+   $$B_{\text{opt}} = 0.58 \cdot D^{0.571}$$
+2. **Learning Rate Dual Scaling**: Optimal learning rate scales inversely with model width ($N^{-0.713}$) due to coordinate summation under SP, but scales positively with dataset volume ($D^{0.307}$) as larger token budgets permit aggressive exploration:
+   $$\eta_{\text{opt}} = 1.79 \cdot N^{-0.713} D^{0.307}$$
+Capturing both degrees of freedom dropped relative prediction error to **0.94‰**, outperforming compute-only and loss-only formulations (9.25‰–9.51‰).
 
-| Dimension | OpenAI Kaplan (arXiv:2001.08361) | MiniCPM (arXiv:2404.06395) | DeepSeek LLM (arXiv:2401.02954) |
-| :--- | :--- | :--- | :--- |
-| **Independent Variable** | Target Loss $L$ | Target Loss $L$ | **Training FLOPs $C$** |
-| **Learning Rate Policy** | Standard Parametrization (SP, re-tuned per size) | **$\mu P$ Invariant (base $\text{LR}^* \approx 0.01$)** | Empirical Extrapolation ($\eta \propto C^{-0.125}$) |
-| **Batch Size Law** | $B_{\text{crit}} \approx \frac{2 \times 10^8}{L^{4.76}}$ | $bs = \frac{1.21 \times 10^9}{L^{6.24}}$ | $B_{\text{opt}} = 0.2920 \cdot C^{0.3271}$ |
-| **Hardware Premise** | Unlimited GPUs (Step Minimization) | Fixed Cluster (Token Quantity Minimization) | Fixed Cluster (Pre-lookup Table by $C$) |
+### Four-Way Comparative Synthesis (OpenAI vs. MiniCPM vs. DeepSeek vs. StepFun)
+
+| Dimension | OpenAI Kaplan (arXiv:2001.08361) | MiniCPM (arXiv:2404.06395) | DeepSeek LLM (arXiv:2401.02954) | StepFun Step Law (2024) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Independent Variable** | Target Loss $L$ | Target Loss $L$ | Training FLOPs $C$ | **Joint $(N, D)$ Disentangled** |
+| **Learning Rate Policy** | Standard Param (SP, re-tuned) | **$\mu P$ Invariant (base $\approx 0.01$)** | Empirical ($\eta \propto C^{-0.125}$) | **$\eta_{\text{opt}} = 1.79 N^{-0.713} D^{0.307}$** |
+| **Batch Size Law** | $B_{\text{crit}} \approx \frac{2 \times 10^8}{L^{4.76}}$ | $bs = \frac{1.21 \times 10^9}{L^{6.24}}$ | $B_{\text{opt}} = 0.2920 C^{0.3271}$ | **$B_{\text{opt}} = 0.58 D^{0.571}$** |
+| **Relative Error** | 9.51‰ | - | 9.26‰ | **0.94‰ (10x lower error)** |
+| **Hardware Premise** | Unlimited GPUs (Step Minimization) | Fixed Cluster (Token Minimization) | Fixed Cluster (Pre-lookup by $C$) | Fixed Cluster (Joint Grid Scaling) |
 
 ---
 
