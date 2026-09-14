@@ -85,11 +85,11 @@ In standard Transformer architectures, RMSNorm incorporates learnable affine gai
 - *Production Remedy*: Slide notes verbatim: *"But these gains can be removed with little loss of perf.."* — modern architectures omit learnable gains (Gain-free RMSNorm), preserving hyperparameter transfer.
 
 #### 2. Exotic Sign-Based Optimizers: Lion (Screenshot 58)
-The Lion optimizer (Chen et al., Google 2023) replaces magnitude-based gradient updates with coordinate signs:
+The Lion optimizer (Chen et al., Google 2023, arXiv:2302.06675) replaces magnitude-based gradient updates with coordinate signs:
 $$\theta_t \leftarrow \theta_{t-1} - \eta_t (\text{sign}(c_t) + \lambda \theta_{t-1})$$
 Where $c_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t$ is an interpolated momentum buffer, $m_t = \beta_2 m_{t-1} + (1 - \beta_2) g_t$ is an EMA buffer, and $\lambda$ is decoupled weight decay.
 - **The Empirical Breakdown**: Under Lion, the optimal learning rate column shifts from $2^{-10}$ (width 128) to $2^{-8}$ (widths 512 and 2048). At larger learning rates ($2^{-4}, 2^{-2}$), Lion diverges violently on wide models (losses jump to 10.28–10.38).
-- **Physical Mechanism**: The non-linear $\text{sign}(\cdot)$ operation severs the link between matrix spectral norm and parameter update magnitude, disrupting continuous spectral norm conservation.
+- **Theoretical Tension (§3.3 vs. Empirical Divergence)**: While Yang, Simon, and Bernstein (§3.3) explicitly claim that entrywise operations (including SignSGD) preserve the spectral condition framework, empirical evaluations under Lion exhibit learning rate drift and divergence; the slide provides no formal reconciliation for why Lion's decoupled momentum-sign dynamics break transfer.
 
 #### 3. Strong Decoupled Weight Decay (Screenshot 59)
 Slide title notes: *"What about strong (0.1) weight decay? – this is maybe the only significant $\mu P$ failure"* (explicitly qualified with *maybe*):
