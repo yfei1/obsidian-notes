@@ -64,9 +64,38 @@ Under standard SGD, the rank-one loss-activation outer product update is $\Delta
 
 #### Contrast with Standard Parametrization (SP, Screenshot 56 & arXiv:2310.17813 §5.2)
 - **SP Configuration**: Sets initialization $\sigma = \frac{1}{\sqrt{n_{l-1}}}$ and global learning rate $\eta = \Theta(1)$ regardless of width.
-- **Critical Failures**:
-  1. *Adam Learning Rate Collapse*: While SP uses a fixed $\Theta(1)$ learning rate, Adam under $\mu P$ requires scaling hidden weights inversely with fan-in ($\eta \propto 1/n_{l-1}$, Section 3.3).
+- **Critical Failures of SP (§5.2)**:
+  1. *Output Blow-Up under Training*: Section 5.2 proves that under SP, *"network outputs can blow up if training aligns the layer inputs with the top singular subspaces (and in fact this alignment generally occurs)"*. To prevent output blow-up under Adam coordinate normalization, $\mu P$ requires scaling hidden matrix learning rates inversely with fan-in ($\eta \propto 1/n_{l-1}$, Section 3.3).
   2. *Fan-out Asymmetry*: Whenever fan-out is smaller than fan-in ($n_l < n_{l-1}$), SP's $1/\sqrt{n_{l-1}}$ initialization exceeds the spectral bound $\frac{\sqrt{n_l}}{n_{l-1}}$ (§5.2: *"SP initialization exceeds 1 in any layer with fan-out smaller than fan-in"*), violating Assertion A1.
+
+#### Disambiguation: Why $1/\text{fan\_in}$ Fails in NTP but Succeeds in $\mu P$ (§5.3 vs. §3.3)
+Neural Tangent Parametrization (NTP, parameterized as $W_\ell / \sqrt{\text{fan\_in}}$ with layer-independent learning rate, §5.3 Eq. 22) also sets step size to $\eta_\ell = \Theta(1/\text{fan\_in})$. However, its scaling behavior is polar opposite to $\mu P$:
+- **Why $1/\text{fan\_in}$ Destroys Feature Learning in NTP (under SGD)**: NTP retains SP's initialization, leaving output layer $\sigma_L$ a factor of $\sqrt{\text{fan}_{L-1}}$ larger than 1. By backpropagation linearity, middle-layer gradients scale up by $\sqrt{\text{fan}_{L-1}}$, causing NTP's $1/\text{fan}_{\ell-1}$ step size to induce weight changes $\Delta W_\ell \sim \sqrt{\text{fan}_{L-1}}/\text{fan}_{\ell-1} \to 0$ in wide networks, freezing representations and losing feature learning (§5.3).
+- **Why $1/\text{fan\_in}$ Preserves Feature Learning in $\mu P$ (under Adam)**: In $\mu P$, the $1/\text{fan\_in}$ scaling is derived specifically for Adam's entry-wise coordinate normalization (Section 3.3, where entry-wise processing preserves Frobenius norm up to a constant multiplier on iid outer-product gradients), paired with $\mu P$'s spectral initialization $\sigma = \Theta\left(\frac{1}{\sqrt{n_{l-1}}} \min\left(1, \sqrt{\frac{n_l}{n_{l-1}}}\right)\right)$, successfully maintaining $\Theta(1)$ feature updates $\Delta h_l$.
+
+### Failure Boundaries: What Breaks $\mu P$ Hyperparameter Transfer? (Screenshots 57–59)
+While $\mu P$ guarantees zero-shot learning rate transfer across widths for standard architectures, empirical investigations reveal three specific structural breakdown conditions. In evaluating transfer, the criterion is **whether the column containing the minimum loss shifts across widths**, not the raw loss magnitude.
+
+#### 1. RMSNorm Learnable Gains (Screenshot 57)
+In standard Transformer architectures, RMSNorm incorporates learnable affine gain parameters: $y = \frac{x}{\text{RMS}(x)} \odot \gamma$.
+- **The Empirical Breakdown**: While Baseline $\mu P$ (without learnable gains) exhibits perfect transfer with the minimum loss pinned to Base $\text{LR} = 2^{-6}$ across widths 128, 512, and 2048, adding RMSNorm gains breaks transfer:
+  - Vector Gains: Minimum shifts from $2^{-4}$ (width 128/512) to $2^{-8}$ (width 2048) — a $16\times$ drift.
+  - Scalar Gains: Minimum shifts from $2^{-4}$ (width 128/512) to $2^{-6}$ (width 2048).
+- **Physical Mechanism**: Although feature coordinates before and after RMSNorm are $\Theta(1)$ by design, $\Theta(1)$ learning rate scaling for 1D gains disrupts feature coordinates, harming the quality of the largest $\mu P$ models at optimal base learning rate.
+- *Production Remedy*: *"These gains can be removed with little loss of perf"* — modern architectures (e.g. Gain-free RMSNorm) omit learnable gains entirely, preserving hyperparameter transfer while eliminating parameters and gradient memory.
+
+#### 2. Exotic Sign-Based Optimizers: Lion (Screenshot 58)
+The Lion optimizer (Chen et al., Google 2023) replaces magnitude-based gradient updates with coordinate signs:
+$$\theta_t \leftarrow \theta_{t-1} - \eta_t (\text{sign}(c_t) + \lambda \theta_{t-1})$$
+Where $c_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t$ is an interpolated momentum buffer, $m_t = \beta_2 m_{t-1} + (1 - \beta_2) g_t$ is an EMA buffer, and $\lambda$ is decoupled weight decay.
+- **The Empirical Breakdown**: Under Lion, optimal learning rate shifts across widths (width 128 achieves minimum at $2^{-10}$, while widths 512 and 2048 shift to $2^{-8}$). At larger learning rates ($2^{-4}, 2^{-2}$), Lion diverges violently on large widths (losses jump to 10.28–10.38).
+- **Physical Mechanism**: The non-linear $\text{sign}(\cdot)$ operation severs the relationship between matrix spectral norm and parameter update magnitude, destroying the continuous spectral norm conservation required by $\mu P$.
+
+#### 3. Strong Decoupled Weight Decay (Screenshot 59)
+CS336 slide notes that strong ($0.1$) decoupled weight decay is *"maybe the only significant $\mu P$ failure"*:
+- **L2 Regularization vs. Decoupled Weight Decay**: In L2 regularization, penalty $+\lambda \theta$ is added directly to gradient $g_t$ (scaled by learning rate $\eta_t$ during update). In decoupled weight decay (SGDW/AdamW, Loshchilov & Hutter 2017), the penalty $-\eta_t \lambda \theta_{t-1}$ directly shrinks parameters.
+- **The Empirical Breakdown**: Under strong decoupled weight decay ($\lambda = 0.1$), the optimal learning rate drifts across widths (width 128 has minimum at $2^{-8}$, while widths 512 and 2048 shift to $2^{-6}$).
+- **Physical Mechanism**: Under $\mu P$, different layer types receive dimension-dependent learning rates (e.g. matrix layers $\eta \propto 1/n$, vectors $\eta = \Theta(1)$). Multiplying a large constant weight decay $\lambda = 0.1$ by non-uniform learning rates subjects different layers to non-isometric shrinkage, distorting spectral balance across network depth.
 
 ---
 
