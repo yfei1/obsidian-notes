@@ -37,6 +37,37 @@ Defining all scaling multipliers relative to a base model shape with dimension $
    *(Theoretical Justification: Yang & Hu Footnote 7 provides the intuition that during training, $Q$ and $K$ become correlated so $q^T k$ actually scales like $d$ due to the Law of Large Numbers, in contrast to the Central Limit Theorem applying at initialization; see their Section J.2.1 for in-depth discussion).*
 4. **Vector Parameters (LayerNorm, Biases)**: Maintain $\Theta(1)$ constant learning rates and initializations.
 
+### The Spectral Condition Framework (Yang, Simon, & Bernstein, arXiv:2310.17813)
+To make $\mu P$ accessible (noted on CS336 slide as "a very accessible 'muP for babies' paper"), Yang, Simon, and Bernstein (2023) unified feature learning under a single spectral principle: *"we show that $\mu P$ is equivalent to scaling the spectral norm of any weight matrix or update like $\sqrt{\text{fan-out}/\text{fan-in}}$"*. This unifies the two core width-scaling assertions across layer width $n_l$ (Screenshot 52):
+- **Assertion A1 (Stable Initialization)**: Individual activations at initialization remain $\Theta(1)$, which implies vector Euclidean norm scales as $\|h_l\|_2 = \Theta(\sqrt{n_l})$.
+- **Assertion A2 (Non-Vanishing Feature Updates)**: After one gradient step, the coordinate change in activations $\Delta h_l$ remains $\Theta(1)$, requiring $\|\Delta h_l\|_2 = \Theta(\sqrt{n_l})$ (preventing representation explosion, whereas naive scalings like Neural Tangent Parametrization lose feature learning at large width, §1).
+
+#### Step 1: Deriving A1 Initialization via Matrix Concentration (Screenshot 53)
+For a deep linear network $h_l = W_l h_{l-1}$ with $W_l \sim \mathcal{N}(0, \sigma^2 I_{n_l \times n_{l-1}})$:
+1. By random matrix concentration, the spectral norm (operator norm / maximum singular value $\|W_l\|_*$, not nuclear norm) converges to:
+   $$\|W_l\|_* \longrightarrow \sigma(\sqrt{n_{l-1}} + \sqrt{n_l})$$
+2. Norm transformation gives $\|h_l\|_2 \approx \|W_l\|_* \|h_{l-1}\|_2$. Assuming inductive hypothesis $\|h_{l-1}\|_2 = \Theta(\sqrt{n_{l-1}})$, achieving $\|h_l\|_2 = \Theta(\sqrt{n_l})$ requires:
+   $$\sigma = \frac{\sqrt{n_l}}{\sqrt{n_{l-1}}}(\sqrt{n_l} + \sqrt{n_{l-1}})^{-1} = \Theta\left(\frac{1}{\sqrt{n_{l-1}}} \min\left(1, \sqrt{\frac{n_l}{n_{l-1}}}\right)\right)$$
+   For square layers ($n_l = n_{l-1} = n$), this simplifies to $\sigma = \Theta(1/\sqrt{n})$, recovering standard Xavier/He initialization.
+
+#### Step 2: Deriving A2 Feature Learning Updates (Screenshot 54 & 55)
+Under standard SGD, the rank-one loss-activation outer product update is $\Delta W_l = -\eta_l \nabla_{h_l} \ell h_{l-1}^T$:
+1. Expanding the post-update activation change:
+   $$\Delta h_l = W_l \Delta h_{l-1} + \Delta W_l(h_{l-1} + \Delta h_{l-1})$$
+   *Assuming leading order terms do not cancel*, $W_l \Delta h_{l-1} = \Theta(\sqrt{n_l})$ by A1. Setting the second term $\|\Delta W_l h_{l-1}\|_2 = \|\Delta W_l\|_* \sqrt{n_{l-1}} = \Theta(\sqrt{n_l})$ dictates:
+   $$\|\Delta W_l\|_* = \Theta\left(\frac{\sqrt{n_l}}{\sqrt{n_{l-1}}}\right)$$
+2. Enforcing that the single-step loss improvement scales as $\Delta \ell = \mathcal{O}(1)$ gives:
+   $$\Delta \ell \approx \Theta(\langle \Delta W_l, \nabla_{W_l} \ell \rangle) = \Theta(\|\Delta W_l\|_* \|\nabla_{W_l} \ell\|_*) = \Theta(1) \implies \|\nabla_{W_l} \ell\|_* = \Theta\left(\frac{\sqrt{n_{l-1}}}{\sqrt{n_l}}\right)$$
+   *(Note: $\Theta(\|\Delta W_l\|_F \|\nabla_{W_l} \ell\|_F) = \Theta(\|\Delta W_l\|_* \|\nabla_{W_l} \ell\|_*)$ is an asymptotic scaling simplification on the slide; Yang et al. show controlling spectral norm provides superior numerical stability over heuristic Frobenius norm strategies).*
+3. Substituting the rank-one update $\|\Delta W_l\|_* = \eta_l \|\nabla_{W_l} \ell\|_*$ yields the exact SGD learning rate scaling:
+   $$\eta_l = \mathbf{\Theta\left(\frac{n_l}{n_{l-1}}\right)} \quad (\text{for SGD; under Adam coordinate normalization, this scales as } \Theta\left(\frac{1}{n_{l-1}}\right))$$
+
+#### Contrast with Standard Parametrization (SP, Screenshot 56 & arXiv:2310.17813 §5.2)
+- **SP Configuration**: Sets initialization $\sigma = \frac{1}{\sqrt{n_{l-1}}}$ and global learning rate $\eta = \Theta(1)$ regardless of width.
+- **Critical Failures**:
+  1. *Adam Learning Rate Collapse*: While SP uses a fixed $\Theta(1)$ learning rate, Adam under $\mu P$ requires scaling hidden weights inversely with fan-in ($\eta \propto 1/n_{l-1}$).
+  2. *Fan-out Asymmetry*: Whenever fan-out is smaller than fan-in ($n_l < n_{l-1}$), SP's $1/\sqrt{n_{l-1}}$ initialization exceeds the spectral bound $\frac{\sqrt{n_l}}{n_{l-1}}$ (§5.2: *"SP initialization exceeds 1 in any layer with fan-out smaller than fan-in"*), violating Assertion A1.
+
 ---
 
 ## 3. Industrial Instantiation: The MiniCPM Wind Tunnel Recipe
