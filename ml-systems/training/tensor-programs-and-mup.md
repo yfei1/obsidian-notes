@@ -78,24 +78,24 @@ While $\mu P$ guarantees zero-shot learning rate transfer across widths for stan
 
 #### 1. RMSNorm Learnable Gains (Screenshot 57)
 In standard Transformer architectures, RMSNorm incorporates learnable affine gain parameters: $y = \frac{x}{\text{RMS}(x)} \odot \gamma$.
-- **The Empirical Breakdown**: While Baseline $\mu P$ (without learnable gains) exhibits perfect transfer with the minimum loss pinned to Base $\text{LR} = 2^{-6}$ across widths 128, 512, and 2048, adding RMSNorm gains breaks transfer:
-  - Vector Gains: Minimum shifts from $2^{-4}$ (width 128/512) to $2^{-8}$ (width 2048) — a $16\times$ drift.
-  - Scalar Gains: Minimum shifts from $2^{-4}$ (width 128/512) to $2^{-6}$ (width 2048).
-- **Physical Mechanism**: Although feature coordinates before and after RMSNorm are $\Theta(1)$ by design, $\Theta(1)$ learning rate scaling for 1D gains disrupts feature coordinates, harming the quality of the largest $\mu P$ models at optimal base learning rate.
-- *Production Remedy*: *"These gains can be removed with little loss of perf"* — modern architectures (e.g. Gain-free RMSNorm) omit learnable gains entirely, preserving hyperparameter transfer while eliminating parameters and gradient memory.
+- **The Empirical Breakdown**: While Baseline $\mu P$ (without learnable gains) exhibits stable transfer with minimum loss pinned to Base $\text{LR} = 2^{-6}$ across widths 128, 512, and 2048, adding learnable RMSNorm gains breaks transfer:
+  - Vector Gains: Minimum loss column shifts from $2^{-4}$ (width 128/512) to $2^{-8}$ (width 2048) — a $16\times$ shift.
+  - Scalar Gains: Minimum loss column shifts from $2^{-4}$ (width 128/512) to $2^{-6}$ (width 2048).
+- **The Counter-Intuitive Finding (Verbatim Caption)**: *"optimal learning rates for these models do not reliably transfer when using $\Theta(1)$ learning rate scaling for the gains, despite the fact that the 'coordinate size' of the features before and after RMS Normalization is $\Theta(1)$ w.r.t. width by design. In addition to the lack of transfer in these experiments, we find trainable gains harm the quality of the largest $\mu P$ models when the base learning rate $\alpha$ is optimal."* (The slide does not provide an underlying causal proof for why coordinate scale preservation fails to protect transfer).
+- *Production Remedy*: Slide notes verbatim: *"But these gains can be removed with little loss of perf.."* — modern architectures omit learnable gains (Gain-free RMSNorm), preserving hyperparameter transfer.
 
 #### 2. Exotic Sign-Based Optimizers: Lion (Screenshot 58)
 The Lion optimizer (Chen et al., Google 2023) replaces magnitude-based gradient updates with coordinate signs:
 $$\theta_t \leftarrow \theta_{t-1} - \eta_t (\text{sign}(c_t) + \lambda \theta_{t-1})$$
 Where $c_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t$ is an interpolated momentum buffer, $m_t = \beta_2 m_{t-1} + (1 - \beta_2) g_t$ is an EMA buffer, and $\lambda$ is decoupled weight decay.
-- **The Empirical Breakdown**: Under Lion, optimal learning rate shifts across widths (width 128 achieves minimum at $2^{-10}$, while widths 512 and 2048 shift to $2^{-8}$). At larger learning rates ($2^{-4}, 2^{-2}$), Lion diverges violently on large widths (losses jump to 10.28–10.38).
-- **Physical Mechanism**: The non-linear $\text{sign}(\cdot)$ operation severs the relationship between matrix spectral norm and parameter update magnitude, destroying the continuous spectral norm conservation required by $\mu P$.
+- **The Empirical Breakdown**: Under Lion, the optimal learning rate column shifts from $2^{-10}$ (width 128) to $2^{-8}$ (widths 512 and 2048). At larger learning rates ($2^{-4}, 2^{-2}$), Lion diverges violently on wide models (losses jump to 10.28–10.38).
+- **Physical Mechanism**: The non-linear $\text{sign}(\cdot)$ operation severs the link between matrix spectral norm and parameter update magnitude, disrupting continuous spectral norm conservation.
 
 #### 3. Strong Decoupled Weight Decay (Screenshot 59)
-CS336 slide notes that strong ($0.1$) decoupled weight decay is *"maybe the only significant $\mu P$ failure"*:
-- **L2 Regularization vs. Decoupled Weight Decay**: In L2 regularization, penalty $+\lambda \theta$ is added directly to gradient $g_t$ (scaled by learning rate $\eta_t$ during update). In decoupled weight decay (SGDW/AdamW, Loshchilov & Hutter 2017), the penalty $-\eta_t \lambda \theta_{t-1}$ directly shrinks parameters.
-- **The Empirical Breakdown**: Under strong decoupled weight decay ($\lambda = 0.1$), the optimal learning rate drifts across widths (width 128 has minimum at $2^{-8}$, while widths 512 and 2048 shift to $2^{-6}$).
-- **Physical Mechanism**: Under $\mu P$, different layer types receive dimension-dependent learning rates (e.g. matrix layers $\eta \propto 1/n$, vectors $\eta = \Theta(1)$). Multiplying a large constant weight decay $\lambda = 0.1$ by non-uniform learning rates subjects different layers to non-isometric shrinkage, distorting spectral balance across network depth.
+Slide title notes: *"What about strong (0.1) weight decay? – this is maybe the only significant $\mu P$ failure"* (explicitly qualified with *maybe*):
+- **L2 Regularization vs. Decoupled Weight Decay**: Slide Algorithm 1 contrasts SGD with L2 regularization (penalty $+\lambda \theta_{t-1}$ added to gradient $g_t$) versus SGD with decoupled weight decay (penalty $-\eta_t \lambda \theta_{t-1}$ applied directly to parameter updates; Loshchilov & Hutter, 2017).
+- **The Empirical Breakdown**: Under strong decoupled weight decay ($\lambda = 0.1$), the minimum loss column drifts across widths (width 128 has minimum at $2^{-8}$, while widths 512 and 2048 shift to $2^{-6}$).
+- **Inferred Mechanism (DERIVED)**: Under $\mu P$ Table 3, different layer types receive dimension-dependent learning rates (e.g. hidden matrix layers scale as $\eta \propto 1/n$, while vectors scale as $\eta = \Theta(1)$). Multiplying a large constant weight decay $\lambda = 0.1$ by non-uniform layer learning rates induces non-isometric shrinkage across depth, distorting spectral balance as width scales.
 
 ---
 
